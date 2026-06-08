@@ -14,9 +14,12 @@ import (
 )
 
 const (
-	defaultReviewAgent = "codex"
-	reviewPRFields     = "number,title,body,baseRefName,headRefName,url,author"
-	reviewBodyLimit    = 6000
+	defaultReviewAgent  = "codex"
+	defaultReviewModel  = "gpt-5.5"
+	defaultReviewEffort = "high"
+	defaultReviewMode   = "strict"
+	reviewPRFields      = "number,title,body,baseRefName,headRefName,url,author"
+	reviewBodyLimit     = 6000
 )
 
 type prReviewOptions struct {
@@ -25,6 +28,8 @@ type prReviewOptions struct {
 	agent            string
 	command          string
 	model            string
+	effort           string
+	mode             string
 	base             string
 	instructions     string
 	instructionsFile string
@@ -66,10 +71,25 @@ func defaultReviewOptions() prReviewOptions {
 		agent = defaultReviewAgent
 	}
 
+	model := strings.TrimSpace(os.Getenv("GH_X_PR_REVIEW_MODEL"))
+	if model == "" {
+		model = defaultReviewModel
+	}
+	effort := strings.TrimSpace(os.Getenv("GH_X_PR_REVIEW_EFFORT"))
+	if effort == "" {
+		effort = defaultReviewEffort
+	}
+	mode := strings.TrimSpace(os.Getenv("GH_X_PR_REVIEW_MODE"))
+	if mode == "" {
+		mode = defaultReviewMode
+	}
+
 	return prReviewOptions{
 		agent:   agent,
 		command: strings.TrimSpace(os.Getenv("GH_X_PR_REVIEW_COMMAND")),
-		model:   strings.TrimSpace(os.Getenv("GH_X_PR_REVIEW_MODEL")),
+		model:   model,
+		effort:  effort,
+		mode:    mode,
 	}
 }
 
@@ -93,6 +113,9 @@ func parseReviewOptions(args []string, stderr io.Writer) (prReviewOptions, error
 	flags.StringVar(&options.command, "command", options.command, "Custom command template for --agent custom")
 	flags.StringVar(&options.model, "model", options.model, "Model to pass through to supported agents")
 	flags.StringVar(&options.model, "m", options.model, "Model to pass through to supported agents")
+	flags.StringVar(&options.effort, "effort", options.effort, "Reasoning effort for supported agents: low, medium, or high")
+	flags.StringVar(&options.mode, "mode", options.mode, "Review mode: strict, medium, or fast-lane")
+	flags.StringVar(&options.mode, "preset", options.mode, "Alias for --mode")
 	flags.StringVar(&options.base, "base", "", "Override the PR base branch in the review prompt")
 	flags.StringVar(&options.base, "B", "", "Override the PR base branch in the review prompt")
 	flags.StringVar(&options.instructions, "instructions", "", "Additional review instructions")
@@ -118,6 +141,14 @@ func parseReviewOptions(args []string, stderr io.Writer) (prReviewOptions, error
 	}
 	options.command = strings.TrimSpace(options.command)
 	options.model = strings.TrimSpace(options.model)
+	options.effort, err = normalizeReviewEffort(options.effort)
+	if err != nil {
+		return options, err
+	}
+	options.mode, err = normalizeReviewMode(options.mode)
+	if err != nil {
+		return options, err
+	}
 	options.base = strings.TrimSpace(options.base)
 
 	return options, nil
@@ -129,6 +160,8 @@ func splitReviewFlagArgs(args []string) ([]string, string, error) {
 		"--agent": true, "-a": true,
 		"--command": true,
 		"--model":   true, "-m": true,
+		"--effort": true,
+		"--mode":   true, "--preset": true,
 		"--base": true, "-B": true,
 		"--instructions": true, "-i": true,
 		"--instructions-file": true,
@@ -166,6 +199,32 @@ func splitReviewFlagArgs(args []string) ([]string, string, error) {
 		target = arg
 	}
 	return flagArgs, target, nil
+}
+
+func normalizeReviewEffort(value string) (string, error) {
+	effort := strings.ToLower(strings.TrimSpace(value))
+	if effort == "" {
+		return defaultReviewEffort, nil
+	}
+	switch effort {
+	case "low", "medium", "high":
+		return effort, nil
+	default:
+		return "", fmt.Errorf("unsupported review effort %q", value)
+	}
+}
+
+func normalizeReviewMode(value string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(value))
+	if mode == "" {
+		return defaultReviewMode, nil
+	}
+	switch mode {
+	case "strict", "medium", "fast-lane":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("unsupported review mode %q", value)
+	}
 }
 
 var executeReviewFunc = executeReview
@@ -237,7 +296,11 @@ func buildReviewPrompt(options prReviewOptions, pr reviewPullRequest) (string, e
 	}
 	b.WriteString(".\n\n")
 	b.WriteString("Operate in read-only mode. Do not edit files, commit, push, merge, approve, request changes, or post PR comments.\n")
-	b.WriteString("Report only actionable review findings, ordered by severity. Include file and line references when you can verify them. If there are no findings, say that directly and note any residual risk.\n\n")
+	b.WriteString("Report only actionable review findings, ordered by severity. Include file and line references when you can verify them. If there are no findings, say that directly and note any residual risk.\n")
+	if err := appendReviewModeInstructions(&b, options.mode); err != nil {
+		return "", err
+	}
+	b.WriteString("\n")
 
 	b.WriteString("Pull request context:\n")
 	fmt.Fprintf(&b, "- Number: %d\n", pr.Number)
@@ -266,6 +329,32 @@ func buildReviewPrompt(options prReviewOptions, pr reviewPullRequest) (string, e
 	}
 
 	return b.String(), nil
+}
+
+func appendReviewModeInstructions(b *strings.Builder, mode string) error {
+	normalized, err := normalizeReviewMode(mode)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(b, "\nReview mode: %s\n", normalized)
+	switch normalized {
+	case "strict":
+		b.WriteString("- Treat this as a thorough pre-merge review.\n")
+		b.WriteString("- Prioritize correctness, security, data loss, regressions, API or workflow contract drift, and meaningful missing tests.\n")
+		b.WriteString("- Verify claims against the diff, nearby code, and available tests before reporting them.\n")
+		b.WriteString("- Do not include style-only findings unless they hide a real defect.\n")
+	case "medium":
+		b.WriteString("- Treat this as a balanced review between strict and fast-lane.\n")
+		b.WriteString("- Prioritize correctness, security, user-visible regressions, and test gaps that materially affect confidence.\n")
+		b.WriteString("- Avoid broad architecture critique unless it directly affects this change.\n")
+		b.WriteString("- Skip minor polish issues unless they create ambiguity, maintenance risk, or user-facing quality problems.\n")
+	case "fast-lane":
+		b.WriteString("- Treat this as a high-signal review for low-risk changes.\n")
+		b.WriteString("- Report only blockers, likely regressions, security issues, data loss risks, and clearly missing validation.\n")
+		b.WriteString("- Skip nits, speculative improvements, and low-impact style feedback.\n")
+	}
+	return nil
 }
 
 func loadReviewInstructions(options prReviewOptions) (string, error) {
@@ -350,9 +439,12 @@ func buildReviewInvocation(options prReviewOptions, pr reviewPullRequest, prompt
 	agent := strings.ToLower(strings.TrimSpace(options.agent))
 	switch agent {
 	case "", "codex":
-		args := []string{"exec", "--sandbox", "read-only", "--ask-for-approval", "never"}
+		args := []string{"exec", "--sandbox", "read-only"}
 		if options.model != "" {
 			args = append(args, "--model", options.model)
+		}
+		if options.effort != "" {
+			args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(options.effort))
 		}
 		args = append(args, "-")
 		return reviewAgentInvocation{Name: "codex", Args: args, Prompt: prompt, PromptOnStdin: true}, nil
@@ -432,6 +524,9 @@ func replaceReviewPlaceholders(value string, options prReviewOptions, pr reviewP
 		"{head}", pr.HeadRefName,
 		"{url}", pr.URL,
 		"{title}", pr.Title,
+		"{model}", options.model,
+		"{effort}", options.effort,
+		"{mode}", options.mode,
 	)
 	return replacer.Replace(value)
 }
@@ -505,6 +600,8 @@ func runReviewAgent(invocation reviewAgentInvocation, stdout io.Writer, stderr i
 
 func renderReviewDryRun(stdout io.Writer, options prReviewOptions, invocation reviewAgentInvocation) error {
 	fmt.Fprintf(stdout, "Agent: %s\n", reviewAgentLabel(options))
+	fmt.Fprintf(stdout, "Mode: %s\n", options.mode)
+	fmt.Fprintf(stdout, "Effort: %s\n", options.effort)
 	fmt.Fprintf(stdout, "Command: %s\n", formatReviewCommand(invocation))
 	if invocation.PromptOnStdin {
 		fmt.Fprintln(stdout, "Prompt: stdin")
@@ -553,6 +650,9 @@ Flags:
   -a, --agent string               Agent preset: codex, claude, copilot, gemini, opencode, or custom
       --command string             Custom command template for --agent custom
   -m, --model string               Model to pass through to supported agents
+      --effort string              Reasoning effort for supported agents: low, medium, or high
+      --mode string                Review mode: strict, medium, or fast-lane
+      --preset string              Alias for --mode
   -B, --base string                Override the PR base branch in the review prompt
   -i, --instructions string        Additional review instructions
       --instructions-file string   Read additional review instructions from a file
@@ -561,8 +661,10 @@ Flags:
 Configuration:
   GH_X_PR_REVIEW_AGENT      Default agent preset
   GH_X_PR_REVIEW_MODEL      Default model
+  GH_X_PR_REVIEW_EFFORT     Default reasoning effort
+  GH_X_PR_REVIEW_MODE       Default review mode
   GH_X_PR_REVIEW_COMMAND    Default custom command template
 
-Custom command templates may use {prompt}, {number}, {repo}, {base}, {head}, {url}, and {title}.
+Custom command templates may use {prompt}, {number}, {repo}, {base}, {head}, {url}, {title}, {model}, {effort}, and {mode}.
 If {prompt} is omitted, the prompt is sent on stdin.
 `

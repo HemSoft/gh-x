@@ -12,6 +12,8 @@ import (
 func TestParseReviewOptionsUsesEnvDefaults(t *testing.T) {
 	t.Setenv("GH_X_PR_REVIEW_AGENT", "claude")
 	t.Setenv("GH_X_PR_REVIEW_MODEL", "sonnet")
+	t.Setenv("GH_X_PR_REVIEW_EFFORT", "medium")
+	t.Setenv("GH_X_PR_REVIEW_MODE", "fast-lane")
 
 	options, err := parseReviewOptions([]string{"42", "--repo", "owner/repo", "--dry-run"}, io.Discard)
 	if err != nil {
@@ -30,13 +32,39 @@ func TestParseReviewOptionsUsesEnvDefaults(t *testing.T) {
 	if options.model != "sonnet" {
 		t.Fatalf("expected env model sonnet, got %q", options.model)
 	}
+	if options.effort != "medium" {
+		t.Fatalf("expected env effort medium, got %q", options.effort)
+	}
+	if options.mode != "fast-lane" {
+		t.Fatalf("expected env mode fast-lane, got %q", options.mode)
+	}
 	if !options.dryRun {
 		t.Fatal("expected dry-run")
 	}
 }
 
+func TestParseReviewOptionsDefaultsToStrictHighCodex(t *testing.T) {
+	options, err := parseReviewOptions([]string{"42"}, io.Discard)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if options.agent != "codex" {
+		t.Fatalf("expected default agent codex, got %q", options.agent)
+	}
+	if options.model != "gpt-5.5" {
+		t.Fatalf("expected default model gpt-5.5, got %q", options.model)
+	}
+	if options.effort != "high" {
+		t.Fatalf("expected default effort high, got %q", options.effort)
+	}
+	if options.mode != "strict" {
+		t.Fatalf("expected default mode strict, got %q", options.mode)
+	}
+}
+
 func TestParseReviewOptionsAllowsFlagsBeforeTarget(t *testing.T) {
-	options, err := parseReviewOptions([]string{"--agent", "codex", "--repo", "owner/repo", "42"}, io.Discard)
+	options, err := parseReviewOptions([]string{"--agent", "codex", "--mode", "medium", "--repo", "owner/repo", "42"}, io.Discard)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,6 +77,9 @@ func TestParseReviewOptionsAllowsFlagsBeforeTarget(t *testing.T) {
 	}
 	if options.repo != "owner/repo" {
 		t.Fatalf("expected repo owner/repo, got %q", options.repo)
+	}
+	if options.mode != "medium" {
+		t.Fatalf("expected mode medium, got %q", options.mode)
 	}
 }
 
@@ -80,7 +111,7 @@ func TestFetchReviewPullRequestUsesGhPrView(t *testing.T) {
 
 func TestBuildReviewInvocationCodexReadOnly(t *testing.T) {
 	invocation, err := buildReviewInvocation(
-		prReviewOptions{agent: "codex", model: "gpt-5.3-codex"},
+		prReviewOptions{agent: "codex", model: "gpt-5.5", effort: "high"},
 		reviewPullRequest{Number: 42},
 		"review prompt",
 	)
@@ -88,7 +119,7 @@ func TestBuildReviewInvocationCodexReadOnly(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	wantArgs := []string{"exec", "--sandbox", "read-only", "--ask-for-approval", "never", "--model", "gpt-5.3-codex", "-"}
+	wantArgs := []string{"exec", "--sandbox", "read-only", "--model", "gpt-5.5", "-c", `model_reasoning_effort="high"`, "-"}
 	if invocation.Name != "codex" {
 		t.Fatalf("expected codex command, got %q", invocation.Name)
 	}
@@ -103,7 +134,7 @@ func TestBuildReviewInvocationCodexReadOnly(t *testing.T) {
 func TestBuildReviewInvocationCustomReplacesPromptAsSingleArgument(t *testing.T) {
 	prompt := "line one\nkeep literal {number}"
 	invocation, err := buildReviewInvocation(
-		prReviewOptions{agent: "custom", command: `tool review --pr {number} --prompt "{prompt}"`},
+		prReviewOptions{agent: "custom", command: `tool review --pr {number} --mode {mode} --prompt "{prompt}"`, mode: "medium"},
 		reviewPullRequest{Number: 42},
 		prompt,
 	)
@@ -111,7 +142,7 @@ func TestBuildReviewInvocationCustomReplacesPromptAsSingleArgument(t *testing.T)
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	wantArgs := []string{"review", "--pr", "42", "--prompt", prompt}
+	wantArgs := []string{"review", "--pr", "42", "--mode", "medium", "--prompt", prompt}
 	if invocation.Name != "tool" {
 		t.Fatalf("expected tool command, got %q", invocation.Name)
 	}
@@ -146,13 +177,13 @@ func TestExecuteReviewDryRunDoesNotRunAgent(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	err := executeReview(prReviewOptions{agent: "codex", dryRun: true}, &stdout, &stderr)
+	err := executeReview(prReviewOptions{agent: "codex", model: "gpt-5.5", effort: "high", mode: "strict", dryRun: true}, &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	output := stdout.String()
-	for _, want := range []string{"Agent: codex", "Command: codex exec", "Review GitHub pull request #42", "gh pr diff 42"} {
+	for _, want := range []string{"Agent: codex", "Mode: strict", "Effort: high", "Command: codex exec", `model_reasoning_effort=\"high\"`, "Review GitHub pull request #42", "Review mode: strict", "gh pr diff 42"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected dry-run output to contain %q, got %q", want, output)
 		}

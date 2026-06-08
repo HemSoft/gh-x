@@ -149,8 +149,9 @@ metadata with `gh pr view`, builds a review prompt, and delegates analysis to a
 provider preset. It does not post PR comments, approve, request changes, merge,
 commit, or edit files.
 
-Default provider is `codex`, configurable with `--agent` or
-`GH_X_PR_REVIEW_AGENT`.
+Default provider is `codex` with model `gpt-5.5`, high reasoning effort, and
+`strict` review mode. These are configurable with flags or environment
+variables.
 
 ### `review` flags
 
@@ -160,6 +161,9 @@ Default provider is `codex`, configurable with `--agent` or
 | `-a, --agent AGENT` | Provider preset: `codex`, `claude`, `copilot`, `gemini`, `opencode`, or `custom` |
 | `--command COMMAND` | Custom command template for `--agent custom` |
 | `-m, --model MODEL` | Model passed through to supported providers |
+| `--effort EFFORT` | Reasoning effort for supported providers: `low`, `medium`, or `high` |
+| `--mode MODE` | Review mode: `strict`, `medium`, or `fast-lane` |
+| `--preset MODE` | Alias for `--mode` |
 | `-B, --base BRANCH` | Override the base branch in the review prompt |
 | `-i, --instructions TEXT` | Additional review instructions |
 | `--instructions-file FILE` | Read additional instructions from a file |
@@ -169,11 +173,13 @@ Default provider is `codex`, configurable with `--agent` or
 
 ```bash
 gh x pr review
-gh x pr review 42 --agent codex
+gh x pr review 42 --mode strict
+gh x pr review 42 --mode medium
+gh x pr review 42 --mode fast-lane
 gh x pr review 42 --agent claude --model sonnet
 gh x pr review 42 --agent copilot
 gh x pr review 42 --dry-run
-GH_X_PR_REVIEW_AGENT=claude gh x pr review 42
+GH_X_PR_REVIEW_AGENT=claude GH_X_PR_REVIEW_MODE=medium gh x pr review 42
 gh x pr review 42 --agent custom --command 'my-reviewer --prompt "{prompt}"'
 ```
 

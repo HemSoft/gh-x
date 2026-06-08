@@ -7,6 +7,12 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Improved
+
+- Defaulted `gh x pr review` to Codex with model `gpt-5.5`, high reasoning
+  effort, and `strict` review mode.
+- Added `medium` review mode between `strict` and `fast-lane`.
+
 ## [0.18.0] - 2026-06-08
 
 ### Release Notes
