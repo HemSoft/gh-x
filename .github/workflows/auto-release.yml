@@ -1,0 +1,155 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "*.md"
+      - "**/*.md"
+      - ".agents/**"
+      - "LICENSE"
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Skip if HEAD already tagged
+        id: check
+        run: |
+          if git tag --points-at HEAD | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "HEAD already has a release tag — skipping auto-release"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@v6
+        if: steps.check.outputs.skip == 'false'
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        if: steps.check.outputs.skip == 'false'
+        run: go test ./... -count=1
+
+      - name: Determine next version
+        if: steps.check.outputs.skip == 'false'
+        id: version
+        run: |
+          commit_msg=$(git log -1 --format='%s')
+          echo "Commit: $commit_msg"
+
+          # Conventional commits: feat: → minor, fix:/refactor:/chore: → patch
+          # BREAKING CHANGE or !: → major
+          if echo "$commit_msg" | grep -qiE 'BREAKING[ -]CHANGE|^[a-z]+(\(.+\))?!:'; then
+            bump="major"
+          elif echo "$commit_msg" | grep -qE '^feat(\(.+\))?:'; then
+            bump="minor"
+          else
+            bump="patch"
+          fi
+
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [ -z "$latest" ]; then
+            latest="v0.0.0"
+          fi
+          if [[ "$latest" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+          else
+            echo "::error::Could not parse latest tag: $latest"
+            exit 1
+          fi
+
+          case "$bump" in
+            major) next="v$((major + 1)).0.0" ;;
+            minor) next="v${major}.$((minor + 1)).0" ;;
+            patch) next="v${major}.${minor}.$((patch + 1))" ;;
+          esac
+
+          echo "tag=$next" >> "$GITHUB_OUTPUT"
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          echo "Auto-releasing as $next ($bump bump, previous: $latest)"
+
+      - name: Build cross-platform binaries
+        if: steps.check.outputs.skip == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          mkdir -p dist
+          tag="$TAG"
+          platforms=(
+            "darwin/amd64"
+            "darwin/arm64"
+            "freebsd/386"
+            "freebsd/amd64"
+            "freebsd/arm64"
+            "linux/386"
+            "linux/amd64"
+            "linux/arm"
+            "linux/arm64"
+            "windows/386"
+            "windows/amd64"
+            "windows/arm64"
+          )
+          build_date=$(date -u +%Y-%m-%d)
+          for platform in "${platforms[@]}"; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            ext=""
+            [[ "$os" == "windows" ]] && ext=".exe"
+            output="dist/${os}-${arch}${ext}"
+            echo "Building ${output}..."
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${tag} -X main.buildDate=${build_date}" -o "$output" .
+          done
+
+      - name: Generate release notes
+        if: steps.check.outputs.skip == 'false'
+        id: notes
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          date=$(date -u +%Y-%m-%d)
+
+          # Collect commit subjects since last tag
+          if [ -n "$latest" ]; then
+            subjects=$(git log --format='- %s' "${latest}..HEAD" --no-merges)
+          else
+            subjects=$(git log --format='- %s' --no-merges)
+          fi
+
+          # Build notes: date header + bullet list
+          notes="${date}"$'\n\n'"${subjects}"
+
+          # Write to file (avoids escaping issues in shell)
+          echo "$notes" > release-notes.md
+          echo "Generated release notes for $tag"
+          cat release-notes.md
+
+      - name: Create release
+        if: steps.check.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          bump="${{ steps.version.outputs.bump }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — uploading assets with --clobber"
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* \
+              --title "$tag" \
+              --notes-file release-notes.md
+          fi

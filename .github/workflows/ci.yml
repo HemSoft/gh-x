@@ -1,0 +1,319 @@
+name: CI Quality Gates
+
+# Runs on every PR targeting main — on open, push, and reopen.
+# Copilot code review must be enabled separately in repo settings:
+#   Settings → Copilot → Code Review → Enable for all PRs
+# Branch protection must require:
+#   - "Quality Gate" status check to pass
+#   - All review conversations resolved
+#   - Copilot review approval
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Build & Test ───────────────────────────────────────────────
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race detection enabled)
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 1
+
+  # ── Lint ───────────────────────────────────────────────────────
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting (gofmt)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::Files not formatted with gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Check module tidiness
+        run: |
+          cp go.mod go.mod.bak
+          cp go.sum go.sum.bak
+          go mod tidy
+          if ! diff -q go.mod go.mod.bak >/dev/null 2>&1 || ! diff -q go.sum go.sum.bak >/dev/null 2>&1; then
+            echo "::error::go.mod or go.sum not tidy. Run 'go mod tidy' and commit."
+            diff go.mod.bak go.mod || true
+            diff go.sum.bak go.sum || true
+            exit 1
+          fi
+
+      - name: Install lint tools
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          go install golang.org/x/tools/cmd/deadcode@latest
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install github.com/go-critic/go-critic/cmd/gocritic@latest
+          go install github.com/kisielk/errcheck@latest
+
+      - name: Staticcheck
+        run: staticcheck ./...
+
+      - name: Gocritic (anti-pattern detection)
+        run: gocritic check ./...
+
+      - name: Errcheck (unchecked errors)
+        run: errcheck -exclude .errcheck_excludes ./...
+
+      - name: Dead code detection
+        run: |
+          output=$(deadcode ./... 2>&1 || true)
+          if [ -n "$output" ]; then
+            echo "::error::Dead code detected:"
+            echo "$output"
+            exit 1
+          fi
+
+      - name: Vulnerability scan
+        run: govulncheck ./...
+
+      - name: No lint suppressions allowed
+        run: |
+          # Policy: zero suppression comments in codebase
+          suppressions=$(grep -rn '//nolint\|//lint:ignore\|//nosec\|#nosec' --include='*.go' . || true)
+          if [ -n "$suppressions" ]; then
+            echo "::error::Lint suppression comments found (policy: no suppressions):"
+            echo "$suppressions"
+            exit 1
+          fi
+
+      - name: No anti-patterns allowed
+        run: |
+          # Policy: no fmt.Print* in production code (use writer injection)
+          violations=$(grep -rn 'fmt\.Print' --include='*.go' . | grep -v '_test\.go' || true)
+          if [ -n "$violations" ]; then
+            echo "::error::fmt.Print* found in production code (use fmt.Fprint* with injected io.Writer):"
+            echo "$violations"
+            exit 1
+          fi
+
+      - name: Lint markdown
+        run: npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#.agents' '#.github/agents'
+
+  # ── Quality Gates ──────────────────────────────────────────────
+  quality:
+    name: Quality Gates
+    runs-on: ubuntu-latest
+    needs: [build-and-test]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install quality tools
+        run: |
+          go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+          go install github.com/uudashr/gocognit/cmd/gocognit@latest
+
+      - name: Download coverage
+        uses: actions/download-artifact@v7
+        with:
+          name: coverage
+
+      - name: Verify coverage artifact
+        run: |
+          if [ ! -f coverage.out ]; then
+            echo "::error::coverage.out not found — artifact download may have failed"
+            exit 1
+          fi
+
+      - name: "Enforce: coverage ≥ 70%"
+        run: |
+          total=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Total coverage: ${total}%"
+          if (( $(echo "$total < 70.0" | bc -l) )); then
+            echo "::error::Coverage ${total}% is below 70% threshold"
+            echo ""
+            echo "Per-function breakdown:"
+            go tool cover -func=coverage.out
+            exit 1
+          fi
+
+      - name: "Enforce: cyclomatic complexity ≤ 10"
+        run: |
+          if ! command -v gocyclo &>/dev/null; then
+            echo "::error::gocyclo not installed"
+            exit 1
+          fi
+          violations=$(gocyclo -over 10 -ignore "_test\.go" . 2>&1 || true)
+          if [ -n "$violations" ]; then
+            count=$(echo "$violations" | wc -l)
+            echo "::error::${count} function(s) exceed cyclomatic complexity 10:"
+            echo "$violations"
+            exit 1
+          fi
+
+      - name: "Enforce: cognitive complexity ≤ 15"
+        run: |
+          if ! command -v gocognit &>/dev/null; then
+            echo "::error::gocognit not installed"
+            exit 1
+          fi
+          violations=$(gocognit -over 15 -ignore "_test\.go" . 2>&1 || true)
+          if [ -n "$violations" ]; then
+            count=$(echo "$violations" | wc -l)
+            echo "::error::${count} function(s) exceed cognitive complexity 15:"
+            echo "$violations"
+            exit 1
+          fi
+
+      - name: "Enforce: CRAP score < 30"
+        run: |
+          python3 << 'CRAP_SCRIPT'
+          import subprocess, sys
+
+          THRESHOLD = 30.0
+
+          # Get per-function cyclomatic complexity (production code only)
+          proc = subprocess.run(
+              ["gocyclo", "-ignore", "_test\\.go", "."],
+              capture_output=True, text=True
+          )
+          if proc.returncode != 0 and not proc.stdout.strip():
+              print(f"gocyclo failed: {proc.stderr}", file=sys.stderr)
+              sys.exit(1)
+
+          complexity = {}
+          for line in proc.stdout.strip().split('\n'):
+              if not line.strip():
+                  continue
+              parts = line.split()
+              if len(parts) < 4:
+                  continue
+              try:
+                  comp = int(parts[0])
+              except ValueError:
+                  continue
+              func_name = parts[2]
+              # Normalize gocyclo method format "(Type).Method" to just "Method"
+              # to match go cover's output which omits the receiver type
+              if func_name.startswith('(') and ').' in func_name:
+                  func_name = func_name.split(').', 1)[1]
+              elif '.' in func_name:
+                  func_name = func_name.split('.', 1)[1]
+              file_name = parts[3].split(':')[0]
+              complexity[(file_name, func_name)] = comp
+
+          # Get per-function coverage
+          proc = subprocess.run(
+              ["go", "tool", "cover", "-func=coverage.out"],
+              capture_output=True, text=True
+          )
+          if proc.returncode != 0:
+              print(f"go tool cover failed: {proc.stderr}", file=sys.stderr)
+              sys.exit(1)
+
+          coverage = {}
+          for line in proc.stdout.strip().split('\n'):
+              if 'total:' in line or not line.strip():
+                  continue
+              parts = line.split()
+              if len(parts) < 3:
+                  continue
+              full_path = parts[0].rstrip(':')
+              func_name = parts[1]
+              cov_str = parts[-1].rstrip('%')
+              file_name = full_path.split('/')[-1].split(':')[0]
+              try:
+                  coverage[(file_name, func_name)] = float(cov_str)
+              except ValueError:
+                  pass
+
+          # CRAP(f) = comp² × (1 - cov/100)³ + comp
+          failures = []
+          for (file_name, func_name), comp in complexity.items():
+              cov = coverage.get((file_name, func_name), 0.0)
+              uncov = 1 - cov / 100
+              crap = (comp ** 2) * (uncov ** 3) + comp
+              if crap >= THRESHOLD:
+                  failures.append((crap, comp, cov, func_name, file_name))
+
+          if failures:
+              failures.sort(reverse=True)
+              print(f"Functions with CRAP score >= {THRESHOLD}:")
+              print(f"{'CRAP':>8} {'Comp':>6} {'Cov':>6}  {'Function':<30} {'File'}")
+              print(f"{'----':>8} {'----':>6} {'---':>6}  {'--------':<30} {'----'}")
+              for crap, comp, cov, fn, f in failures:
+                  print(f"{crap:8.1f} {comp:6d} {cov:5.1f}%  {fn:<30} {f}")
+              sys.exit(1)
+          else:
+              print(f"All functions have CRAP score below {THRESHOLD}")
+          CRAP_SCRIPT
+
+  # ── Mutation Testing ───────────────────────────────────────────
+  mutation:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install gremlins
+        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+
+      - name: "Enforce: mutation score ≥ 90%"
+        run: gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./...
+
+  # ── Final Gate ─────────────────────────────────────────────────
+  # Single required status check for branch protection
+  gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [build-and-test, lint, quality, mutation]
+    steps:
+      - name: Evaluate all gates
+        run: |
+          echo "Build & Test: ${{ needs.build-and-test.result }}"
+          echo "Lint:         ${{ needs.lint.result }}"
+          echo "Quality:      ${{ needs.quality.result }}"
+          echo "Mutation:     ${{ needs.mutation.result }}"
+
+          if [[ "${{ needs.build-and-test.result }}" != "success" || \
+                "${{ needs.lint.result }}" != "success" || \
+                "${{ needs.quality.result }}" != "success" || \
+                "${{ needs.mutation.result }}" != "success" ]]; then
+            echo "::error::One or more quality gates failed"
+            exit 1
+          fi
+          echo "All quality gates passed ✅"

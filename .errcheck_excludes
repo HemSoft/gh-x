@@ -1,0 +1,6 @@
+// CLI programs idiomatically ignore write errors to stdout/stderr.
+// These calls return errors only when the underlying writer fails,
+// which is non-actionable in a terminal context.
+fmt.Fprint
+fmt.Fprintf
+fmt.Fprintln

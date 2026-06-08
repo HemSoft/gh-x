@@ -1,0 +1,25 @@
+{
+  "name": "gh-x",
+  "image": "mcr.microsoft.com/devcontainers/go:1-1.26-bookworm",
+
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  "postCreateCommand": "go mod download && go install honnef.co/go/tools/cmd/staticcheck@latest && go install github.com/fzipp/gocyclo/cmd/gocyclo@latest && go install github.com/uudashr/gocognit/cmd/gocognit@latest && go install github.com/go-gremlins/gremlins/cmd/gremlins@latest && go install golang.org/x/tools/cmd/deadcode@latest && go install golang.org/x/vuln/cmd/govulncheck@latest && go install github.com/go-critic/go-critic/cmd/gocritic@latest && go install github.com/kisielk/errcheck@latest",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "GitHub.copilot",
+        "GitHub.copilot-chat"
+      ],
+      "settings": {
+        "go.lintTool": "staticcheck",
+        "go.testFlags": ["-race", "-count=1"],
+        "go.coverOnSave": true
+      }
+    }
+  }
+}

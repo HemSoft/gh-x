@@ -1,0 +1,19 @@
+# Build outputs
+gh-x
+gh-x.exe
+dist/
+bin/
+
+# Go
+coverage
+coverage.out
+*.test
+
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/
+coverage/
+
+# Playwright MCP debug artifacts
+.playwright-mcp/
