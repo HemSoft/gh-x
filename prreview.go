@@ -18,6 +18,7 @@ const (
 	defaultReviewModel  = "gpt-5.5"
 	defaultReviewEffort = "high"
 	defaultReviewMode   = "strict"
+	defaultReviewer     = "gh-x PR Reviewer"
 	reviewPRFields      = "number,title,body,baseRefName,headRefName,url,author"
 	reviewBodyLimit     = 6000
 )
@@ -33,7 +34,10 @@ type prReviewOptions struct {
 	base             string
 	instructions     string
 	instructionsFile string
+	reviewer         string
 	dryRun           bool
+	post             bool
+	allowApprove     bool
 }
 
 type reviewPullRequest struct {
@@ -83,13 +87,20 @@ func defaultReviewOptions() prReviewOptions {
 	if mode == "" {
 		mode = defaultReviewMode
 	}
+	reviewer := strings.TrimSpace(os.Getenv("GH_X_PR_REVIEW_IDENTITY"))
+	if reviewer == "" {
+		reviewer = defaultReviewer
+	}
 
 	return prReviewOptions{
-		agent:   agent,
-		command: strings.TrimSpace(os.Getenv("GH_X_PR_REVIEW_COMMAND")),
-		model:   model,
-		effort:  effort,
-		mode:    mode,
+		agent:        agent,
+		command:      strings.TrimSpace(os.Getenv("GH_X_PR_REVIEW_COMMAND")),
+		model:        model,
+		effort:       effort,
+		mode:         mode,
+		reviewer:     reviewer,
+		post:         reviewBoolEnv("GH_X_PR_REVIEW_POST"),
+		allowApprove: reviewBoolEnv("GH_X_PR_REVIEW_ALLOW_APPROVE"),
 	}
 }
 
@@ -121,7 +132,10 @@ func parseReviewOptions(args []string, stderr io.Writer) (prReviewOptions, error
 	flags.StringVar(&options.instructions, "instructions", "", "Additional review instructions")
 	flags.StringVar(&options.instructions, "i", "", "Additional review instructions")
 	flags.StringVar(&options.instructionsFile, "instructions-file", "", "Read additional review instructions from a file")
+	flags.StringVar(&options.reviewer, "reviewer", options.reviewer, "Reviewer identity used in posted review reports")
 	flags.BoolVar(&options.dryRun, "dry-run", false, "Print the resolved command and prompt without running the agent")
+	flags.BoolVar(&options.post, "post", options.post, "Post a GitHub pull request review with inline comments")
+	flags.BoolVar(&options.allowApprove, "allow-approve", options.allowApprove, "Allow strict-mode approval when the review has no findings")
 
 	if err := flags.Parse(flagArgs); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -150,6 +164,10 @@ func parseReviewOptions(args []string, stderr io.Writer) (prReviewOptions, error
 		return options, err
 	}
 	options.base = strings.TrimSpace(options.base)
+	options.reviewer = strings.TrimSpace(options.reviewer)
+	if options.reviewer == "" {
+		options.reviewer = defaultReviewer
+	}
 
 	return options, nil
 }
@@ -165,6 +183,7 @@ func splitReviewFlagArgs(args []string) ([]string, string, error) {
 		"--base": true, "-B": true,
 		"--instructions": true, "-i": true,
 		"--instructions-file": true,
+		"--reviewer":          true,
 	}
 
 	var flagArgs []string
@@ -253,6 +272,9 @@ func executeReview(options prReviewOptions, stdout io.Writer, stderr io.Writer) 
 	}
 
 	fmt.Fprintf(stderr, "Running %s review for PR #%d...\n", reviewAgentLabel(options), pr.Number)
+	if options.postsReview() {
+		return executePostedReview(options, pr, invocation, stdout, stderr)
+	}
 	return runReviewAgentFunc(invocation, stdout, stderr)
 }
 
@@ -287,6 +309,9 @@ func buildReviewPrompt(options prReviewOptions, pr reviewPullRequest) (string, e
 	extra, err := loadReviewInstructions(options)
 	if err != nil {
 		return "", err
+	}
+	if options.postsReview() {
+		return buildStructuredReviewPrompt(options, pr, extra)
 	}
 
 	var b strings.Builder
@@ -602,6 +627,9 @@ func renderReviewDryRun(stdout io.Writer, options prReviewOptions, invocation re
 	fmt.Fprintf(stdout, "Agent: %s\n", reviewAgentLabel(options))
 	fmt.Fprintf(stdout, "Mode: %s\n", options.mode)
 	fmt.Fprintf(stdout, "Effort: %s\n", options.effort)
+	fmt.Fprintf(stdout, "Post review: %t\n", options.postsReview())
+	fmt.Fprintf(stdout, "Allow approve: %t\n", options.allowApprove)
+	fmt.Fprintf(stdout, "Reviewer: %s\n", options.reviewer)
 	fmt.Fprintf(stdout, "Command: %s\n", formatReviewCommand(invocation))
 	if invocation.PromptOnStdin {
 		fmt.Fprintln(stdout, "Prompt: stdin")
@@ -643,7 +671,7 @@ func writeReviewUsage(w io.Writer) {
 const reviewUsage = `Usage:
   gh x pr review [number|url|branch] [flags]
 
-Run a read-only pull request review with an agentic CLI.
+Run a pull request review with an agentic CLI.
 
 Flags:
   -R, --repo string                Select another repository using the [HOST/]OWNER/REPO format
@@ -656,7 +684,10 @@ Flags:
   -B, --base string                Override the PR base branch in the review prompt
   -i, --instructions string        Additional review instructions
       --instructions-file string   Read additional review instructions from a file
+      --reviewer string            Reviewer identity used in posted review reports
       --dry-run                    Print the resolved command and prompt without running the agent
+      --post                       Post a GitHub pull request review with inline comments
+      --allow-approve              Allow strict-mode approval when the review has no findings
 
 Configuration:
   GH_X_PR_REVIEW_AGENT      Default agent preset
@@ -664,6 +695,10 @@ Configuration:
   GH_X_PR_REVIEW_EFFORT     Default reasoning effort
   GH_X_PR_REVIEW_MODE       Default review mode
   GH_X_PR_REVIEW_COMMAND    Default custom command template
+  GH_X_PR_REVIEW_IDENTITY   Default reviewer identity for posted reports
+  GH_X_PR_REVIEW_POST       Set true to post reviews by default
+  GH_X_PR_REVIEW_ALLOW_APPROVE
+                            Set true to allow strict-mode approvals by default
 
 Custom command templates may use {prompt}, {number}, {repo}, {base}, {head}, {url}, {title}, {model}, {effort}, and {mode}.
 If {prompt} is omitted, the prompt is sent on stdin.

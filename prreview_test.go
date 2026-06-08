@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseReviewOptionsUsesEnvDefaults(t *testing.T) {
@@ -190,5 +191,200 @@ func TestExecuteReviewDryRunDoesNotRunAgent(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+}
+
+func TestParseReviewOptionsPostAndApproveFlags(t *testing.T) {
+	options, err := parseReviewOptions([]string{"42", "--post", "--allow-approve", "--reviewer", "PR Reviewer V1.4 Skill"}, io.Discard)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !options.post {
+		t.Fatal("expected post enabled")
+	}
+	if !options.allowApprove {
+		t.Fatal("expected approve enabled")
+	}
+	if !options.postsReview() {
+		t.Fatal("expected postsReview true")
+	}
+	if options.reviewer != "PR Reviewer V1.4 Skill" {
+		t.Fatalf("unexpected reviewer %q", options.reviewer)
+	}
+}
+
+func TestBuildPullRequestReviewRequestRequestsChangesWithInlineComments(t *testing.T) {
+	reviewedAt := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	result := structuredReviewOutput{
+		Summary: "One blocking issue.",
+		Critical: []reviewFinding{{
+			Path:       "main.go",
+			Line:       10,
+			Title:      "Nil dereference",
+			Body:       "This path can panic before validation.",
+			Suggestion: "Guard the nil value before dereferencing.",
+		}},
+		Recommendations: []string{"Add a regression test."},
+		ResidualRisk:    "Runtime path was not executed.",
+	}
+
+	request := buildPullRequestReviewRequest(
+		prReviewOptions{agent: "codex", model: "gpt-5.5", mode: "strict", reviewer: "PR Reviewer V1.4 Skill"},
+		reviewPullRequest{Number: 42, Title: "Add feature", BaseRefName: "main", HeadRefName: "feature/review"},
+		result,
+		map[string]map[int]bool{"main.go": {10: true}},
+		reviewedAt,
+	)
+
+	if request.Event != "REQUEST_CHANGES" {
+		t.Fatalf("expected REQUEST_CHANGES, got %q", request.Event)
+	}
+	if len(request.Comments) != 1 {
+		t.Fatalf("expected one inline comment, got %#v", request.Comments)
+	}
+	if request.Comments[0].Path != "main.go" || request.Comments[0].Line != 10 || request.Comments[0].Side != "RIGHT" {
+		t.Fatalf("unexpected inline comment: %#v", request.Comments[0])
+	}
+	for _, want := range []string{"# PR Review Report", "**Reviewer:** PR Reviewer V1.4 Skill", "## Critical Issues", "`main.go:10`"} {
+		if !strings.Contains(request.Body, want) {
+			t.Fatalf("expected review body to contain %q, got %q", want, request.Body)
+		}
+	}
+	if !strings.Contains(request.Comments[0].Body, "**[CRITICAL]**") {
+		t.Fatalf("expected critical inline prefix, got %q", request.Comments[0].Body)
+	}
+}
+
+func TestBuildPullRequestReviewRequestApprovesOnlyStrictCleanReview(t *testing.T) {
+	reviewedAt := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	pr := reviewPullRequest{Number: 42, Title: "Add feature", BaseRefName: "main", HeadRefName: "feature/review"}
+	result := structuredReviewOutput{Summary: "No findings.", ApprovalEligible: true}
+
+	request := buildPullRequestReviewRequest(
+		prReviewOptions{agent: "codex", model: "gpt-5.5", mode: "strict", reviewer: "gh-x PR Reviewer", allowApprove: true},
+		pr,
+		result,
+		nil,
+		reviewedAt,
+	)
+	if request.Event != "APPROVE" {
+		t.Fatalf("expected APPROVE, got %q", request.Event)
+	}
+
+	result.Nitpicks = []reviewFinding{{Path: "main.go", Line: 10, Title: "Polish"}}
+	request = buildPullRequestReviewRequest(
+		prReviewOptions{agent: "codex", model: "gpt-5.5", mode: "strict", reviewer: "gh-x PR Reviewer", allowApprove: true},
+		pr,
+		result,
+		map[string]map[int]bool{"main.go": {10: true}},
+		reviewedAt,
+	)
+	if request.Event != "COMMENT" {
+		t.Fatalf("expected COMMENT when nitpicks exist, got %q", request.Event)
+	}
+
+	result.Nitpicks = nil
+	request = buildPullRequestReviewRequest(
+		prReviewOptions{agent: "codex", model: "gpt-5.5", mode: "medium", reviewer: "gh-x PR Reviewer", allowApprove: true},
+		pr,
+		result,
+		nil,
+		reviewedAt,
+	)
+	if request.Event != "COMMENT" {
+		t.Fatalf("expected COMMENT outside strict mode, got %q", request.Event)
+	}
+
+	result.ResidualRisk = "Tests were not run."
+	request = buildPullRequestReviewRequest(
+		prReviewOptions{agent: "codex", model: "gpt-5.5", mode: "strict", reviewer: "gh-x PR Reviewer", allowApprove: true},
+		pr,
+		result,
+		nil,
+		reviewedAt,
+	)
+	if request.Event != "COMMENT" {
+		t.Fatalf("expected COMMENT when residual risk remains, got %q", request.Event)
+	}
+}
+
+func TestCommentableLinesForPatchIncludesRightSideDiffLines(t *testing.T) {
+	lines := commentableLinesForPatch(strings.Join([]string{
+		"@@ -1,3 +1,4 @@",
+		" package main",
+		"-old := true",
+		"+new := true",
+		" keep := true",
+		"+added := true",
+	}, "\n"))
+
+	for _, line := range []int{1, 2, 3, 4} {
+		if !lines[line] {
+			t.Fatalf("expected line %d to be commentable, got %#v", line, lines)
+		}
+	}
+}
+
+func TestExecuteReviewPostBuildsAndSubmitsReview(t *testing.T) {
+	savedFetch := fetchReviewPullRequestFunc
+	savedCapture := runReviewAgentCaptureFunc
+	savedLines := fetchReviewCommentLinesFunc
+	savedSubmit := submitPullRequestReviewFunc
+	savedNow := reviewNowFunc
+	defer func() {
+		fetchReviewPullRequestFunc = savedFetch
+		runReviewAgentCaptureFunc = savedCapture
+		fetchReviewCommentLinesFunc = savedLines
+		submitPullRequestReviewFunc = savedSubmit
+		reviewNowFunc = savedNow
+	}()
+
+	fetchReviewPullRequestFunc = func(_ prReviewOptions) (reviewPullRequest, error) {
+		return reviewPullRequest{
+			Number:      42,
+			Title:       "Add review",
+			BaseRefName: "main",
+			HeadRefName: "feature/review",
+			URL:         "https://github.com/owner/repo/pull/42",
+			Author:      &author{Login: "octocat"},
+		}, nil
+	}
+	runReviewAgentCaptureFunc = func(invocation reviewAgentInvocation, _ io.Writer) (string, error) {
+		if !strings.Contains(invocation.Prompt, "Return only a JSON object") {
+			t.Fatalf("expected structured prompt, got %q", invocation.Prompt)
+		}
+		return `{"summary":"One issue.","critical":[],"medium":[{"path":"main.go","line":10,"title":"Missing test","body":"The behavior changed without coverage.","suggestion":"Add a regression test."}],"nitpicks":[],"recommendations":[],"residual_risk":"Tests not run.","approval_eligible":false}`, nil
+	}
+	fetchReviewCommentLinesFunc = func(_ prReviewOptions, _ reviewPullRequest) (map[string]map[int]bool, error) {
+		return map[string]map[int]bool{"main.go": {10: true}}, nil
+	}
+	reviewNowFunc = func() time.Time {
+		return time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	}
+
+	var submitted pullRequestReviewRequest
+	submitPullRequestReviewFunc = func(_ prReviewOptions, _ reviewPullRequest, request pullRequestReviewRequest) error {
+		submitted = request
+		return nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := executeReview(prReviewOptions{agent: "codex", model: "gpt-5.5", effort: "high", mode: "strict", reviewer: "gh-x PR Reviewer", post: true}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if submitted.Event != "COMMENT" {
+		t.Fatalf("expected COMMENT, got %q", submitted.Event)
+	}
+	if len(submitted.Comments) != 1 {
+		t.Fatalf("expected one inline comment, got %#v", submitted.Comments)
+	}
+	if !strings.Contains(stdout.String(), "Posted COMMENT review for PR #42 with 1 inline comment") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Running codex review for PR #42") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
 }

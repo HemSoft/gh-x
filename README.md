@@ -144,14 +144,20 @@ gh x pr atm --json                       # machine-readable output
 
 ## What `gh x pr review` adds
 
-Runs a read-only PR review through an agentic CLI. The command resolves PR
-metadata with `gh pr view`, builds a review prompt, and delegates analysis to a
-provider preset. It does not post PR comments, approve, request changes, merge,
-commit, or edit files.
+Runs a PR review through an agentic CLI. The command resolves PR metadata with
+`gh pr view`, builds a review prompt, and delegates analysis to a provider
+preset. By default it prints the agent's read-only review locally. With
+`--post`, it captures structured findings and posts one GitHub PR review with a
+formal Markdown body and validated inline review comments.
 
 Default provider is `codex` with model `gpt-5.5`, high reasoning effort, and
 `strict` review mode. These are configurable with flags or environment
 variables.
+
+Approvals are opt-in. `--allow-approve` implies posting a review, and approval
+is only selected in `strict` mode when the structured result is explicitly
+approval-eligible and has no critical, medium, or nitpick findings. Critical
+findings post as `REQUEST_CHANGES`; other findings post as `COMMENT`.
 
 ### `review` flags
 
@@ -167,7 +173,10 @@ variables.
 | `-B, --base BRANCH` | Override the base branch in the review prompt |
 | `-i, --instructions TEXT` | Additional review instructions |
 | `--instructions-file FILE` | Read additional instructions from a file |
+| `--reviewer NAME` | Reviewer identity used in posted review reports |
 | `--dry-run` | Print the resolved command and prompt without running the agent |
+| `--post` | Post a GitHub PR review with inline comments |
+| `--allow-approve` | Allow strict-mode approval when the review has no findings |
 
 ### `review` examples
 
@@ -176,10 +185,13 @@ gh x pr review
 gh x pr review 42 --mode strict
 gh x pr review 42 --mode medium
 gh x pr review 42 --mode fast-lane
+gh x pr review 42 --post
+gh x pr review 42 --post --allow-approve
 gh x pr review 42 --agent claude --model sonnet
 gh x pr review 42 --agent copilot
 gh x pr review 42 --dry-run
 GH_X_PR_REVIEW_AGENT=claude GH_X_PR_REVIEW_MODE=medium gh x pr review 42
+GH_X_PR_REVIEW_POST=true GH_X_PR_REVIEW_ALLOW_APPROVE=true gh x pr review 42
 gh x pr review 42 --agent custom --command 'my-reviewer --prompt "{prompt}"'
 ```
 

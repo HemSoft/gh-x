@@ -12,6 +12,9 @@ and this project uses semantic versioning.
 - Defaulted `gh x pr review` to Codex with model `gpt-5.5`, high reasoning
   effort, and `strict` review mode.
 - Added `medium` review mode between `strict` and `fast-lane`.
+- Added opt-in posted PR reviews for `gh x pr review --post`, including a
+  formal Markdown review body and validated inline GitHub review comments.
+- Added `--allow-approve` approval gating for strict clean reviews.
 
 ## [0.18.0] - 2026-06-08
 
