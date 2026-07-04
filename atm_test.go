@@ -251,7 +251,7 @@ func TestMapAtmNode(t *testing.T) {
 			},
 		}},
 	}
-	node.LatestReviews.Nodes = []struct {
+	node.Reviews.Nodes = []struct {
 		State  string `json:"state"`
 		Author struct {
 			Login    string `json:"login"`
@@ -362,7 +362,7 @@ func TestMapAtmNodeAIClean(t *testing.T) {
 		URL:       "https://github.com/Org/repo/pull/99",
 	}
 	node.Repository.NameWithOwner = "Org/repo"
-	node.LatestReviews.Nodes = []struct {
+	node.Reviews.Nodes = []struct {
 		State  string `json:"state"`
 		Author struct {
 			Login    string `json:"login"`
@@ -581,17 +581,17 @@ func TestParseAtmMultiSearchResponse(t *testing.T) {
 			"q0": {
 				"nodes": [
 					{"number": 1, "title": "PR1", "state": "OPEN", "repository": {"nameWithOwner": "Org/repo1"},
-					 "commits": {"nodes": []}, "latestReviews": {"nodes": []}, "reviewThreads": {"totalCount": 0, "nodes": []},
+					 "commits": {"nodes": []}, "reviews": {"nodes": []}, "reviewThreads": {"totalCount": 0, "nodes": []},
 					 "approvedReviews": {"nodes": []}}
 				]
 			},
 			"q1": {
 				"nodes": [
 					{"number": 1, "title": "PR1", "state": "OPEN", "repository": {"nameWithOwner": "Org/repo1"},
-					 "commits": {"nodes": []}, "latestReviews": {"nodes": []}, "reviewThreads": {"totalCount": 0, "nodes": []},
+					 "commits": {"nodes": []}, "reviews": {"nodes": []}, "reviewThreads": {"totalCount": 0, "nodes": []},
 					 "approvedReviews": {"nodes": []}},
 					{"number": 2, "title": "PR2", "state": "OPEN", "repository": {"nameWithOwner": "Org/repo2"},
-					 "commits": {"nodes": []}, "latestReviews": {"nodes": []}, "reviewThreads": {"totalCount": 0, "nodes": []},
+					 "commits": {"nodes": []}, "reviews": {"nodes": []}, "reviewThreads": {"totalCount": 0, "nodes": []},
 					 "approvedReviews": {"nodes": []}}
 				]
 			}
@@ -888,7 +888,7 @@ func TestRenderAtmResultsAIReviewPass(t *testing.T) {
 			Number: 42,
 			Title:  "Reviewed by bot",
 			URL:    "https://github.com/test/repo/pull/42",
-			LatestReviews: struct {
+			Reviews: struct {
 				Nodes []struct {
 					State  string `json:"state"`
 					Author struct {
@@ -1108,7 +1108,7 @@ func TestRenderAtmResultsReadyFilter(t *testing.T) {
 	}{Contexts: struct {
 		Nodes []checkItem `json:"nodes"`
 	}{Nodes: []checkItem{{Typename: "CheckRun", Name: "ci", Status: "COMPLETED", Conclusion: "SUCCESS"}}}}}}}
-	nodes[0].LatestReviews.Nodes = []struct {
+	nodes[0].Reviews.Nodes = []struct {
 		State  string `json:"state"`
 		Author struct {
 			Login    string `json:"login"`

@@ -1005,7 +1005,7 @@ func fetchPRSupplementalBatch(owner, name string, prNumbers []int) (map[int]prSu
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`pr%d: pullRequest(number: %d) { number reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } latestReviews(first: 50) { nodes { state author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login } } } }`,
+			`pr%d: pullRequest(number: %d) { number reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(first: 100) { nodes { state author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login } } } }`,
 			num, num,
 		))
 	}
@@ -1061,7 +1061,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 				} `json:"comments"`
 			} `json:"nodes"`
 		} `json:"reviewThreads"`
-		LatestReviews struct {
+		Reviews struct {
 			Nodes []struct {
 				State  string `json:"state"`
 				Author struct {
@@ -1072,7 +1072,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 					TotalCount int `json:"totalCount"`
 				} `json:"comments"`
 			} `json:"nodes"`
-		} `json:"latestReviews"`
+		} `json:"reviews"`
 		ApprovedReviews struct {
 			Nodes []struct {
 				Author struct {
@@ -1089,7 +1089,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 	}
 
 	var aiNodes []aiReviewNode
-	for _, r := range prData.LatestReviews.Nodes {
+	for _, r := range prData.Reviews.Nodes {
 		aiNodes = append(aiNodes, aiReviewNode{
 			State:        r.State,
 			AuthorLogin:  r.Author.Login,

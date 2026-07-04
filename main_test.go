@@ -1289,7 +1289,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 					{"isResolved": false, "comments": {"nodes": [{"author": {"login": "user1", "__typename": "User"}}]}}
 				]
 			},
-			"latestReviews": {
+			"reviews": {
 				"nodes": [
 					{"state": "APPROVED", "author": {"login": "copilot[bot]", "__typename": "Bot"}, "comments": {"totalCount": 0}}
 				]
@@ -1323,6 +1323,42 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 	})
 
+	t.Run("not AI clean when previous bot review had comments", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 438,
+			"reviewThreads": {
+				"totalCount": 2,
+				"nodes": [
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}}]}},
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}}]}}
+				]
+			},
+			"reviews": {
+				"nodes": [
+					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "comments": {"totalCount": 2}},
+					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "comments": {"totalCount": 0}}
+				]
+			},
+			"approvedReviews": {"nodes": []}
+		}`)
+		num, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatalf("expected ok=true")
+		}
+		if num != 438 {
+			t.Fatalf("expected number 438, got %d", num)
+		}
+		if info.Threads.Total != 2 || info.Threads.Resolved != 2 {
+			t.Fatalf("expected comments 2/2, got %d/%d", info.Threads.Resolved, info.Threads.Total)
+		}
+		if info.AIReview != "pass" {
+			t.Fatalf("expected AIReview pass after all AI threads resolved, got %q", info.AIReview)
+		}
+		if info.AIClean {
+			t.Fatalf("expected AIClean=false when any bot review had comments")
+		}
+	})
+
 	t.Run("invalid JSON", func(t *testing.T) {
 		_, _, ok := parsePRSupplementalNode([]byte(`{invalid`))
 		if ok {
@@ -1331,7 +1367,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 	})
 
 	t.Run("zero number returns not-ok", func(t *testing.T) {
-		_, _, ok := parsePRSupplementalNode([]byte(`{"number": 0, "reviewThreads": {"totalCount": 0, "nodes": []}, "latestReviews": {"nodes": []}, "approvedReviews": {"nodes": []}}`))
+		_, _, ok := parsePRSupplementalNode([]byte(`{"number": 0, "reviewThreads": {"totalCount": 0, "nodes": []}, "reviews": {"nodes": []}, "approvedReviews": {"nodes": []}}`))
 		if ok {
 			t.Fatalf("expected ok=false for zero PR number")
 		}
@@ -1939,7 +1975,7 @@ func TestParseSupplementalResponse(t *testing.T) {
 	}{
 		{
 			name:    "valid with one PR",
-			input:   `{"data":{"repository":{"pr42":{"number":42,"reviewThreads":{"totalCount":2,"nodes":[]},"latestReviews":{"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`,
+			input:   `{"data":{"repository":{"pr42":{"number":42,"reviewThreads":{"totalCount":2,"nodes":[]},"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`,
 			wantLen: 1,
 		},
 		{
@@ -2224,7 +2260,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 			"totalCount":1,
 			"nodes":[{"isResolved":false,"comments":{"nodes":[]}}]
 		},
-		"latestReviews":{"nodes":[]},
+		"reviews":{"nodes":[]},
 		"approvedReviews":{"nodes":[]}
 	}}}}`
 
@@ -2248,7 +2284,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 				}]}
 			}]
 		},
-		"latestReviews":{"nodes":[{
+		"reviews":{"nodes":[{
 			"state":"COMMENTED",
 			"author":{"login":"copilot-pull-request-reviewer[bot]"},
 			"comments":{"totalCount":1}

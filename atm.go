@@ -245,6 +245,13 @@ const atmPRFieldsFragment = `
             comments { totalCount }
           }
         }
+        reviews(first: 100) {
+          nodes {
+            state
+            author { login __typename }
+            comments { totalCount }
+          }
+        }
         reviewThreads(first: 100) {
           totalCount
           nodes {
@@ -327,6 +334,18 @@ type atmPullRequestNode struct {
 			} `json:"comments"`
 		} `json:"nodes"`
 	} `json:"latestReviews"`
+	Reviews struct {
+		Nodes []struct {
+			State  string `json:"state"`
+			Author struct {
+				Login    string `json:"login"`
+				Typename string `json:"__typename"`
+			} `json:"author"`
+			Comments struct {
+				TotalCount int `json:"totalCount"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	} `json:"reviews"`
 	ReviewThreads struct {
 		TotalCount int `json:"totalCount"`
 		Nodes      []struct {
@@ -432,7 +451,7 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 	checkItems := extractAtmCheckItems(node)
 
 	var aiNodes []aiReviewNode
-	for _, r := range node.LatestReviews.Nodes {
+	for _, r := range node.Reviews.Nodes {
 		aiNodes = append(aiNodes, aiReviewNode{
 			State:        r.State,
 			AuthorLogin:  r.Author.Login,
