@@ -775,12 +775,44 @@ func classifyAIReviews(reviews []aiReviewNode) (hasCleanPass, hasIssues, hasBotR
 	return
 }
 
-// isAIReviewClean returns true when a bot-authored review is present, gave a
-// clean pass (APPROVED or COMMENTED state with zero review comments), and
-// raised no issues across any bot review.
-func isAIReviewClean(reviews []aiReviewNode) bool {
-	hasCleanPass, hasIssues, hasBotReview := classifyAIReviews(reviews)
-	return hasBotReview && hasCleanPass && !hasIssues
+// latestAIReviewIsClean returns true when the most recent bot-authored review
+// is a clean pass (APPROVED or COMMENTED state with zero review comments).
+// Reviews are expected in submission order, as returned by the GitHub API.
+func latestAIReviewIsClean(reviews []aiReviewNode) bool {
+	hasBotReview := false
+	clean := false
+	for _, r := range reviews {
+		if !isAIReviewer(r.AuthorLogin) && r.AuthorType != "Bot" {
+			continue
+		}
+		hasBotReview = true
+		switch strings.ToUpper(r.State) {
+		case "APPROVED", "COMMENTED":
+			clean = r.CommentCount == 0
+		default:
+			clean = false
+		}
+	}
+	return hasBotReview && clean
+}
+
+// isAIReviewClean returns true when the latest bot-authored review gave a
+// clean pass (zero review comments) and no AI-authored thread remains
+// unresolved. Earlier bot reviews that left comments do not disqualify the
+// PR once their threads are resolved and a fresh clean review exists.
+func isAIReviewClean(reviews []aiReviewNode, threads []aiReviewThread) bool {
+	if !latestAIReviewIsClean(reviews) {
+		return false
+	}
+	for _, t := range threads {
+		if !isAIReviewer(t.AuthorLogin) && t.AuthorType != "Bot" {
+			continue
+		}
+		if !t.IsResolved {
+			return false
+		}
+	}
+	return true
 }
 
 // allAIThreadsResolved returns true when at least one AI-authored thread exists
@@ -1123,7 +1155,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			Resolved: countResolvedThreads(aiThreads),
 		},
 		AIReview:  detectAIReview(aiNodes, aiThreads),
-		AIClean:   isAIReviewClean(aiNodes),
+		AIClean:   isAIReviewClean(aiNodes, aiThreads),
 		Approvals: countUniqueApprovers(approverLogins),
 	}, true
 }
@@ -1132,8 +1164,8 @@ func boolPtr(b bool) *bool { return &b }
 
 // aiCleanPtr returns a non-nil *bool (true) only when the AI review is clean.
 // When not clean, it returns nil so the omitempty JSON tag omits the field.
-func aiCleanPtr(reviews []aiReviewNode) *bool {
-	if isAIReviewClean(reviews) {
+func aiCleanPtr(reviews []aiReviewNode, threads []aiReviewThread) *bool {
+	if isAIReviewClean(reviews, threads) {
 		return boolPtr(true)
 	}
 	return nil

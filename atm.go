@@ -487,7 +487,7 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 		Checks:    normalizeCheckState(checkItems),
 		Comments:  formatComments(threads),
 		AIReview:  aiReview,
-		AIClean:   aiCleanPtr(aiNodes),
+		AIClean:   aiCleanPtr(aiNodes, aiThreads),
 		Branch:    formatBranch(node.HeadRefName),
 		Updated:   formatRelativeTime(node.UpdatedAt, now),
 		URL:       node.URL,

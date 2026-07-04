@@ -492,6 +492,7 @@ func TestIsAIReviewClean(t *testing.T) {
 	tests := []struct {
 		name    string
 		reviews []aiReviewNode
+		threads []aiReviewThread
 		want    bool
 	}{
 		{name: "nil", reviews: nil, want: false},
@@ -514,10 +515,27 @@ func TestIsAIReviewClean(t *testing.T) {
 		{name: "copilot changes requested", reviews: []aiReviewNode{
 			{State: "CHANGES_REQUESTED", AuthorLogin: "copilot[bot]", CommentCount: 2},
 		}, want: false},
-		{name: "bot approval plus bot issues", reviews: []aiReviewNode{
-			{State: "APPROVED", AuthorLogin: "coderabbitai[bot]", CommentCount: 0},
+		{name: "latest bot review clean after earlier issues resolved", reviews: []aiReviewNode{
 			{State: "CHANGES_REQUESTED", AuthorLogin: "copilot[bot]", CommentCount: 1},
+			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "copilot[bot]", IsResolved: true},
+		}, want: true},
+		{name: "latest bot review clean but unresolved threads", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 1},
+			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "copilot[bot]", IsResolved: false},
 		}, want: false},
+		{name: "latest bot review has comments after clean pass", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0},
+			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 2},
+		}, want: false},
+		{name: "unresolved human thread ignored", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "copilot[bot]", CommentCount: 0},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "human-reviewer", IsResolved: false},
+		}, want: true},
 		{name: "graphql bot typename clean", reviews: []aiReviewNode{
 			{State: "APPROVED", AuthorLogin: "coderabbitai", AuthorType: "Bot", CommentCount: 0},
 		}, want: true},
@@ -527,7 +545,7 @@ func TestIsAIReviewClean(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isAIReviewClean(tc.reviews); got != tc.want {
+			if got := isAIReviewClean(tc.reviews, tc.threads); got != tc.want {
 				t.Fatalf("expected %v, got %v", tc.want, got)
 			}
 		})
@@ -1323,7 +1341,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 	})
 
-	t.Run("not AI clean when previous bot review had comments", func(t *testing.T) {
+	t.Run("AI clean when latest review clean and prior comments resolved", func(t *testing.T) {
 		raw := []byte(`{
 			"number": 438,
 			"reviewThreads": {
@@ -1354,8 +1372,8 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		if info.AIReview != "pass" {
 			t.Fatalf("expected AIReview pass after all AI threads resolved, got %q", info.AIReview)
 		}
-		if info.AIClean {
-			t.Fatalf("expected AIClean=false when any bot review had comments")
+		if !info.AIClean {
+			t.Fatalf("expected AIClean=true when latest bot review is clean and all threads resolved")
 		}
 	})
 

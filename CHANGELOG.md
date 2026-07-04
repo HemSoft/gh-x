@@ -7,6 +7,12 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the comments column `!` marker so it appears when the latest AI
+  review is clean and all AI review threads are resolved, instead of being
+  permanently suppressed once any earlier AI review left comments.
+
 ### Improved
 
 - Defaulted `gh x pr review` to Codex with model `gpt-5.5`, high reasoning
