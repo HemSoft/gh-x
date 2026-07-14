@@ -9,6 +9,9 @@ and this project uses semantic versioning.
 
 ### Fixed
 
+- Recognized current-head Codex Cloud review summaries posted as pull-request
+  conversation comments, so clean reviews show `AI pass` and `0/0!` instead of
+  appearing as if no AI review ran.
 - Fixed the comments column `!` marker so it appears when the latest AI
   review is clean and all AI review threads are resolved, instead of being
   permanently suppressed once any earlier AI review left comments.

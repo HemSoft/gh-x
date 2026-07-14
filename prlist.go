@@ -706,6 +706,14 @@ type aiReviewThread struct {
 	IsResolved  bool
 }
 
+// aiReviewComment holds PR conversation comments that may contain a
+// current-head Codex review summary.
+type aiReviewComment struct {
+	Body        string
+	AuthorLogin string
+	AuthorType  string
+}
+
 func formatComments(info reviewThreadInfo) string {
 	if info.Total == 0 {
 		return "-"
@@ -742,6 +750,36 @@ var knownAIReviewers = map[string]bool{
 
 func isAIReviewer(login string) bool {
 	return strings.HasSuffix(login, "[bot]") || knownAIReviewers[login]
+}
+
+func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, bool) {
+	login := strings.TrimSuffix(strings.ToLower(comment.AuthorLogin), "[bot]")
+	if login != "chatgpt-codex-connector" {
+		return aiReviewNode{}, false
+	}
+
+	body := strings.ToLower(comment.Body)
+	if !strings.Contains(body, "codex review:") || headRefOID == "" {
+		return aiReviewNode{}, false
+	}
+
+	shaLength := min(10, len(headRefOID))
+	if !strings.Contains(body, strings.ToLower(headRefOID[:shaLength])) {
+		return aiReviewNode{}, false
+	}
+
+	commentCount := 1
+	if strings.Contains(body, "didn't find any major issues") ||
+		strings.Contains(body, "did not find any major issues") {
+		commentCount = 0
+	}
+
+	return aiReviewNode{
+		State:        "COMMENTED",
+		AuthorLogin:  comment.AuthorLogin,
+		AuthorType:   comment.AuthorType,
+		CommentCount: commentCount,
+	}, true
 }
 
 // classifyAIReviews scans review nodes for bot-authored reviews and returns
@@ -831,6 +869,15 @@ func allAIThreadsResolved(threads []aiReviewThread) bool {
 	return aiThreadCount > 0
 }
 
+func hasUnresolvedAIThreads(threads []aiReviewThread) bool {
+	for _, t := range threads {
+		if (isAIReviewer(t.AuthorLogin) || t.AuthorType == "Bot") && !t.IsResolved {
+			return true
+		}
+	}
+	return false
+}
+
 // detectAIReview determines the AI review status by combining review state with
 // thread resolution. A review that left comments is only "pass" when positive
 // evidence exists that all AI-authored threads have been resolved.
@@ -847,6 +894,9 @@ func detectAIReview(reviews []aiReviewNode, threads []aiReviewThread) string {
 		return "fail"
 	}
 	if hasCleanPass {
+		if hasUnresolvedAIThreads(threads) {
+			return "fail"
+		}
 		return "pass"
 	}
 	return "-"
@@ -1037,7 +1087,7 @@ func fetchPRSupplementalBatch(owner, name string, prNumbers []int) (map[int]prSu
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`pr%d: pullRequest(number: %d) { number reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(first: 100) { nodes { state author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login } } } }`,
+			`pr%d: pullRequest(number: %d) { number headRefOid comments(last: 100) { nodes { body author { login __typename } } } reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(first: 100) { nodes { state author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login } } } }`,
 			num, num,
 		))
 	}
@@ -1078,7 +1128,17 @@ func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, error) 
 // Returns the PR number, supplemental info, and whether parsing succeeded.
 func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool) {
 	var prData struct {
-		Number        int `json:"number"`
+		Number     int    `json:"number"`
+		HeadRefOID string `json:"headRefOid"`
+		Comments   struct {
+			Nodes []struct {
+				Body   string `json:"body"`
+				Author struct {
+					Login    string `json:"login"`
+					Typename string `json:"__typename"`
+				} `json:"author"`
+			} `json:"nodes"`
+		} `json:"comments"`
 		ReviewThreads struct {
 			TotalCount int `json:"totalCount"`
 			Nodes      []struct {
@@ -1128,6 +1188,15 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			AuthorType:   r.Author.Typename,
 			CommentCount: r.Comments.TotalCount,
 		})
+	}
+	for _, comment := range prData.Comments.Nodes {
+		if node, ok := codexReviewNode(aiReviewComment{
+			Body:        comment.Body,
+			AuthorLogin: comment.Author.Login,
+			AuthorType:  comment.Author.Typename,
+		}, prData.HeadRefOID); ok {
+			aiNodes = append(aiNodes, node)
+		}
 	}
 
 	var aiThreads []aiReviewThread
