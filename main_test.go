@@ -438,6 +438,11 @@ func TestDetectAIReview(t *testing.T) {
 		{name: "copilot no comments", nodes: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0},
 		}, want: "pass"},
+		{name: "clean review with unresolved AI thread", nodes: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", CommentCount: 0},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "coderabbitai[bot]", IsResolved: false},
+		}, want: "fail"},
 		{name: "copilot-pull-request-reviewer no comments", nodes: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", CommentCount: 0},
 		}, want: "pass"},
@@ -1492,6 +1497,72 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 		if !info.AIClean {
 			t.Fatalf("expected AIClean=true when latest bot review is clean and all threads resolved")
+		}
+	})
+
+	t.Run("current-head clean Codex comment counts as AI pass", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "682de6badb7404709e1183f4e8ed194c9ae6e34a",
+			"comments": {"nodes": [{
+				"body": "Codex Review: Didn't find any major issues. Nice work!\n\n**Reviewed commit:** 682de6badb",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"nodes": []},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		num, info, ok := parsePRSupplementalNode(raw)
+		if !ok || num != 47 {
+			t.Fatalf("expected PR 47, got number=%d ok=%v", num, ok)
+		}
+		if info.AIReview != "pass" || !info.AIClean {
+			t.Fatalf("expected clean AI pass, got review=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
+	t.Run("stale clean Codex comment is ignored", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "aaaaaaaaaabbbbbbbbbbccccccccccdddddddddd",
+			"comments": {"nodes": [{
+				"body": "Codex Review: Didn't find any major issues. Nice work!\n\n**Reviewed commit:** 682de6badb",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"nodes": []},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "-" || info.AIClean {
+			t.Fatalf("expected stale review to be ignored, got review=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
+	t.Run("current-head Codex findings count as AI failure", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "682de6badb7404709e1183f4e8ed194c9ae6e34a",
+			"comments": {"nodes": [{
+				"body": "Codex Review: Found an issue that should be addressed.\n\n**Reviewed commit:** 682de6badb",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"nodes": []},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "fail" || info.AIClean {
+			t.Fatalf("expected AI failure, got review=%q clean=%v", info.AIReview, info.AIClean)
 		}
 	})
 
