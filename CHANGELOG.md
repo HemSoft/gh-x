@@ -25,6 +25,9 @@ and this project uses semantic versioning.
 - Fixed the comments column `!` marker so it appears when the latest AI
   review is clean and all AI review threads are resolved, instead of being
   permanently suppressed once any earlier AI review left comments.
+- Show the comments `!` marker when every AI review thread is resolved and
+  AI status is `pass`, even if the latest bot review originally left inline
+  findings that have since been addressed.
 
 ### Improved
 

@@ -885,23 +885,18 @@ func latestAIReviewIsClean(reviews []aiReviewNode) bool {
 	return hasBotReview && clean
 }
 
-// isAIReviewClean returns true when the latest bot-authored review gave a
-// clean pass (zero review comments) and no AI-authored thread remains
-// unresolved. Earlier bot reviews that left comments do not disqualify the
-// PR once their threads are resolved and a fresh clean review exists.
+// isAIReviewClean returns true when AI review is effectively clear for the bang
+// marker: no unresolved AI threads, and either the latest bot review left zero
+// comments or every AI-authored thread from earlier findings has been resolved
+// (detectAIReview reports "pass").
 func isAIReviewClean(reviews []aiReviewNode, threads []aiReviewThread) bool {
-	if !latestAIReviewIsClean(reviews) {
+	if hasUnresolvedAIThreads(threads) {
 		return false
 	}
-	for _, t := range threads {
-		if !isAIReviewer(t.AuthorLogin) && t.AuthorType != "Bot" {
-			continue
-		}
-		if !t.IsResolved {
-			return false
-		}
+	if latestAIReviewIsClean(reviews) {
+		return true
 	}
-	return true
+	return detectAIReview(reviews, threads) == "pass" && allAIThreadsResolved(threads)
 }
 
 // allAIThreadsResolved returns true when at least one AI-authored thread exists

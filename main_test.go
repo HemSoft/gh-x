@@ -584,6 +584,18 @@ func TestIsAIReviewClean(t *testing.T) {
 			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0},
 			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 2},
 		}, want: false},
+		{name: "findings addressed all AI threads resolved", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", CommentCount: 2},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", IsResolved: true},
+			{AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", IsResolved: true},
+		}, want: true},
+		{name: "findings with one unresolved thread", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", CommentCount: 2},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", IsResolved: true},
+			{AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", IsResolved: false},
+		}, want: false},
 		{name: "unresolved human thread ignored", reviews: []aiReviewNode{
 			{State: "APPROVED", AuthorLogin: "copilot[bot]", CommentCount: 0},
 		}, threads: []aiReviewThread{
