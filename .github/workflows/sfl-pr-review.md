@@ -6,6 +6,9 @@ description: |
   consolidated review, and publishes the SFL Reviewer Approval check.
 
 on:
+  # Fork pull requests are intentionally unsupported. gh-aw's repository-ID
+  # safety gate skips them before activation, so no review/check is produced
+  # and the trigger label remains for a maintainer to remove.
   label_command:
     name: sfl-review
     events: [pull_request]
@@ -58,8 +61,10 @@ safe-outputs:
     max: 1
     name: "SFL Reviewer Approval"
 ---
-# Deployed from: HemSoft/set-it-free-loop/deployment/workflows/sfl-pr-review.md@78483bbf7edf0a4f8d3bf2f68e58678da36044ae
-# To upgrade: re-run deploy-workflow.ps1 at the desired SHA
+<!--
+Deployed from: HemSoft/set-it-free-loop/deployment/workflows/sfl-pr-review.md@78483bbf7edf0a4f8d3bf2f68e58678da36044ae
+-->
+<!-- To upgrade: re-run deploy-workflow.ps1 at the desired SHA -->
 
 <!-- sfl:
   status: active
@@ -68,10 +73,12 @@ safe-outputs:
   risk-class: trivial
   target-labels: [sfl-review]
   outcome-definition: |
-    The triggering pull request receives a current-head structured review,
-    one inline thread per finding, and an SFL Reviewer Approval check.
+    A same-repository triggering pull request receives a current-head structured
+    review, one inline thread per finding, and an SFL Reviewer Approval check.
+    Fork pull requests are intentionally skipped by the gh-aw safety gate.
   acceptance-criteria:
-    - The sfl-review label triggers exactly one current-head review run
+    - The sfl-review label triggers exactly one current-head review run for a same-repository pull request
+    - Fork pull requests are skipped without a review/check and retain the trigger label
     - The trigger label is consumed during authorized activation
     - Security, correctness/reliability, and quality/maintainability are reviewed
     - Every finding is an inline thread classified Critical, High, Medium, or Low
@@ -123,7 +130,20 @@ Classify every finding into exactly one severity:
 Do not report style preferences, speculative concerns, or findings without
 specific evidence from the changed code.
 
-For each finding, call `create-pull-request-review-comment` on the most precise
+## Current-head gate
+
+Immediately before producing any safe output, re-read the triggering pull
+request with the GitHub pull request tools. Compare its live head SHA with
+`${{ github.event.pull_request.head.sha }}`. Do not rely on an earlier PR read
+for this comparison.
+
+If the SHAs differ, do not create inline comments and do not submit a review.
+Call only `create_check_run` with conclusion `failure`, title
+`SFL review canceled: PR head changed`, and a summary containing the reviewed
+SHA, live SHA, run ID, and an instruction to reapply the `sfl-review` label.
+Then stop. This stale-head result takes precedence over the approval policy.
+
+For each finding, call `create_pull_request_review_comment` on the most precise
 changed line. The comment body must begin with one of these exact prefixes:
 
 - `**CRITICAL Finding**`
@@ -146,7 +166,7 @@ Count all inline findings by severity.
 - If no findings exist, submit `APPROVE` and create the check with conclusion
   `success`.
 
-Submit exactly one consolidated review with this body:
+Call `submit_pull_request_review` exactly once with this body:
 
 ```markdown
 ## SFL Full-Spectrum Review
@@ -176,7 +196,8 @@ Concise evidence-based summary of the review result.
 Replace the verdict and counts with the actual result. Use
 `Verdict: CHANGES_REQUESTED` when Critical or High findings exist.
 
-Create exactly one check run named `SFL Reviewer Approval` with:
+Call `create_check_run` exactly once for the check named
+`SFL Reviewer Approval` with:
 
 - `title`: `SFL full-spectrum review complete`
 - `summary`: the verdict, head SHA, run ID, and severity counts
