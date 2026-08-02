@@ -50,15 +50,39 @@ tools:
       private-key: ${{ secrets.SFL_APP_PRIVATE_KEY }}
 
 safe-outputs:
-  threat-detection: true
+  threat-detection:
+    post-steps:
+      - name: Generate SFL App token for final head verification
+        id: sfl-final-head-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.SFL_APP_CLIENT_ID }}
+          private-key: ${{ secrets.SFL_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: read
+      - name: Verify PR head before safe outputs
+        env:
+          GH_TOKEN: ${{ steps.sfl-final-head-token.outputs.token }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          live_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [[ "$live_head" != "$EXPECTED_HEAD" ]]; then
+            echo "::error::PR head changed from ${EXPECTED_HEAD} to ${live_head}; suppressing stale SFL outputs"
+            exit 1
+          fi
   github-app:
     client-id: ${{ vars.SFL_APP_CLIENT_ID }}
     private-key: ${{ secrets.SFL_APP_PRIVATE_KEY }}
   create-pull-request-review-comment:
+    commit-id: ${{ github.event.pull_request.head.sha }}
     side: RIGHT
     max: 20
   submit-pull-request-review:
     allowed-events: [APPROVE, REQUEST_CHANGES]
+    commit-id: ${{ github.event.pull_request.head.sha }}
     supersede-older-reviews: true
     footer: always
   create-check-run:
@@ -91,6 +115,8 @@ Deployed from: HemSoft/set-it-free-loop/deployment/workflows/sfl-pr-review.md@78
     - Still-applicable unresolved SFL findings remain part of the verdict on reruns
     - Medium or Low findings do not fail the approval check
     - Zero findings produce an approving review and successful approval check
+    - The live PR head is rechecked after threat detection before safe outputs
+    - Threat-detection or output-publication infrastructure failures fail closed
   source-repo: HemSoft/set-it-free-loop
 -->
 
@@ -155,8 +181,15 @@ Call only `create_check_run` with conclusion `failure`, title
 SHA, live SHA, run ID, and an instruction to reapply the `sfl-review` label.
 Then stop. This stale-head result takes precedence over the approval policy.
 
+The review and its inline comments are also infrastructure-pinned to
+`${{ github.event.pull_request.head.sha }}`. Never target a later commit. The
+approval check uses the triggering pull request event's head SHA, so a newer
+head must receive its own SFL run and check. A final fail-closed head comparison
+runs after threat detection and prevents stale safe outputs from being published.
+
 For each finding, call `create_pull_request_review_comment` on the most precise
-changed line. The comment body must begin with one of these exact prefixes:
+changed line. Set `side` to `RIGHT` for an added or context line and `LEFT` for
+a deleted line. The comment body must begin with one of these exact prefixes:
 
 - `**CRITICAL Finding**`
 - `**HIGH Finding**`
@@ -181,21 +214,22 @@ duplicated during this run.
 - If no findings exist, submit `APPROVE` and create the check with conclusion
   `success`.
 
-Call `submit_pull_request_review` exactly once with this body:
+Call `submit_pull_request_review` exactly once. Use this body and replace every
+`<...>` placeholder with the actual value:
 
 ```markdown
 ## SFL Full-Spectrum Review
 
 SFL run ID: ${{ github.run_id }}
 Head SHA: ${{ github.event.pull_request.head.sha }}
-Verdict: APPROVE
+Verdict: <APPROVE or CHANGES_REQUESTED>
 
 | Severity | Count |
 | --- | ---: |
-| Critical | 0 |
-| High | 0 |
-| Medium | 0 |
-| Low | 0 |
+| Critical | <count> |
+| High | <count> |
+| Medium | <count> |
+| Low | <count> |
 
 ### Review passes
 
@@ -208,8 +242,7 @@ Verdict: APPROVE
 Concise evidence-based summary of the review result.
 ```
 
-Replace the verdict and counts with the actual result. Use
-`Verdict: CHANGES_REQUESTED` when Critical or High findings exist.
+Use `Verdict: CHANGES_REQUESTED` when Critical or High findings exist.
 
 Call `create_check_run` exactly once for the check named
 `SFL Reviewer Approval` with:
