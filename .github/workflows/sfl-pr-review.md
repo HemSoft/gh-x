@@ -14,6 +14,10 @@ on:
     events: [pull_request]
     remove_label: true
 
+if: >-
+  github.event_name != 'pull_request' ||
+  github.event.pull_request.head.repo.id == github.repository_id
+
 permissions:
   contents: read
   pull-requests: read
