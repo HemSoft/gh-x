@@ -88,6 +88,7 @@ Deployed from: HemSoft/set-it-free-loop/deployment/workflows/sfl-pr-review.md@78
     - Every finding is an inline thread classified Critical, High, Medium, or Low
     - The review body reports the run ID, head SHA, verdict, and severity counts
     - Critical or High findings fail the approval check and request changes
+    - Still-applicable unresolved SFL findings remain part of the verdict on reruns
     - Medium or Low findings do not fail the approval check
     - Zero findings produce an approving review and successful approval check
   source-repo: HemSoft/set-it-free-loop
@@ -101,7 +102,14 @@ must be `${{ github.event.pull_request.head.sha }}` and the SFL run ID is
 
 Use the GitHub pull request tools to read the triggering PR, its changed files,
 and the complete diff. Before creating comments, list existing review comments
-and unresolved threads on the current head so you do not repeat a finding.
+and unresolved threads on the current head. Re-evaluate every unresolved SFL
+finding against the current head. The finding set for this run is the union of
+new findings and still-applicable unresolved SFL findings. Do not duplicate an
+existing finding's inline comment, but keep that finding in the current run's
+severity counts and verdict. Exclude resolved findings and findings that are no
+longer applicable to the current head. An existing SFL finding is an unresolved
+inline review comment authored by the SFL reviewer whose body starts with one of
+the exact severity prefixes below.
 
 ## Required review passes
 
@@ -156,12 +164,15 @@ changed line. The comment body must begin with one of these exact prefixes:
 - `**LOW Finding**`
 
 After the prefix, state the defect, impact, evidence, and a concrete fix.
-Create exactly one inline thread per finding. If there are no findings, create
-no inline comments.
+Create exactly one inline thread per new finding. Do not create another thread
+for a still-applicable existing finding. If there are no new findings, create no
+inline comments.
 
 ## Approval policy
 
-Count all inline findings by severity.
+Count the complete current-run finding set by severity, including every
+still-applicable unresolved SFL finding even when its existing thread was not
+duplicated during this run.
 
 - If any Critical or High finding exists, submit `REQUEST_CHANGES` and create
   the `SFL Reviewer Approval` check with conclusion `failure`.
