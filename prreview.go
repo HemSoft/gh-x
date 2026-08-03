@@ -191,24 +191,11 @@ func splitReviewFlagArgs(args []string) ([]string, string, error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
-			for _, positional := range args[i+1:] {
-				if target != "" {
-					return nil, "", fmt.Errorf("unexpected arguments: %s", positional)
-				}
-				target = positional
-			}
-			break
+			return finishReviewFlagArgs(flagArgs, target, args[i+1:])
 		}
 
 		if strings.HasPrefix(arg, "-") && arg != "-" {
-			flagArgs = append(flagArgs, arg)
-			if strings.Contains(arg, "=") {
-				continue
-			}
-			if valueFlags[arg] && i+1 < len(args) {
-				i++
-				flagArgs = append(flagArgs, args[i])
-			}
+			flagArgs, i = appendReviewFlag(flagArgs, args, i, valueFlags)
 			continue
 		}
 
@@ -218,6 +205,26 @@ func splitReviewFlagArgs(args []string) ([]string, string, error) {
 		target = arg
 	}
 	return flagArgs, target, nil
+}
+
+func finishReviewFlagArgs(flagArgs []string, target string, positionals []string) ([]string, string, error) {
+	for _, positional := range positionals {
+		if target != "" {
+			return nil, "", fmt.Errorf("unexpected arguments: %s", positional)
+		}
+		target = positional
+	}
+	return flagArgs, target, nil
+}
+
+func appendReviewFlag(flagArgs, args []string, index int, valueFlags map[string]bool) ([]string, int) {
+	arg := args[index]
+	flagArgs = append(flagArgs, arg)
+	if !strings.Contains(arg, "=") && valueFlags[arg] && index+1 < len(args) {
+		index++
+		flagArgs = append(flagArgs, args[index])
+	}
+	return flagArgs, index
 }
 
 func normalizeReviewEffort(value string) (string, error) {
@@ -464,55 +471,75 @@ func buildReviewInvocation(options prReviewOptions, pr reviewPullRequest, prompt
 	agent := strings.ToLower(strings.TrimSpace(options.agent))
 	switch agent {
 	case "", "codex":
-		args := []string{"exec", "--sandbox", "read-only"}
-		if options.model != "" {
-			args = append(args, "--model", options.model)
-		}
-		if options.effort != "" {
-			args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(options.effort))
-		}
-		args = append(args, "-")
-		return reviewAgentInvocation{Name: "codex", Args: args, Prompt: prompt, PromptOnStdin: true}, nil
+		return buildCodexReviewInvocation(options, prompt), nil
 	case "claude", "claude-code":
-		args := []string{"-p", "--permission-mode", "plan"}
-		if options.model != "" {
-			args = append(args, "--model", options.model)
-		}
-		args = append(args, prompt)
-		return reviewAgentInvocation{Name: "claude", Args: args, Prompt: prompt}, nil
+		return buildClaudeReviewInvocation(options, prompt), nil
 	case "copilot", "github-copilot":
-		args := []string{
-			"-p", prompt,
-			"--allow-tool=shell(git:*)",
-			"--allow-tool=shell(gh:*)",
-			"--deny-tool=shell(git push)",
-			"--deny-tool=shell(gh pr merge)",
-			"--deny-tool=shell(gh pr review)",
-			"--deny-tool=shell(gh pr comment)",
-			"--deny-tool=write",
-		}
-		if options.model != "" {
-			args = append([]string{"--model", options.model}, args...)
-		}
-		return reviewAgentInvocation{Name: "copilot", Args: args, Prompt: prompt}, nil
+		return buildCopilotReviewInvocation(options, prompt), nil
 	case "gemini":
-		args := []string{"-p", prompt, "--approval-mode", "plan"}
-		if options.model != "" {
-			args = append([]string{"--model", options.model}, args...)
-		}
-		return reviewAgentInvocation{Name: "gemini", Args: args, Prompt: prompt}, nil
+		return buildGeminiReviewInvocation(options, prompt), nil
 	case "opencode":
-		args := []string{"run"}
-		if options.model != "" {
-			args = append(args, "--model", options.model)
-		}
-		args = append(args, prompt)
-		return reviewAgentInvocation{Name: "opencode", Args: args, Prompt: prompt}, nil
+		return buildOpenCodeReviewInvocation(options, prompt), nil
 	case "custom":
 		return reviewAgentInvocation{}, errors.New("--agent custom requires --command or GH_X_PR_REVIEW_COMMAND")
 	default:
 		return reviewAgentInvocation{}, fmt.Errorf("unsupported review agent %q", options.agent)
 	}
+}
+
+func buildCodexReviewInvocation(options prReviewOptions, prompt string) reviewAgentInvocation {
+	args := []string{"exec", "--sandbox", "read-only"}
+	if options.model != "" {
+		args = append(args, "--model", options.model)
+	}
+	if options.effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+strconv.Quote(options.effort))
+	}
+	args = append(args, "-")
+	return reviewAgentInvocation{Name: "codex", Args: args, Prompt: prompt, PromptOnStdin: true}
+}
+
+func buildClaudeReviewInvocation(options prReviewOptions, prompt string) reviewAgentInvocation {
+	args := []string{"-p", "--permission-mode", "plan"}
+	if options.model != "" {
+		args = append(args, "--model", options.model)
+	}
+	args = append(args, prompt)
+	return reviewAgentInvocation{Name: "claude", Args: args, Prompt: prompt}
+}
+
+func buildCopilotReviewInvocation(options prReviewOptions, prompt string) reviewAgentInvocation {
+	args := []string{
+		"-p", prompt,
+		"--allow-tool=shell(git:*)",
+		"--allow-tool=shell(gh:*)",
+		"--deny-tool=shell(git push)",
+		"--deny-tool=shell(gh pr merge)",
+		"--deny-tool=shell(gh pr review)",
+		"--deny-tool=shell(gh pr comment)",
+		"--deny-tool=write",
+	}
+	if options.model != "" {
+		args = append([]string{"--model", options.model}, args...)
+	}
+	return reviewAgentInvocation{Name: "copilot", Args: args, Prompt: prompt}
+}
+
+func buildGeminiReviewInvocation(options prReviewOptions, prompt string) reviewAgentInvocation {
+	args := []string{"-p", prompt, "--approval-mode", "plan"}
+	if options.model != "" {
+		args = append([]string{"--model", options.model}, args...)
+	}
+	return reviewAgentInvocation{Name: "gemini", Args: args, Prompt: prompt}
+}
+
+func buildOpenCodeReviewInvocation(options prReviewOptions, prompt string) reviewAgentInvocation {
+	args := []string{"run"}
+	if options.model != "" {
+		args = append(args, "--model", options.model)
+	}
+	args = append(args, prompt)
+	return reviewAgentInvocation{Name: "opencode", Args: args, Prompt: prompt}
 }
 
 func buildCustomReviewInvocation(options prReviewOptions, pr reviewPullRequest, prompt string) (reviewAgentInvocation, error) {
@@ -557,55 +584,66 @@ func replaceReviewPlaceholders(value string, options prReviewOptions, pr reviewP
 }
 
 func splitCommandLine(command string) ([]string, error) {
-	var args []string
-	var current strings.Builder
-	var quote rune
-	escaped := false
-	inToken := false
-
-	flush := func() {
-		if inToken {
-			args = append(args, current.String())
-			current.Reset()
-			inToken = false
-		}
-	}
-
+	parser := commandLineParser{}
 	for _, r := range command {
-		switch {
-		case escaped:
-			current.WriteRune(r)
-			inToken = true
-			escaped = false
-		case r == '\\':
-			escaped = true
-			inToken = true
-		case quote != 0:
-			if r == quote {
-				quote = 0
-				continue
-			}
-			current.WriteRune(r)
-			inToken = true
-		case r == '\'' || r == '"':
-			quote = r
-			inToken = true
-		case unicode.IsSpace(r):
-			flush()
-		default:
-			current.WriteRune(r)
-			inToken = true
-		}
+		parser.consume(r)
 	}
-
-	if escaped {
-		current.WriteRune('\\')
+	if parser.escaped {
+		parser.current.WriteRune('\\')
 	}
-	if quote != 0 {
+	if parser.quote != 0 {
 		return nil, errors.New("custom review command has unterminated quote")
 	}
-	flush()
-	return args, nil
+	parser.flush()
+	return parser.args, nil
+}
+
+type commandLineParser struct {
+	args    []string
+	current strings.Builder
+	quote   rune
+	escaped bool
+	inToken bool
+}
+
+func (p *commandLineParser) consume(r rune) {
+	switch {
+	case p.escaped:
+		p.current.WriteRune(r)
+		p.inToken = true
+		p.escaped = false
+	case r == '\\':
+		p.escaped = true
+		p.inToken = true
+	case p.quote != 0:
+		p.consumeQuoted(r)
+	case r == '\'' || r == '"':
+		p.quote = r
+		p.inToken = true
+	case unicode.IsSpace(r):
+		p.flush()
+	default:
+		p.current.WriteRune(r)
+		p.inToken = true
+	}
+}
+
+func (p *commandLineParser) consumeQuoted(r rune) {
+	if r == p.quote {
+		p.quote = 0
+		return
+	}
+	p.current.WriteRune(r)
+	p.inToken = true
+}
+
+func (p *commandLineParser) flush() {
+	if !p.inToken {
+		return
+	}
+	p.args = append(p.args, p.current.String())
+	p.current.Reset()
+	p.inToken = false
 }
 
 var runReviewAgentFunc = runReviewAgent

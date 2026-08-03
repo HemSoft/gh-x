@@ -204,6 +204,8 @@ func TestFormatScheduleTriggerHumanReadable(t *testing.T) {
 		{name: "hourly", cron: "0 * * * *", want: "schedule: hourly at minute 00 UTC"},
 		{name: "weekdays", cron: "15 6 * * 1-5", want: "schedule: weekdays at 06:15 UTC"},
 		{name: "weekly", cron: "0 14 * * 1", want: "schedule: weekly on Monday at 14:00 UTC"},
+		{name: "monthly", cron: "30 9 15 * *", want: "schedule: monthly on day 15 at 09:30 UTC"},
+		{name: "yearly", cron: "0 8 1 JAN *", want: "schedule: yearly on January 1 at 08:00 UTC"},
 		{name: "custom", cron: "*/20 8-17 * * 1-5", want: "schedule: custom schedule (*/20 8-17 * * 1-5)"},
 	}
 

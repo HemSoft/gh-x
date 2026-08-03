@@ -116,26 +116,29 @@ func parseGitStatus(output string) statusSummary {
 			continue
 		}
 
-		switch {
-		case strings.HasPrefix(line, "# "):
-			parseGitStatusHeader(line, &summary)
-		case strings.HasPrefix(line, "? "):
-			path := strings.TrimPrefix(line, "? ")
-			if markSeen(seen, path) {
-				summary.Untracked++
-			}
-		case strings.HasPrefix(line, "u "):
-			if path := statusPath(line); markSeen(seen, path) {
-				summary.Conflicted++
-			}
-		case strings.HasPrefix(line, "1 ") || strings.HasPrefix(line, "2 "):
-			if path := statusPath(line); markSeen(seen, path) {
-				applyStatusXY(statusXY(line), &summary)
-			}
-		}
+		parseGitStatusLine(line, seen, &summary)
 	}
 
 	return summary
+}
+
+func parseGitStatusLine(line string, seen map[string]bool, summary *statusSummary) {
+	switch {
+	case strings.HasPrefix(line, "# "):
+		parseGitStatusHeader(line, summary)
+	case strings.HasPrefix(line, "? "):
+		if markSeen(seen, strings.TrimPrefix(line, "? ")) {
+			summary.Untracked++
+		}
+	case strings.HasPrefix(line, "u "):
+		if path := statusPath(line); markSeen(seen, path) {
+			summary.Conflicted++
+		}
+	case strings.HasPrefix(line, "1 ") || strings.HasPrefix(line, "2 "):
+		if path := statusPath(line); markSeen(seen, path) {
+			applyStatusXY(statusXY(line), summary)
+		}
+	}
 }
 
 func parseGitStatusHeader(line string, summary *statusSummary) {

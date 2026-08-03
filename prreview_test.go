@@ -132,6 +132,44 @@ func TestBuildReviewInvocationCodexReadOnly(t *testing.T) {
 	}
 }
 
+func TestBuildReviewInvocationSupportedAgents(t *testing.T) {
+	tests := []struct {
+		agent    string
+		wantName string
+		wantArgs []string
+	}{
+		{agent: "claude", wantName: "claude", wantArgs: []string{"-p", "--permission-mode", "plan", "review prompt"}},
+		{agent: "copilot", wantName: "copilot", wantArgs: []string{
+			"-p", "review prompt",
+			"--allow-tool=shell(git:*)",
+			"--allow-tool=shell(gh:*)",
+			"--deny-tool=shell(git push)",
+			"--deny-tool=shell(gh pr merge)",
+			"--deny-tool=shell(gh pr review)",
+			"--deny-tool=shell(gh pr comment)",
+			"--deny-tool=write",
+		}},
+		{agent: "gemini", wantName: "gemini", wantArgs: []string{"-p", "review prompt", "--approval-mode", "plan"}},
+		{agent: "opencode", wantName: "opencode", wantArgs: []string{"run", "review prompt"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.agent, func(t *testing.T) {
+			invocation, err := buildReviewInvocation(
+				prReviewOptions{agent: tc.agent},
+				reviewPullRequest{Number: 42},
+				"review prompt",
+			)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if invocation.Name != tc.wantName || !reflect.DeepEqual(invocation.Args, tc.wantArgs) {
+				t.Fatalf("unexpected invocation: %#v", invocation)
+			}
+		})
+	}
+}
+
 func TestBuildReviewInvocationCustomReplacesPromptAsSingleArgument(t *testing.T) {
 	prompt := "line one\nkeep literal {number}"
 	invocation, err := buildReviewInvocation(

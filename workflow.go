@@ -355,7 +355,8 @@ func formatCronSchedule(cron string) string {
 	}
 
 	dayOfMonth, month, dayOfWeek := fields[2], fields[3], fields[4]
-	if fields[1] == "*" && dayOfMonth == "*" && month == "*" && dayOfWeek == "*" {
+	wildcards := cronWildcardPattern(dayOfMonth, month, dayOfWeek)
+	if fields[1] == "*" && wildcards == 7 {
 		return fmt.Sprintf("hourly at minute %02d UTC", minute)
 	}
 	if !hourOk {
@@ -363,20 +364,28 @@ func formatCronSchedule(cron string) string {
 	}
 
 	timeText := fmt.Sprintf("%02d:%02d UTC", hour, minute)
-	if dayOfMonth == "*" && month == "*" && dayOfWeek == "*" {
+	switch wildcards {
+	case 7:
 		return "daily at " + timeText
-	}
-	if dayOfMonth == "*" && month == "*" && dayOfWeek != "*" {
+	case 6:
 		return formatWeeklyCronSchedule(dayOfWeek, timeText, cron)
-	}
-	if dayOfMonth != "*" && month == "*" && dayOfWeek == "*" {
+	case 3:
 		return fmt.Sprintf("monthly on day %s at %s", dayOfMonth, timeText)
-	}
-	if dayOfMonth != "*" && month != "*" && dayOfWeek == "*" {
+	case 1:
 		return fmt.Sprintf("yearly on %s %s at %s", formatCronMonth(month), dayOfMonth, timeText)
 	}
 
 	return customCronSchedule(cron)
+}
+
+func cronWildcardPattern(dayOfMonth, month, dayOfWeek string) int {
+	pattern := 0
+	for index, field := range []string{dayOfMonth, month, dayOfWeek} {
+		if field == "*" {
+			pattern |= 1 << (2 - index)
+		}
+	}
+	return pattern
 }
 
 func parseCronNumber(field string, minValue, maxValue int) (int, bool) {
@@ -449,35 +458,26 @@ func cronDayName(day string) string {
 	}
 }
 
+var cronMonthNames = map[string]string{
+	"1": "January", "JAN": "January",
+	"2": "February", "FEB": "February",
+	"3": "March", "MAR": "March",
+	"4": "April", "APR": "April",
+	"5": "May", "MAY": "May",
+	"6": "June", "JUN": "June",
+	"7": "July", "JUL": "July",
+	"8": "August", "AUG": "August",
+	"9": "September", "SEP": "September",
+	"10": "October", "OCT": "October",
+	"11": "November", "NOV": "November",
+	"12": "December", "DEC": "December",
+}
+
 func formatCronMonth(month string) string {
-	switch strings.ToUpper(month) {
-	case "1", "JAN":
-		return "January"
-	case "2", "FEB":
-		return "February"
-	case "3", "MAR":
-		return "March"
-	case "4", "APR":
-		return "April"
-	case "5", "MAY":
-		return "May"
-	case "6", "JUN":
-		return "June"
-	case "7", "JUL":
-		return "July"
-	case "8", "AUG":
-		return "August"
-	case "9", "SEP":
-		return "September"
-	case "10", "OCT":
-		return "October"
-	case "11", "NOV":
-		return "November"
-	case "12", "DEC":
-		return "December"
-	default:
-		return month
+	if name, ok := cronMonthNames[strings.ToUpper(month)]; ok {
+		return name
 	}
+	return month
 }
 
 func customCronSchedule(cron string) string {
