@@ -1354,19 +1354,16 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		approverLogins = append(approverLogins, r.Author.Login)
 	}
 
-	aiReview := detectAIReview(aiNodes, aiThreads)
-	sflReview := detectSFLReview(aiNodes, prData.HeadRefOID)
-	aiClean := isAIReviewClean(aiNodes, aiThreads)
 	commentsTruncated := prData.Comments.TotalCount > len(prData.Comments.Nodes)
 	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
 	reviewsTruncated := prData.Reviews.TotalCount > len(prData.Reviews.Nodes)
-	if commentsTruncated || threadsTruncated || reviewsTruncated {
-		aiReview = "?"
-		aiClean = false
-	}
-	if reviewsTruncated {
-		sflReview = "?"
-	}
+	aiReview, sflReview, aiClean := summarizeSupplementalReviews(
+		aiNodes,
+		aiThreads,
+		prData.HeadRefOID,
+		anyConnectionTruncated(commentsTruncated, threadsTruncated, reviewsTruncated),
+		reviewsTruncated,
+	)
 
 	return prData.Number, prSupplementalInfo{
 		Threads: reviewThreadInfo{
@@ -1378,6 +1375,35 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		AIClean:   aiClean,
 		Approvals: countUniqueApprovers(approverLogins),
 	}, true
+}
+
+func anyConnectionTruncated(truncated ...bool) bool {
+	for _, value := range truncated {
+		if value {
+			return true
+		}
+	}
+	return false
+}
+
+func summarizeSupplementalReviews(
+	aiNodes []aiReviewNode,
+	aiThreads []aiReviewThread,
+	headRefOID string,
+	aiIncomplete bool,
+	sflIncomplete bool,
+) (aiReview, sflReview string, aiClean bool) {
+	aiReview = detectAIReview(aiNodes, aiThreads)
+	sflReview = detectSFLReview(aiNodes, headRefOID)
+	aiClean = isAIReviewClean(aiNodes, aiThreads)
+	if aiIncomplete {
+		aiReview = "?"
+		aiClean = false
+	}
+	if sflIncomplete {
+		sflReview = "?"
+	}
+	return
 }
 
 func boolPtr(b bool) *bool { return &b }
