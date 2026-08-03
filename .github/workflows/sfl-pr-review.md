@@ -65,9 +65,6 @@ network:
 tools:
   github:
     toolsets: [pull_requests, repos]
-    github-app:
-      client-id: ${{ vars.SFL_APP_CLIENT_ID }}
-      private-key: ${{ secrets.SFL_APP_PRIVATE_KEY }}
 
 safe-outputs:
   threat-detection:
@@ -571,7 +568,7 @@ safe-outputs:
     report-as-issue: false
 ---
 <!--
-Deployed from: HemSoft/set-it-free-loop/deployment/workflows/sfl-pr-review.md@e9c9c745c166bf04e48b34da95adb29a5d67c2ac
+Deployed from: HemSoft/set-it-free-loop/deployment/workflows/sfl-pr-review.md@2fa3dd4cf999c7dc1bafce641a9e7ca41764758a
 To upgrade: re-run deploy-workflow.ps1 at the desired SHA
 -->
 
