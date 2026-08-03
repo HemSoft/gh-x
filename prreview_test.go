@@ -364,6 +364,35 @@ func TestCommentableLinesForPatchIncludesRightSideDiffLines(t *testing.T) {
 	}
 }
 
+func TestFetchReviewCommentableLinesUsesPaginatedFiles(t *testing.T) {
+	saved := ghExecFunc
+	defer func() { ghExecFunc = saved }()
+
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		want := []string{"api", "repos/owner/repo/pulls/42/files?per_page=100", "--paginate", "--slurp"}
+		if !reflect.DeepEqual(args, want) {
+			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("unexpected gh args: %#v", args)
+		}
+		var stdout bytes.Buffer
+		stdout.WriteString(`[[{"filename":"src/app.go","patch":"@@ -1 +1,2 @@\n package main\n+var enabled = true"},{"filename":"README.md","patch":""}]]`)
+		return stdout, bytes.Buffer{}, nil
+	}
+
+	lines, err := fetchReviewCommentableLines(
+		prReviewOptions{repo: "owner/repo"},
+		reviewPullRequest{Number: 42},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !lines["src/app.go"][1] || !lines["src/app.go"][2] {
+		t.Fatalf("unexpected commentable lines: %#v", lines)
+	}
+	if _, ok := lines["README.md"]; ok {
+		t.Fatalf("empty patch should not be included: %#v", lines)
+	}
+}
+
 func TestExecuteReviewPostBuildsAndSubmitsReview(t *testing.T) {
 	savedFetch := fetchReviewPullRequestFunc
 	savedCapture := runReviewAgentCaptureFunc

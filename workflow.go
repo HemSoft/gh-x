@@ -437,25 +437,18 @@ func formatCronDays(dayOfWeek string) string {
 	return strings.Join(days, ", ")
 }
 
+var cronDayNames = map[string]string{
+	"0": "Sunday", "7": "Sunday", "SUN": "Sunday",
+	"1": "Monday", "MON": "Monday",
+	"2": "Tuesday", "TUE": "Tuesday",
+	"3": "Wednesday", "WED": "Wednesday",
+	"4": "Thursday", "THU": "Thursday",
+	"5": "Friday", "FRI": "Friday",
+	"6": "Saturday", "SAT": "Saturday",
+}
+
 func cronDayName(day string) string {
-	switch strings.ToUpper(day) {
-	case "0", "7", "SUN":
-		return "Sunday"
-	case "1", "MON":
-		return "Monday"
-	case "2", "TUE":
-		return "Tuesday"
-	case "3", "WED":
-		return "Wednesday"
-	case "4", "THU":
-		return "Thursday"
-	case "5", "FRI":
-		return "Friday"
-	case "6", "SAT":
-		return "Saturday"
-	default:
-		return ""
-	}
+	return cronDayNames[strings.ToUpper(day)]
 }
 
 var cronMonthNames = map[string]string{
