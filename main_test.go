@@ -63,6 +63,9 @@ func TestDetectSFLReview(t *testing.T) {
 		{name: "rest bot login", reviews: []aiReviewNode{
 			{State: "CHANGES_REQUESTED", AuthorLogin: "set-it-free-loop[bot]"},
 		}, want: "changes"},
+		{name: "sfl app bot login", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "sfl-app[bot]"},
+		}, want: "approved"},
 		{name: "commented", reviews: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "set-it-free-loop"},
 		}, want: "commented"},
@@ -1704,6 +1707,76 @@ func TestClassifyCheckItem(t *testing.T) {
 			if f != tc.wantFail || p != tc.wantPend {
 				t.Fatalf("classifyCheckItem(%q) = (%v, %v), want (%v, %v)",
 					tc.name, f, p, tc.wantFail, tc.wantPend)
+			}
+		})
+	}
+}
+
+func TestNormalizeCheckStateUsesLatestNamedCheckRun(t *testing.T) {
+	oldRun := time.Date(2026, 8, 3, 6, 47, 0, 0, time.UTC)
+	newRun := time.Date(2026, 8, 3, 19, 7, 0, 0, time.UTC)
+	checkRun := func(workflow, conclusion, status string, startedAt time.Time) checkItem {
+		return checkItem{
+			Typename:     "CheckRun",
+			Name:         "agent",
+			WorkflowName: workflow,
+			Status:       status,
+			Conclusion:   conclusion,
+			StartedAt:    startedAt,
+		}
+	}
+
+	tests := []struct {
+		name  string
+		items []checkItem
+		want  string
+	}{
+		{
+			name: "new success replaces old failure",
+			items: []checkItem{
+				checkRun("SFL Review", "FAILURE", "COMPLETED", oldRun),
+				checkRun("SFL Review", "SUCCESS", "COMPLETED", newRun),
+			},
+			want: "pass",
+		},
+		{
+			name: "api order does not matter",
+			items: []checkItem{
+				checkRun("SFL Review", "SUCCESS", "COMPLETED", newRun),
+				checkRun("SFL Review", "FAILURE", "COMPLETED", oldRun),
+			},
+			want: "pass",
+		},
+		{
+			name: "new failure replaces old success",
+			items: []checkItem{
+				checkRun("SFL Review", "SUCCESS", "COMPLETED", oldRun),
+				checkRun("SFL Review", "FAILURE", "COMPLETED", newRun),
+			},
+			want: "fail",
+		},
+		{
+			name: "new pending replaces old success",
+			items: []checkItem{
+				checkRun("SFL Review", "SUCCESS", "COMPLETED", oldRun),
+				checkRun("SFL Review", "", "IN_PROGRESS", newRun),
+			},
+			want: "pending",
+		},
+		{
+			name: "same job name in different workflows remains distinct",
+			items: []checkItem{
+				checkRun("SFL Review", "SUCCESS", "COMPLETED", newRun),
+				checkRun("Other Workflow", "FAILURE", "COMPLETED", oldRun),
+			},
+			want: "fail",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeCheckState(tc.items); got != tc.want {
+				t.Fatalf("normalizeCheckState() = %q, want %q", got, tc.want)
 			}
 		})
 	}

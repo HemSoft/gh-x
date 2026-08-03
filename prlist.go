@@ -82,12 +82,15 @@ type review struct {
 // checkItem represents a single entry in the statusCheckRollup array.
 // CheckRun items use Status+Conclusion; StatusContext items use State.
 type checkItem struct {
-	Typename   string `json:"__typename"`
-	Name       string `json:"name"`    // CheckRun name
-	Context    string `json:"context"` // StatusContext context
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	State      string `json:"state"`
+	Typename     string    `json:"__typename"`
+	Name         string    `json:"name"`    // CheckRun name
+	Context      string    `json:"context"` // StatusContext context
+	WorkflowName string    `json:"workflowName"`
+	Status       string    `json:"status"`
+	Conclusion   string    `json:"conclusion"`
+	State        string    `json:"state"`
+	StartedAt    time.Time `json:"startedAt"`
+	CompletedAt  time.Time `json:"completedAt"`
 }
 
 type displayPullRequest struct {
@@ -629,7 +632,7 @@ func normalizeCheckState(items []checkItem) string {
 
 	hasFail := false
 	hasPending := false
-	for _, item := range items {
+	for _, item := range latestCheckItems(items) {
 		f, p := classifyCheckItem(item)
 		hasFail = hasFail || f
 		hasPending = hasPending || p
@@ -643,6 +646,58 @@ func normalizeCheckState(items []checkItem) string {
 	default:
 		return "pass"
 	}
+}
+
+// latestCheckItems collapses repeated check contexts from reruns so stale
+// failures do not override a newer result for the same workflow and job.
+func latestCheckItems(items []checkItem) []checkItem {
+	latestIndexes := make(map[string]int)
+	result := make([]checkItem, 0, len(items))
+	for _, item := range items {
+		key := checkItemIdentity(item)
+		if key == "" {
+			result = append(result, item)
+			continue
+		}
+
+		index, exists := latestIndexes[key]
+		if !exists {
+			latestIndexes[key] = len(result)
+			result = append(result, item)
+			continue
+		}
+
+		currentTime := checkItemTimestamp(result[index])
+		candidateTime := checkItemTimestamp(item)
+		if currentTime.IsZero() || (!candidateTime.IsZero() && !candidateTime.Before(currentTime)) {
+			result[index] = item
+		}
+	}
+	return result
+}
+
+func checkItemIdentity(item checkItem) string {
+	switch item.Typename {
+	case "CheckRun":
+		if item.Name == "" {
+			return ""
+		}
+		return "check:" + strings.ToLower(item.WorkflowName) + ":" + strings.ToLower(item.Name)
+	case "StatusContext":
+		if item.Context == "" {
+			return ""
+		}
+		return "status:" + strings.ToLower(item.Context)
+	default:
+		return ""
+	}
+}
+
+func checkItemTimestamp(item checkItem) time.Time {
+	if !item.StartedAt.IsZero() {
+		return item.StartedAt
+	}
+	return item.CompletedAt
 }
 
 func formatAuthor(login, name string) string {
@@ -782,7 +837,7 @@ func isAIReviewer(login string) bool {
 func isSFLReviewer(login string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(login))
 	normalized = strings.TrimSuffix(normalized, "[bot]")
-	return normalized == "set-it-free-loop"
+	return normalized == "set-it-free-loop" || normalized == "sfl-app"
 }
 
 // detectSFLReview returns the latest formal SFL review decision.
