@@ -1534,6 +1534,62 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 	})
 
+	t.Run("newer formal review overrides older clean Codex comment", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "682de6badb7404709e1183f4e8ed194c9ae6e34a",
+			"comments": {"nodes": [{
+				"body": "Codex Review: Didn't find any major issues. Nice work!\n\n**Reviewed commit:** 682de6badb",
+				"createdAt": "2026-07-18T20:00:00Z",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"nodes": [{
+				"state": "COMMENTED",
+				"submittedAt": "2026-07-18T21:00:00Z",
+				"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
+				"comments": {"totalCount": 1}
+			}]},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIClean {
+			t.Fatal("expected newer formal review with findings to keep AIClean false")
+		}
+	})
+
+	t.Run("newer clean Codex comment overrides older formal review", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "682de6badb7404709e1183f4e8ed194c9ae6e34a",
+			"comments": {"nodes": [{
+				"body": "Codex Review: Didn't find any major issues. Nice work!\n\n**Reviewed commit:** 682de6badb",
+				"createdAt": "2026-07-18T21:00:00Z",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"nodes": [{
+				"state": "COMMENTED",
+				"submittedAt": "2026-07-18T20:00:00Z",
+				"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
+				"comments": {"totalCount": 1}
+			}]},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if !info.AIClean {
+			t.Fatal("expected newer clean Codex comment to set AIClean true")
+		}
+	})
+
 	t.Run("stale clean Codex comment is ignored", func(t *testing.T) {
 		raw := []byte(`{
 			"number": 47,

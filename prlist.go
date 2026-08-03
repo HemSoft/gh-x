@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -719,6 +720,7 @@ type aiReviewNode struct {
 	AuthorLogin  string
 	AuthorType   string
 	CommentCount int
+	OccurredAt   time.Time
 }
 
 // aiReviewThread holds thread resolution state and authorship for AI review detection.
@@ -734,6 +736,7 @@ type aiReviewComment struct {
 	Body        string
 	AuthorLogin string
 	AuthorType  string
+	OccurredAt  time.Time
 }
 
 func formatComments(info reviewThreadInfo) string {
@@ -830,7 +833,21 @@ func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, 
 		AuthorLogin:  comment.AuthorLogin,
 		AuthorType:   comment.AuthorType,
 		CommentCount: commentCount,
+		OccurredAt:   comment.OccurredAt,
 	}, true
+}
+
+func sortAIReviewsChronologically(reviews []aiReviewNode) {
+	sort.SliceStable(reviews, func(i, j int) bool {
+		left, right := reviews[i].OccurredAt, reviews[j].OccurredAt
+		if left.IsZero() {
+			return !right.IsZero()
+		}
+		if right.IsZero() {
+			return false
+		}
+		return left.Before(right)
+	})
 }
 
 // classifyAIReviews scans review nodes for bot-authored reviews and returns
@@ -1133,7 +1150,7 @@ func fetchPRSupplementalBatch(owner, name string, prNumbers []int) (map[int]prSu
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`pr%d: pullRequest(number: %d) { number headRefOid comments(last: 100) { nodes { body author { login __typename } } } reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(first: 100) { nodes { state author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
+			`pr%d: pullRequest(number: %d) { number headRefOid comments(last: 100) { nodes { body createdAt author { login __typename } } } reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(first: 100) { nodes { state submittedAt author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
 			num, num,
 		))
 	}
@@ -1178,8 +1195,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		HeadRefOID string `json:"headRefOid"`
 		Comments   struct {
 			Nodes []struct {
-				Body   string `json:"body"`
-				Author struct {
+				Body      string    `json:"body"`
+				CreatedAt time.Time `json:"createdAt"`
+				Author    struct {
 					Login    string `json:"login"`
 					Typename string `json:"__typename"`
 				} `json:"author"`
@@ -1201,8 +1219,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		} `json:"reviewThreads"`
 		Reviews struct {
 			Nodes []struct {
-				State  string `json:"state"`
-				Author struct {
+				State       string    `json:"state"`
+				SubmittedAt time.Time `json:"submittedAt"`
+				Author      struct {
 					Login    string `json:"login"`
 					Typename string `json:"__typename"`
 				} `json:"author"`
@@ -1234,6 +1253,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			AuthorLogin:  r.Author.Login,
 			AuthorType:   r.Author.Typename,
 			CommentCount: r.Comments.TotalCount,
+			OccurredAt:   r.SubmittedAt,
 		})
 	}
 	for _, comment := range prData.Comments.Nodes {
@@ -1241,10 +1261,12 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			Body:        comment.Body,
 			AuthorLogin: comment.Author.Login,
 			AuthorType:  comment.Author.Typename,
+			OccurredAt:  comment.CreatedAt,
 		}, prData.HeadRefOID); ok {
 			aiNodes = append(aiNodes, node)
 		}
 	}
+	sortAIReviewsChronologically(aiNodes)
 
 	var aiThreads []aiReviewThread
 	for _, t := range prData.ReviewThreads.Nodes {
