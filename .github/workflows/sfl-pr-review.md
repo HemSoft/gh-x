@@ -6,21 +6,41 @@ description: |
   consolidated review, and publishes the SFL Reviewer Approval check.
 
 on:
-  # Fork pull requests are intentionally unsupported. gh-aw's repository-ID
-  # safety gate skips them before activation, so no review/check is produced
-  # and the trigger label remains for a maintainer to remove.
   label_command:
     name: sfl-review
     events: [pull_request]
     remove_label: true
 
-if: >-
-  github.event_name != 'pull_request' ||
-  github.event.pull_request.head.repo.id == github.repository_id
-
 permissions:
   contents: read
   pull-requests: read
+
+post-steps:
+  - name: Require SFL review output
+    if: always()
+    shell: bash
+    run: |
+      node <<'NODE'
+      const fs = require('fs');
+      const path = '/tmp/gh-aw/agent_output.json';
+      if (!fs.existsSync(path)) {
+        throw new Error('SFL agent output file is missing');
+      }
+      const output = JSON.parse(fs.readFileSync(path, 'utf8'));
+      const items = Array.isArray(output.items) ? output.items : [];
+      const hasInventory = items.some(
+        (item) => item.type === 'sfl_review_inventory'
+      );
+      const hasNoop = items.some((item) => item.type === 'noop');
+      const hasMissingSignal = items.some(
+        (item) => item.type === 'missing_tool' || item.type === 'missing_data'
+      );
+      if (!hasInventory && !hasNoop && !hasMissingSignal) {
+        throw new Error(
+          'SFL review emitted neither an inventory, noop, nor missing signal'
+        );
+      }
+      NODE
 
 models:
   default-ai-credits-pricing:
@@ -51,48 +71,509 @@ tools:
 
 safe-outputs:
   threat-detection:
+    enabled: true
+    max-ai-credits: -1
     post-steps:
-      - name: Generate SFL App token for final head verification
-        id: sfl-final-head-token
+      - name: Mint SFL validation token
+        id: sfl-validation-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.SFL_APP_CLIENT_ID }}
           private-key: ${{ secrets.SFL_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
           permission-pull-requests: read
-      - name: Verify PR head before safe outputs
+      - name: Validate SFL review verdict
         env:
-          GH_TOKEN: ${{ steps.sfl-final-head-token.outputs.token }}
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+          GH_TOKEN: ${{ steps.sfl-validation-token.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
+        shell: bash
         run: |
-          live_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          if [[ "$live_head" != "$EXPECTED_HEAD" ]]; then
-            echo "::error::PR head changed from ${EXPECTED_HEAD} to ${live_head}; suppressing stale SFL outputs"
-            exit 1
-          fi
+          # SFL_VERDICT_VALIDATOR_START
+          node <<'NODE'
+          const fs = require('fs');
+          const { execFileSync } = require('child_process');
+
+          const outputPath =
+            process.env.SFL_AGENT_OUTPUT_PATH ||
+            '/tmp/gh-aw/threat-detection/agent_output.json';
+          const expectedHead = process.env.EXPECTED_HEAD_SHA || '';
+          const expectedRunId = process.env.EXPECTED_RUN_ID || '';
+          const fail = (message) => {
+            console.error(`SFL verdict validation failed: ${message}`);
+            process.exit(1);
+          };
+
+          if (!fs.existsSync(outputPath)) {
+            fail(`agent output is missing: ${outputPath}`);
+          }
+
+          const output = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
+          const items = Array.isArray(output.items) ? output.items : [];
+          const noops = items.filter((item) => item.type === 'noop');
+          const triggeringRepo = String(process.env.GITHUB_REPOSITORY || '');
+          const triggeringPr = Number(process.env.PR_NUMBER);
+          const targetFields = [
+            'pull_request_number',
+            'pr_number',
+            'pr',
+            'pull_number',
+          ];
+          for (const item of items) {
+            if (item.repo && item.repo !== triggeringRepo) {
+              fail(`output target repo must be ${triggeringRepo}`);
+            }
+            for (const field of targetFields) {
+              if (
+                item[field] !== undefined &&
+                Number(item[field]) !== triggeringPr
+              ) {
+                fail(`output target ${field} must be ${triggeringPr}`);
+              }
+            }
+          }
+
+          const loadPrState = () => {
+            if (process.env.SFL_PR_STATE_PATH) {
+              return JSON.parse(
+                fs.readFileSync(process.env.SFL_PR_STATE_PATH, 'utf8')
+              );
+            }
+            const [owner, repo] = String(
+              process.env.GITHUB_REPOSITORY || ''
+            ).split('/');
+            const number = process.env.PR_NUMBER || '';
+            if (!owner || !repo || !number || !process.env.GH_TOKEN) {
+              fail('GitHub context for deterministic PR validation is incomplete');
+            }
+            const query = [
+              'query($owner:String!,$repo:String!,$number:Int!,$after:String){',
+              'repository(owner:$owner,name:$repo){',
+              'pullRequest(number:$number){headRefOid reviewThreads(first:100,after:$after){',
+              'nodes{isResolved comments(first:1){nodes{body author{login}}}} ',
+              'pageInfo{hasNextPage endCursor}',
+              '}}}}',
+            ].join('');
+            const nodes = [];
+            let after = null;
+            let headRefOid = '';
+            try {
+              do {
+                const args = [
+                  'api',
+                  'graphql',
+                  '-f',
+                  `query=${query}`,
+                  '-F',
+                  `owner=${owner}`,
+                  '-F',
+                  `repo=${repo}`,
+                  '-F',
+                  `number=${number}`,
+                ];
+                if (after) {
+                  args.push('-f', `after=${after}`);
+                }
+                const raw = execFileSync('gh', args, {
+                  encoding: 'utf8',
+                  env: process.env,
+                  stdio: ['ignore', 'pipe', 'pipe'],
+                });
+                const response = JSON.parse(raw);
+                if (
+                  Array.isArray(response.errors) &&
+                  response.errors.length > 0
+                ) {
+                  fail(
+                    `GitHub GraphQL returned errors: ` +
+                      response.errors
+                        .map((error) => error.message || 'unknown error')
+                        .join('; ')
+                  );
+                }
+                const pullRequest = response?.data?.repository?.pullRequest;
+                if (!pullRequest?.headRefOid) {
+                  fail('GitHub returned no pull request state');
+                }
+                const reviewThreads = pullRequest.reviewThreads;
+                if (
+                  !Array.isArray(reviewThreads?.nodes) ||
+                  typeof reviewThreads?.pageInfo?.hasNextPage !== 'boolean' ||
+                  (reviewThreads.pageInfo.hasNextPage &&
+                    !reviewThreads.pageInfo.endCursor)
+                ) {
+                  fail('GitHub returned incomplete review-thread data');
+                }
+                headRefOid = pullRequest.headRefOid;
+                nodes.push(...reviewThreads.nodes);
+                after = reviewThreads.pageInfo.hasNextPage
+                  ? reviewThreads.pageInfo.endCursor
+                  : null;
+              } while (after);
+              return { headRefOid, reviewThreads: { nodes } };
+            } catch (error) {
+              fail(`unable to query live pull request state: ${error.message}`);
+            }
+          };
+
+          const prState = loadPrState();
+          const liveHead = prState.headRefOid;
+          if (liveHead !== expectedHead) {
+            if (noops.length !== 1 || items.length !== 1) {
+              fail('head drift requires exactly one noop output');
+            }
+            console.log('SFL verdict validation passed: verified head drift');
+            process.exit(0);
+          }
+          if (noops.length > 0) {
+            fail('noop is forbidden while the pull request head is unchanged');
+          }
+
+          const allowedTypes = new Set([
+            'sfl_review_inventory',
+            'create_pull_request_review_comment',
+            'submit_pull_request_review',
+            'create_check_run',
+            'missing_tool',
+            'missing_data',
+          ]);
+          const unexpectedTypes = [
+            ...new Set(
+              items
+                .map((item) => item.type)
+                .filter((type) => !allowedTypes.has(type))
+            ),
+          ];
+          if (unexpectedTypes.length > 0) {
+            fail(
+              `unexpected safe output types: ${unexpectedTypes.join(', ')}`
+            );
+          }
+
+          const missingSignals = items.filter(
+            (item) => item.type === 'missing_tool' || item.type === 'missing_data'
+          );
+          if (missingSignals.length > 0) {
+            if (missingSignals.length !== 1 || items.length !== 1) {
+              fail('a missing signal must be the only safe output item');
+            }
+            console.log('SFL verdict validation passed: terminal missing signal');
+            process.exit(0);
+          }
+
+          const inventories = items.filter(
+            (item) => item.type === 'sfl_review_inventory'
+          );
+          if (inventories.length !== 1) {
+            fail('exactly one sfl_review_inventory output is required');
+          }
+
+          const inventory = inventories[0];
+          const countFields = [
+            'new_critical',
+            'new_high',
+            'new_medium',
+            'new_low',
+            'carried_critical',
+            'carried_high',
+            'carried_medium',
+            'carried_low',
+            'overflow',
+          ];
+          for (const field of countFields) {
+            if (
+              !Number.isInteger(inventory[field]) ||
+              inventory[field] < 0
+            ) {
+              fail(`${field} must be a non-negative integer`);
+            }
+          }
+          if (!expectedHead || inventory.head_sha !== expectedHead) {
+            fail('inventory head_sha does not match the triggering PR head');
+          }
+
+          const severityOrder = ['critical', 'high', 'medium', 'low'];
+          const prefixes = {
+            critical: '**CRITICAL Finding**',
+            high: '**HIGH Finding**',
+            medium: '**MEDIUM Finding**',
+            low: '**LOW Finding**',
+          };
+          const comments = items.filter(
+            (item) => item.type === 'create_pull_request_review_comment'
+          );
+          const emitted = Object.fromEntries(
+            severityOrder.map((severity) => [severity, 0])
+          );
+          for (const comment of comments) {
+            const severity = severityOrder.find((candidate) =>
+              String(comment.body || '').startsWith(prefixes[candidate])
+            );
+            if (!severity) {
+              fail('every inline review comment must use an SFL severity prefix');
+            }
+            emitted[severity]++;
+          }
+
+          const newlyFound = Object.fromEntries(
+            severityOrder.map((severity) => [
+              severity,
+              inventory[`new_${severity}`],
+            ])
+          );
+          const carried = Object.fromEntries(
+            severityOrder.map((severity) => [
+              severity,
+              inventory[`carried_${severity}`],
+            ])
+          );
+          const actualCarried = Object.fromEntries(
+            severityOrder.map((severity) => [severity, 0])
+          );
+          for (const thread of prState.reviewThreads?.nodes || []) {
+            if (thread.isResolved) {
+              continue;
+            }
+            const firstComment = thread.comments?.nodes?.[0];
+            const author = String(firstComment?.author?.login || '');
+            if (author !== 'sfl-app[bot]') {
+              continue;
+            }
+            const severity = severityOrder.find((candidate) =>
+              String(firstComment?.body || '').startsWith(prefixes[candidate])
+            );
+            if (severity) {
+              actualCarried[severity]++;
+            }
+          }
+          for (const severity of severityOrder) {
+            if (carried[severity] !== actualCarried[severity]) {
+              fail(
+                `${severity} carried count must be ` +
+                  `${actualCarried[severity]}, got ${carried[severity]}`
+              );
+            }
+          }
+          const newTotal = Object.values(newlyFound).reduce(
+            (sum, count) => sum + count,
+            0
+          );
+          const expectedOverflow = Math.max(0, newTotal - 20);
+          if (inventory.overflow !== expectedOverflow) {
+            fail(
+              `overflow must be ${expectedOverflow}, got ${inventory.overflow}`
+            );
+          }
+
+          let remaining = Math.min(newTotal, 20);
+          const expectedEmitted = {};
+          for (const severity of severityOrder) {
+            expectedEmitted[severity] = Math.min(
+              newlyFound[severity],
+              remaining
+            );
+            remaining -= expectedEmitted[severity];
+          }
+          for (const severity of severityOrder) {
+            if (emitted[severity] !== expectedEmitted[severity]) {
+              fail(
+                `${severity} emitted count must be ` +
+                  `${expectedEmitted[severity]}, got ${emitted[severity]}`
+              );
+            }
+          }
+
+          const reviews = items.filter(
+            (item) => item.type === 'submit_pull_request_review'
+          );
+          const checks = items.filter(
+            (item) => item.type === 'create_check_run'
+          );
+          if (reviews.length !== 1 || checks.length !== 1) {
+            fail('exactly one consolidated review and one check run are required');
+          }
+
+          const blockingFindings =
+            newlyFound.critical +
+              carried.critical +
+              newlyFound.high +
+              carried.high >
+            0;
+          const blocking = blockingFindings || inventory.overflow > 0;
+          const expectedEvent = blocking ? 'REQUEST_CHANGES' : 'APPROVE';
+          const expectedConclusion = blocking ? 'failure' : 'success';
+          const expectedVerdict = blocking ? 'CHANGES_REQUESTED' : 'APPROVE';
+          const actualEvent = String(reviews[0].event || '').toUpperCase();
+          const actualConclusion = String(
+            checks[0].conclusion || ''
+          ).toLowerCase();
+
+          if (actualEvent !== expectedEvent) {
+            fail(
+              `review event must be ${expectedEvent}, got ${actualEvent || 'empty'}`
+            );
+          }
+          if (actualConclusion !== expectedConclusion) {
+            fail(
+              `check conclusion must be ${expectedConclusion}, got ` +
+                `${actualConclusion || 'empty'}`
+            );
+          }
+          if (checks[0].title !== 'SFL full-spectrum review complete') {
+            fail(
+              'check title must be SFL full-spectrum review complete'
+            );
+          }
+
+          const totals = Object.fromEntries(
+            severityOrder.map((severity) => [
+              severity,
+              newlyFound[severity] + carried[severity],
+            ])
+          );
+          const reviewBody = String(reviews[0].body || '');
+          const reviewLines = reviewBody
+            .split(/\r?\n/)
+            .map((line) => line.trim());
+          const requireSingleReviewLine = (prefix, expected) => {
+            const matches = reviewLines.filter((line) =>
+              line.startsWith(prefix)
+            );
+            if (matches.length !== 1 || matches[0] !== expected) {
+              fail(`consolidated review must contain exactly: ${expected}`);
+            }
+          };
+          requireSingleReviewLine(
+            'SFL run ID:',
+            `SFL run ID: ${expectedRunId}`
+          );
+          requireSingleReviewLine('Head SHA:', `Head SHA: ${expectedHead}`);
+          requireSingleReviewLine(
+            'Verdict:',
+            `Verdict: ${expectedVerdict}`
+          );
+          if (!expectedRunId) {
+            fail('workflow run ID is unavailable');
+          }
+          const expectedRows = {
+            Critical: totals.critical,
+            High: totals.high,
+            Medium: totals.medium,
+            Low: totals.low,
+            Overflow: inventory.overflow,
+          };
+          for (const [label, expectedCount] of Object.entries(expectedRows)) {
+            const rowPattern = new RegExp(
+              `^\\|\\s*${label}\\s*\\|\\s*(\\d+)\\s*\\|$`
+            );
+            const matches = reviewLines
+              .map((line) => line.match(rowPattern))
+              .filter(Boolean);
+            if (
+              matches.length !== 1 ||
+              Number(matches[0][1]) !== expectedCount
+            ) {
+              fail(
+                `consolidated review must contain one ${label} row with ` +
+                  `${expectedCount}`
+              );
+            }
+          }
+
+          const checkSummary = String(checks[0].summary || '');
+          const checkLines = checkSummary
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+          const requiredCheckFragments = [
+            `Verdict: ${expectedVerdict}`,
+            `Head SHA: ${expectedHead}`,
+            `SFL run ID: ${expectedRunId}`,
+            `Critical: ${totals.critical}`,
+            `High: ${totals.high}`,
+            `Medium: ${totals.medium}`,
+            `Low: ${totals.low}`,
+            `Overflow: ${inventory.overflow}`,
+          ];
+          if (
+            JSON.stringify(checkLines) !==
+            JSON.stringify(requiredCheckFragments)
+          ) {
+            fail('check summary does not match the required exact shape');
+          }
+
+          console.log('SFL verdict validation passed');
+          // SFL_VERDICT_VALIDATOR_END
+          NODE
+  # Repository-owner-approved exception: shared SFL writes intentionally use
+  # sfl-app[bot] so the reviewer has consistent attribution across HemSoft repos.
   github-app:
     client-id: ${{ vars.SFL_APP_CLIENT_ID }}
     private-key: ${{ secrets.SFL_APP_PRIVATE_KEY }}
+  scripts:
+    sfl-review-inventory:
+      description: Record the complete SFL finding inventory for deterministic verdict validation.
+      inputs:
+        head_sha:
+          description: Triggering pull request head SHA.
+          required: true
+          type: string
+        new_critical:
+          description: Newly identified Critical findings.
+          required: true
+          type: number
+        new_high:
+          description: Newly identified High findings.
+          required: true
+          type: number
+        new_medium:
+          description: Newly identified Medium findings.
+          required: true
+          type: number
+        new_low:
+          description: Newly identified Low findings.
+          required: true
+          type: number
+        carried_critical:
+          description: Unresolved Critical findings carried from earlier SFL runs.
+          required: true
+          type: number
+        carried_high:
+          description: Unresolved High findings carried from earlier SFL runs.
+          required: true
+          type: number
+        carried_medium:
+          description: Unresolved Medium findings carried from earlier SFL runs.
+          required: true
+          type: number
+        carried_low:
+          description: Unresolved Low findings carried from earlier SFL runs.
+          required: true
+          type: number
+        overflow:
+          description: Newly identified findings omitted after the 20-comment cap.
+          required: true
+          type: number
+      script: |
+        return { success: true };
   create-pull-request-review-comment:
-    commit-id: ${{ github.event.pull_request.head.sha }}
-    side: RIGHT
     max: 20
+    commit-id: ${{ github.event.pull_request.head.sha }}
   submit-pull-request-review:
     allowed-events: [APPROVE, REQUEST_CHANGES]
-    commit-id: ${{ github.event.pull_request.head.sha }}
     supersede-older-reviews: true
     footer: always
+    commit-id: ${{ github.event.pull_request.head.sha }}
   create-check-run:
     max: 1
     name: "SFL Reviewer Approval"
+  noop:
+    report-as-issue: false
 ---
 <!--
-Deployed from: HemSoft/set-it-free-loop/deployment/workflows/sfl-pr-review.md@78483bbf7edf0a4f8d3bf2f68e58678da36044ae
+Deployed from: HemSoft/set-it-free-loop/deployment/workflows/sfl-pr-review.md@e9c9c745c166bf04e48b34da95adb29a5d67c2ac
+To upgrade: re-run deploy-workflow.ps1 at the desired SHA
 -->
-<!-- To upgrade: re-run deploy-workflow.ps1 at the desired SHA -->
 
 <!-- sfl:
   status: active
@@ -101,22 +582,17 @@ Deployed from: HemSoft/set-it-free-loop/deployment/workflows/sfl-pr-review.md@78
   risk-class: trivial
   target-labels: [sfl-review]
   outcome-definition: |
-    A same-repository triggering pull request receives a current-head structured
-    review, one inline thread per finding, and an SFL Reviewer Approval check.
-    Fork pull requests are intentionally skipped by the gh-aw safety gate.
+    The triggering pull request receives a current-head structured review,
+    one inline thread per finding, and an SFL Reviewer Approval check.
   acceptance-criteria:
-    - The sfl-review label triggers exactly one current-head review run for a same-repository pull request
-    - Fork pull requests are skipped without a review/check and retain the trigger label
+    - The sfl-review label triggers exactly one current-head review run
     - The trigger label is consumed during authorized activation
     - Security, correctness/reliability, and quality/maintainability are reviewed
     - Every finding is an inline thread classified Critical, High, Medium, or Low
     - The review body reports the run ID, head SHA, verdict, and severity counts
     - Critical or High findings fail the approval check and request changes
-    - Still-applicable unresolved SFL findings remain part of the verdict on reruns
     - Medium or Low findings do not fail the approval check
     - Zero findings produce an approving review and successful approval check
-    - The live PR head is rechecked after threat detection before safe outputs
-    - Threat-detection or output-publication infrastructure failures fail closed
   source-repo: HemSoft/set-it-free-loop
 -->
 
@@ -128,14 +604,15 @@ must be `${{ github.event.pull_request.head.sha }}` and the SFL run ID is
 
 Use the GitHub pull request tools to read the triggering PR, its changed files,
 and the complete diff. Before creating comments, list existing review comments
-and unresolved threads on the current head. Re-evaluate every unresolved SFL
-finding against the current head. The finding set for this run is the union of
-new findings and still-applicable unresolved SFL findings. Do not duplicate an
-existing finding's inline comment, but keep that finding in the current run's
-severity counts and verdict. Exclude resolved findings and findings that are no
-longer applicable to the current head. An existing SFL finding is an unresolved
-inline review comment authored by the SFL reviewer whose body starts with one of
-the exact severity prefixes below.
+and unresolved threads from every SFL review run whose comment begins with an
+exact SFL severity prefix, so you do not repeat a finding and can carry
+unresolved findings into the current verdict.
+
+Immediately before producing any safe output, fetch the pull request again and
+compare its current head SHA with `${{ github.event.pull_request.head.sha }}`.
+If they differ, emit no review comments, review, or check run. Call `noop` with
+the stale-head reason and stop. The safe-output handlers pin review comments
+and the consolidated review to the triggering SHA as a second fail-closed guard.
 
 ## Required review passes
 
@@ -168,28 +645,9 @@ Classify every finding into exactly one severity:
 Do not report style preferences, speculative concerns, or findings without
 specific evidence from the changed code.
 
-## Current-head gate
-
-Immediately before producing any safe output, re-read the triggering pull
-request with the GitHub pull request tools. Compare its live head SHA with
-`${{ github.event.pull_request.head.sha }}`. Do not rely on an earlier PR read
-for this comparison.
-
-If the SHAs differ, do not create inline comments and do not submit a review.
-Call only `create_check_run` with conclusion `failure`, title
-`SFL review canceled: PR head changed`, and a summary containing the reviewed
-SHA, live SHA, run ID, and an instruction to reapply the `sfl-review` label.
-Then stop. This stale-head result takes precedence over the approval policy.
-
-The review and its inline comments are also infrastructure-pinned to
-`${{ github.event.pull_request.head.sha }}`. Never target a later commit. The
-approval check uses the triggering pull request event's head SHA, so a newer
-head must receive its own SFL run and check. A final fail-closed head comparison
-runs after threat detection and prevents stale safe outputs from being published.
-
 For each finding, call `create_pull_request_review_comment` on the most precise
-changed line. Set `side` to `RIGHT` for an added or context line and `LEFT` for
-a deleted line. The comment body must begin with one of these exact prefixes:
+changed line. Set `side` to `LEFT` for a deleted line and `RIGHT` for an added
+or context line. The comment body must begin with one of these exact prefixes:
 
 - `**CRITICAL Finding**`
 - `**HIGH Finding**`
@@ -197,39 +655,54 @@ a deleted line. The comment body must begin with one of these exact prefixes:
 - `**LOW Finding**`
 
 After the prefix, state the defect, impact, evidence, and a concrete fix.
-Create exactly one inline thread per new finding. Do not create another thread
-for a still-applicable existing finding. If there are no new findings, create no
-inline comments.
+Create exactly one inline thread per finding. If there are no findings, create
+no inline comments.
+
+Build the complete finding inventory before emitting comments. At most 20
+inline comments can be published. If more than 20 findings exist, publish the
+20 highest-severity findings, report the overflow count in the consolidated
+review, and force `REQUEST_CHANGES` with a failing approval check. Never approve
+a review whose complete finding inventory exceeded the inline-comment limit.
+
+Before emitting the consolidated review or check, call
+`sfl_review_inventory` exactly once with the triggering head SHA; the complete
+new and carried counts for every severity; and the number of newly identified
+findings omitted by the 20-comment cap. The deterministic validation step
+checks this inventory against the emitted inline comments, review event, and
+check conclusion. Any mismatch blocks all safe outputs.
 
 ## Approval policy
 
-Count the complete current-run finding set by severity, including every
-still-applicable unresolved SFL finding even when its existing thread was not
-duplicated during this run.
+Count all newly identified findings plus unresolved SFL findings from earlier
+runs by severity. Do not duplicate an unresolved finding as a new inline
+comment, but carry it into the current counts and verdict until its GitHub
+review thread is resolved.
 
-- If any Critical or High finding exists, submit `REQUEST_CHANGES` and create
-  the `SFL Reviewer Approval` check with conclusion `failure`.
-- If only Medium or Low findings exist, submit `APPROVE` and create the check
-  with conclusion `success`.
+- If any Critical or High finding remains unresolved, or the complete finding
+  inventory exceeded 20 comments, submit `REQUEST_CHANGES` and create the
+  `SFL Reviewer Approval` check with conclusion `failure`.
+- If only Medium or Low findings exist and the complete finding inventory did
+  not exceed 20 comments, submit `APPROVE` and create the check with conclusion
+  `success`.
 - If no findings exist, submit `APPROVE` and create the check with conclusion
   `success`.
 
-Call `submit_pull_request_review` exactly once. Use this body and replace every
-`<...>` placeholder with the actual value:
+Submit exactly one consolidated review with this body:
 
 ```markdown
 ## SFL Full-Spectrum Review
 
 SFL run ID: ${{ github.run_id }}
 Head SHA: ${{ github.event.pull_request.head.sha }}
-Verdict: <APPROVE or CHANGES_REQUESTED>
+Verdict: APPROVE
 
 | Severity | Count |
 | --- | ---: |
-| Critical | <count> |
-| High | <count> |
-| Medium | <count> |
-| Low | <count> |
+| Critical | 0 |
+| High | 0 |
+| Medium | 0 |
+| Low | 0 |
+| Overflow | 0 |
 
 ### Review passes
 
@@ -242,13 +715,22 @@ Verdict: <APPROVE or CHANGES_REQUESTED>
 Concise evidence-based summary of the review result.
 ```
 
-Use `Verdict: CHANGES_REQUESTED` when Critical or High findings exist.
+Replace the verdict and counts with the actual result. Use
+`Verdict: CHANGES_REQUESTED` when Critical or High findings exist or the
+complete finding inventory exceeded 20 comments.
 
-Call `create_check_run` exactly once for the check named
-`SFL Reviewer Approval` with:
+Create exactly one check run named `SFL Reviewer Approval` with:
 
 - `title`: `SFL full-spectrum review complete`
-- `summary`: the verdict, head SHA, run ID, and severity counts
+- `summary`: exactly these lines with actual values:
+  - `Verdict: APPROVE`
+  - `Head SHA: ${{ github.event.pull_request.head.sha }}`
+  - `SFL run ID: ${{ github.run_id }}`
+  - `Critical: 0`
+  - `High: 0`
+  - `Medium: 0`
+  - `Low: 0`
+  - `Overflow: 0`
 - `conclusion`: the approval-policy result above
 
 Do not modify code, branches, pull request labels, or pull request metadata.
