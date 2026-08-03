@@ -29,15 +29,6 @@ type statusSummary struct {
 	OpenPRs          *int
 }
 
-type statusFileCounts struct {
-	Staged     int
-	Modified   int
-	Deleted    int
-	Renamed    int
-	Untracked  int
-	Conflicted int
-}
-
 func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 	if err := parseStatusArgs(args, stderr); err != nil {
 		if errors.Is(err, errHelpDisplayed) {
