@@ -11,6 +11,8 @@ import (
 	"github.com/muesli/termenv"
 )
 
+const tableColumnGap = 1
+
 type tableCell struct {
 	text    string              // plain text for width calculation
 	styled  string              // styled text for display (may contain ANSI codes)
@@ -84,7 +86,7 @@ func writeRow(w io.Writer, cells []tableCell, widths []int) {
 	for i, cell := range cells {
 		fmt.Fprint(w, cell.styled)
 		if i < len(cells)-1 {
-			padding := widths[i] - runewidth.StringWidth(cell.text) + 2
+			padding := widths[i] - runewidth.StringWidth(cell.text) + tableColumnGap
 			fmt.Fprint(w, strings.Repeat(" ", padding))
 		}
 	}
@@ -133,14 +135,13 @@ func fitColumnsToTerminal(colWidths []int, flexibleCols []int, termWidth int) []
 		return colWidths
 	}
 
-	const colGap = 2
 	const minFlexWidth = 10
 
 	totalWidth := 0
 	for i, w := range colWidths {
 		totalWidth += w
 		if i < len(colWidths)-1 {
-			totalWidth += colGap
+			totalWidth += tableColumnGap
 		}
 	}
 

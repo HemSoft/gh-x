@@ -265,7 +265,7 @@ const atmPRFieldsFragment = `
         }
         approvedReviews: reviews(states: [APPROVED], last: 50) {
           nodes {
-            author { login }
+            author { login __typename }
           }
         }`
 
@@ -363,7 +363,8 @@ type atmPullRequestNode struct {
 	ApprovedReviews struct {
 		Nodes []struct {
 			Author struct {
-				Login string `json:"login"`
+				Login    string `json:"login"`
+				Typename string `json:"__typename"`
 			} `json:"author"`
 		} `json:"nodes"`
 	} `json:"approvedReviews"`
@@ -483,6 +484,7 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 		Author:    authorName,
 		State:     normalizeState(node.State, node.IsDraft),
 		Review:    normalizeReviewDecision(node.ReviewDecision),
+		SFLReview: detectSFLReview(aiNodes),
 		Approvals: countUniqueApprovers(approverLogins),
 		Checks:    normalizeCheckState(checkItems),
 		Comments:  formatComments(threads),
@@ -567,7 +569,7 @@ func renderAtmTable(stdout io.Writer, org, login string, options atmOptions, pul
 func renderAtmTableWithStyle(stdout io.Writer, pullRequests []displayPullRequest, colorEnabled bool) error {
 	styler := newTableStyler(stdout, colorEnabled)
 
-	headerLabels := []string{"#", "Title", "Repo", "Author", "State", "Review", "AI", "Appv", "Checks", "Cmts", "Updated"}
+	headerLabels := []string{"#", "Title", "Repo", "Author", "State", "Rev", "SFL", "AI", "Appv", "Checks", "Cmts", "Upd"}
 	headers := make([]tableCell, len(headerLabels))
 	for i, label := range headerLabels {
 		headers[i] = styler.dim(label)
@@ -582,6 +584,7 @@ func renderAtmTableWithStyle(stdout io.Writer, pullRequests []displayPullRequest
 			styler.plain(pr.Author),
 			styler.stateCell(pr.State),
 			styler.reviewCell(pr.Review),
+			styler.sflReviewCell(pr.SFLReview),
 			styler.aiReviewCell(pr.AIReview),
 			styler.approvalCell(pr.Approvals),
 			styler.checksCell(pr.Checks),

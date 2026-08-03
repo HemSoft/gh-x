@@ -284,12 +284,14 @@ func TestMapAtmNode(t *testing.T) {
 	}
 	node.ApprovedReviews.Nodes = []struct {
 		Author struct {
-			Login string `json:"login"`
+			Login    string `json:"login"`
+			Typename string `json:"__typename"`
 		} `json:"author"`
 	}{
 		{Author: struct {
-			Login string `json:"login"`
-		}{Login: "reviewer1"}},
+			Login    string `json:"login"`
+			Typename string `json:"__typename"`
+		}{Login: "reviewer1", Typename: "User"}},
 	}
 
 	dp := mapAtmNode(node, now)
@@ -327,6 +329,62 @@ func TestMapAtmNode(t *testing.T) {
 	// Title should be trimmed to 42 chars
 	if len(dp.Title) > 42 {
 		t.Fatalf("expected title trimmed to 42, got %d chars: %q", len(dp.Title), dp.Title)
+	}
+}
+
+func TestMapAtmNodeSFLApprovalWithOutstandingComments(t *testing.T) {
+	data := []byte(`{
+		"data": {
+			"search": {
+				"nodes": [{
+					"number": 15,
+					"title": "SFL review",
+					"state": "OPEN",
+					"reviewDecision": "APPROVED",
+					"updatedAt": "2026-07-31T03:00:00Z",
+					"repository": {"nameWithOwner": "relias-engineering/set-it-free-loop"},
+					"reviews": {"nodes": [{
+						"state": "APPROVED",
+						"author": {"login": "set-it-free-loop", "__typename": "Bot"},
+						"comments": {"totalCount": 3}
+					}]},
+					"reviewThreads": {
+						"totalCount": 3,
+						"nodes": [{
+							"isResolved": false,
+							"comments": {"nodes": [{
+								"author": {"login": "set-it-free-loop", "__typename": "Bot"}
+							}]}
+						}]
+					},
+					"approvedReviews": {"nodes": [{
+						"author": {"login": "set-it-free-loop", "__typename": "Bot"}
+					}]}
+				}]
+			}
+		}
+	}`)
+
+	nodes, err := parseAtmSearchResponse(data)
+	if err != nil {
+		t.Fatalf("parseAtmSearchResponse() error = %v", err)
+	}
+	dp := mapAtmNode(nodes[0], time.Date(2026, 7, 31, 3, 1, 0, 0, time.UTC))
+
+	if dp.Review != "approved" {
+		t.Fatalf("Review = %q, want approved", dp.Review)
+	}
+	if dp.SFLReview != "approved" {
+		t.Fatalf("SFLReview = %q, want approved", dp.SFLReview)
+	}
+	if dp.AIReview != "fail" {
+		t.Fatalf("AIReview = %q, want fail", dp.AIReview)
+	}
+	if dp.Approvals != 1 {
+		t.Fatalf("Approvals = %d, want 1 SFL approval", dp.Approvals)
+	}
+	if dp.Comments != "0/3" {
+		t.Fatalf("Comments = %q, want 0/3", dp.Comments)
 	}
 }
 

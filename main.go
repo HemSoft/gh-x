@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -281,7 +282,7 @@ func asyncUpdateCheck() <-chan string {
 	ch := make(chan string, 1)
 	go func() {
 		latest, err := fetchLatestReleaseFunc(repoOwner, repoName)
-		if err == nil && latest != "" && latest != version {
+		if err == nil && latest != "" && isNewerVersion(latest, version) {
 			ch <- latest
 		}
 		close(ch)
@@ -402,6 +403,37 @@ func runVersion(w io.Writer) error {
 	return runVersionTestable(w, version)
 }
 
+func isNewerVersion(candidate, current string) bool {
+	candidateParts, candidateOK := parseSemanticVersion(candidate)
+	currentParts, currentOK := parseSemanticVersion(current)
+	if !candidateOK || !currentOK {
+		return false
+	}
+
+	for i := range candidateParts {
+		if candidateParts[i] != currentParts[i] {
+			return candidateParts[i] > currentParts[i]
+		}
+	}
+	return false
+}
+
+func parseSemanticVersion(value string) ([3]int, bool) {
+	var parts [3]int
+	segments := strings.Split(strings.TrimPrefix(strings.TrimSpace(value), "v"), ".")
+	if len(segments) != len(parts) {
+		return parts, false
+	}
+	for i, segment := range segments {
+		number, err := strconv.Atoi(segment)
+		if err != nil || number < 0 {
+			return parts, false
+		}
+		parts[i] = number
+	}
+	return parts, true
+}
+
 func fetchLatestRelease(owner, repo string) (string, error) {
 	stdoutBuf, stderrBuf, err := gh.Exec(
 		"api", fmt.Sprintf("repos/%s/%s/releases/latest", owner, repo),
@@ -431,7 +463,7 @@ func runVersionTestable(w io.Writer, ver string) error {
 	switch {
 	case ver == "dev":
 		fmt.Fprintf(w, "⚙ Dev build · latest release: %s\n", latest)
-	case latest != ver:
+	case isNewerVersion(latest, ver):
 		fmt.Fprintf(w, "↑ %s available · %s\n", latest, upgradeCmd)
 	default:
 		fmt.Fprintf(w, "✓ Up to date\n")

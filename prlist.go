@@ -95,6 +95,7 @@ type displayPullRequest struct {
 	Author    string `json:"author"`
 	State     string `json:"state"`
 	Review    string `json:"review"`
+	SFLReview string `json:"sflReview"`
 	Approvals int    `json:"approvals"`
 	Checks    string `json:"checks"`
 	Comments  string `json:"comments"`
@@ -130,11 +131,24 @@ func (s tableStyler) stateCell(state string) tableCell {
 func (s tableStyler) reviewCell(review string) tableCell {
 	switch review {
 	case "approved":
-		return s.colored(review, termenv.ANSIGreen)
+		return s.colored("✓", termenv.ANSIGreen)
 	case "changes":
-		return s.colored(review, termenv.ANSIRed)
+		return s.colored("✗", termenv.ANSIRed)
 	case "review":
-		return s.colored(review, termenv.ANSIYellow)
+		return s.colored("•", termenv.ANSIYellow)
+	default:
+		return s.plain(review)
+	}
+}
+
+func (s tableStyler) sflReviewCell(review string) tableCell {
+	switch review {
+	case "approved":
+		return s.colored("✓", termenv.ANSIGreen)
+	case "changes":
+		return s.colored("✗", termenv.ANSIRed)
+	case "commented":
+		return s.colored("•", termenv.ANSIYellow)
 	default:
 		return s.plain(review)
 	}
@@ -365,17 +379,22 @@ func applySupplementalInfo(dp *displayPullRequest, supplemental map[int]prSupple
 	if failed {
 		dp.Comments = "?"
 		dp.AIReview = "?"
+		dp.SFLReview = "?"
 		return
 	}
 	info := supplemental[number]
 	dp.Comments = formatComments(info.Threads)
 	dp.AIReview = info.AIReview
+	dp.SFLReview = info.SFLReview
 	if info.AIClean {
 		dp.AIClean = &info.AIClean
 	}
 	dp.Approvals = info.Approvals
 	if dp.AIReview == "" {
 		dp.AIReview = "-"
+	}
+	if dp.SFLReview == "" {
+		dp.SFLReview = "-"
 	}
 }
 
@@ -446,6 +465,7 @@ func buildDisplayPullRequest(pullRequest pullRequest, now time.Time) displayPull
 		Author:    authorName,
 		State:     normalizeState(pullRequest.State, pullRequest.IsDraft),
 		Review:    normalizeReviewDecision(pullRequest.ReviewDecision),
+		SFLReview: "-",
 		Approvals: countApprovals(pullRequest.LatestReviews),
 		Checks:    resolveChecksState(pullRequest),
 		Comments:  "-",
@@ -475,7 +495,7 @@ func renderTableWithStyle(stdout io.Writer, options listOptions, pullRequests []
 
 	styler := newTableStyler(stdout, colorEnabled)
 
-	headerLabels := []string{"#", "Title", "Author", "State", "Review", "AI", "Appv", "Checks", "Cmts", "Branch", "Updated"}
+	headerLabels := []string{"#", "Title", "Author", "State", "Rev", "SFL", "AI", "Appv", "Checks", "Cmts", "Branch", "Upd"}
 	headers := make([]tableCell, len(headerLabels))
 	for i, label := range headerLabels {
 		headers[i] = styler.dim(label)
@@ -489,6 +509,7 @@ func renderTableWithStyle(stdout io.Writer, options listOptions, pullRequests []
 			styler.plain(pr.Author),
 			styler.stateCell(pr.State),
 			styler.reviewCell(pr.Review),
+			styler.sflReviewCell(pr.SFLReview),
 			styler.aiReviewCell(pr.AIReview),
 			styler.approvalCell(pr.Approvals),
 			styler.checksCell(pr.Checks),
@@ -500,8 +521,8 @@ func renderTableWithStyle(stdout io.Writer, options listOptions, pullRequests []
 
 	colWidths := computeColumnWidths(headers, rows)
 
-	// Fit to terminal: Title(1), Author(2), Branch(9) are flexible
-	flexibleCols := []int{1, 2, 9}
+	// Fit to terminal: Title(1), Author(2), Branch(10) are flexible
+	flexibleCols := []int{1, 2, 10}
 	colWidths = fitColumnsToTerminal(colWidths, flexibleCols, getTerminalWidth())
 	rows = truncateCells(rows, colWidths, flexibleCols)
 
@@ -687,6 +708,7 @@ type reviewThreadInfo struct {
 type prSupplementalInfo struct {
 	Threads   reviewThreadInfo
 	AIReview  string
+	SFLReview string
 	AIClean   bool
 	Approvals int
 }
@@ -738,10 +760,39 @@ func countUniqueApprovers(logins []string) int {
 // Known AI reviewer logins that don't use the [bot] suffix convention.
 var knownAIReviewers = map[string]bool{
 	"copilot-pull-request-reviewer": true,
+	"set-it-free-loop":              true,
 }
 
 func isAIReviewer(login string) bool {
-	return strings.HasSuffix(login, "[bot]") || knownAIReviewers[login]
+	normalized := strings.ToLower(strings.TrimSpace(login))
+	return strings.HasSuffix(normalized, "[bot]") || knownAIReviewers[normalized]
+}
+
+func isSFLReviewer(login string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(login))
+	normalized = strings.TrimSuffix(normalized, "[bot]")
+	return normalized == "set-it-free-loop"
+}
+
+// detectSFLReview returns the latest formal SFL review decision.
+func detectSFLReview(reviews []aiReviewNode) string {
+	status := "-"
+	for _, review := range reviews {
+		if !isSFLReviewer(review.AuthorLogin) {
+			continue
+		}
+		switch strings.ToUpper(review.State) {
+		case "APPROVED":
+			status = "approved"
+		case "CHANGES_REQUESTED":
+			status = "changes"
+		case "COMMENTED":
+			status = "commented"
+		default:
+			status = "-"
+		}
+	}
+	return status
 }
 
 // classifyAIReviews scans review nodes for bot-authored reviews and returns
@@ -1037,7 +1088,7 @@ func fetchPRSupplementalBatch(owner, name string, prNumbers []int) (map[int]prSu
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`pr%d: pullRequest(number: %d) { number reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(first: 100) { nodes { state author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login } } } }`,
+			`pr%d: pullRequest(number: %d) { number reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(first: 100) { nodes { state author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
 			num, num,
 		))
 	}
@@ -1108,7 +1159,8 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		ApprovedReviews struct {
 			Nodes []struct {
 				Author struct {
-					Login string `json:"login"`
+					Login    string `json:"login"`
+					Typename string `json:"__typename"`
 				} `json:"author"`
 			} `json:"nodes"`
 		} `json:"approvedReviews"`
@@ -1155,6 +1207,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			Resolved: countResolvedThreads(aiThreads),
 		},
 		AIReview:  detectAIReview(aiNodes, aiThreads),
+		SFLReview: detectSFLReview(aiNodes),
 		AIClean:   isAIReviewClean(aiNodes, aiThreads),
 		Approvals: countUniqueApprovers(approverLogins),
 	}, true

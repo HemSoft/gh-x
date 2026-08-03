@@ -50,6 +50,44 @@ func TestBuildListArgsIncludesFilters(t *testing.T) {
 	}
 }
 
+func TestDetectSFLReview(t *testing.T) {
+	tests := []struct {
+		name    string
+		reviews []aiReviewNode
+		want    string
+	}{
+		{name: "absent", want: "-"},
+		{name: "approved", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "set-it-free-loop"},
+		}, want: "approved"},
+		{name: "rest bot login", reviews: []aiReviewNode{
+			{State: "CHANGES_REQUESTED", AuthorLogin: "set-it-free-loop[bot]"},
+		}, want: "changes"},
+		{name: "commented", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "set-it-free-loop"},
+		}, want: "commented"},
+		{name: "latest decision wins", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "set-it-free-loop"},
+			{State: "APPROVED", AuthorLogin: "set-it-free-loop"},
+		}, want: "approved"},
+		{name: "dismissed clears decision", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "set-it-free-loop"},
+			{State: "DISMISSED", AuthorLogin: "set-it-free-loop"},
+		}, want: "-"},
+		{name: "other bot ignored", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "copilot-pull-request-reviewer"},
+		}, want: "-"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := detectSFLReview(tc.reviews); got != tc.want {
+				t.Fatalf("detectSFLReview() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildDisplayPullRequestNormalizesFields(t *testing.T) {
 	now := time.Date(2026, 5, 10, 1, 45, 0, 0, time.UTC)
 	pullRequest := pullRequest{
@@ -140,7 +178,7 @@ func TestFormatRelativeTime(t *testing.T) {
 func TestRenderTableNoColor(t *testing.T) {
 	var buf bytes.Buffer
 	prs := []displayPullRequest{
-		{Number: 42, Title: "My PR", Author: "user", State: "open", Review: "approved", AIReview: "pass", Approvals: 2, Checks: "pass", Comments: "3/5", Branch: "feat", Updated: "2h"},
+		{Number: 42, Title: "My PR", Author: "user", State: "open", Review: "approved", SFLReview: "approved", AIReview: "fail", Approvals: 0, Checks: "pass", Comments: "3/5", Branch: "feat", Updated: "2h"},
 	}
 	err := renderTableWithStyle(&buf, listOptions{}, prs, false)
 	if err != nil {
@@ -156,8 +194,11 @@ func TestRenderTableNoColor(t *testing.T) {
 	if !strings.Contains(output, "My PR") {
 		t.Fatal("expected title in output")
 	}
-	if !strings.Contains(output, "approved") {
-		t.Fatal("expected review status in output")
+	if !strings.Contains(output, "✓") {
+		t.Fatal("expected compact approval symbols in output")
+	}
+	if !strings.Contains(output, "Rev") || !strings.Contains(output, "SFL") || !strings.Contains(output, "Upd") {
+		t.Fatalf("expected compact PR headers, got %q", output)
 	}
 }
 
@@ -265,6 +306,11 @@ func TestCountApprovals(t *testing.T) {
 			{State: "CHANGES_REQUESTED"},
 			{State: "APPROVED"},
 		}, want: 2},
+		{name: "bot approvals included", reviews: []review{
+			{State: "APPROVED", Author: &author{Login: "alice"}},
+			{State: "APPROVED", Author: &author{Login: "set-it-free-loop"}},
+			{State: "APPROVED", Author: &author{Login: "copilot-pull-request-reviewer"}},
+		}, want: 3},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -334,6 +380,8 @@ func TestIsAIReviewer(t *testing.T) {
 		{"coderabbitai[bot]", true},
 		{"copilot[bot]", true},
 		{"copilot-pull-request-reviewer", true},
+		{"set-it-free-loop", true},
+		{"set-it-free-loop[bot]", true},
 		{"human-reviewer", false},
 		{"dependabot[bot]", true},
 		{"", false},
@@ -638,6 +686,52 @@ func TestRunVersionUpdateAvailable(t *testing.T) {
 	}
 }
 
+func TestRunVersionAheadOfLatestRelease(t *testing.T) {
+	orig := fetchLatestReleaseFunc
+	defer func() { fetchLatestReleaseFunc = orig }()
+	fetchLatestReleaseFunc = func(owner, repo string) (string, error) {
+		return "v0.2.2", nil
+	}
+
+	var buf bytes.Buffer
+	err := runVersionTestable(&buf, "v0.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "✓ Up to date") {
+		t.Fatalf("expected ahead-of-release build to be current, got %q", out)
+	}
+	if strings.Contains(out, "v0.2.2 available") {
+		t.Fatalf("older release must not be advertised as an update, got %q", out)
+	}
+}
+
+func TestIsNewerVersion(t *testing.T) {
+	tests := []struct {
+		name               string
+		candidate, current string
+		want               bool
+	}{
+		{name: "major", candidate: "v2.0.0", current: "v1.9.9", want: true},
+		{name: "minor", candidate: "v1.3.0", current: "v1.2.9", want: true},
+		{name: "patch", candidate: "v1.2.4", current: "v1.2.3", want: true},
+		{name: "equal", candidate: "v1.2.3", current: "v1.2.3", want: false},
+		{name: "older", candidate: "v0.2.2", current: "v0.2.3", want: false},
+		{name: "without prefix", candidate: "1.2.4", current: "1.2.3", want: true},
+		{name: "invalid candidate", candidate: "latest", current: "v1.2.3", want: false},
+		{name: "invalid current", candidate: "v1.2.3", current: "dev", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isNewerVersion(tc.candidate, tc.current); got != tc.want {
+				t.Fatalf("isNewerVersion(%q, %q) = %t, want %t", tc.candidate, tc.current, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunVersionDevBuild(t *testing.T) {
 	orig := fetchLatestReleaseFunc
 	defer func() { fetchLatestReleaseFunc = orig }()
@@ -800,6 +894,25 @@ func TestNoUpgradeNoticeWhenCurrent(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "available") {
 		t.Fatalf("should not show upgrade notice when up-to-date, got %q", stderr.String())
+	}
+}
+
+func TestNoUpgradeNoticeWhenLocalBuildIsNewer(t *testing.T) {
+	oldVersion := version
+	defer func() { version = oldVersion }()
+	version = "v0.2.3"
+
+	orig := fetchLatestReleaseFunc
+	defer func() { fetchLatestReleaseFunc = orig }()
+	fetchLatestReleaseFunc = func(owner, repo string) (string, error) {
+		return "v0.2.2", nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	updateCh, _ := run(nil, &stdout, &stderr)
+	showUpdateNotice(&stderr, updateCh, updateSuccessTimeout)
+	if strings.Contains(stderr.String(), "available") {
+		t.Fatalf("older release must not be advertised as an upgrade, got %q", stderr.String())
 	}
 }
 
@@ -1309,14 +1422,16 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			},
 			"reviews": {
 				"nodes": [
-					{"state": "APPROVED", "author": {"login": "copilot[bot]", "__typename": "Bot"}, "comments": {"totalCount": 0}}
+					{"state": "APPROVED", "author": {"login": "copilot[bot]", "__typename": "Bot"}, "comments": {"totalCount": 0}},
+					{"state": "APPROVED", "author": {"login": "set-it-free-loop", "__typename": "Bot"}, "comments": {"totalCount": 0}}
 				]
 			},
 			"approvedReviews": {
 				"nodes": [
-					{"author": {"login": "alice"}},
-					{"author": {"login": "Alice"}},
-					{"author": {"login": "bob"}}
+					{"author": {"login": "alice", "__typename": "User"}},
+					{"author": {"login": "Alice", "__typename": "User"}},
+					{"author": {"login": "bob", "__typename": "User"}},
+					{"author": {"login": "set-it-free-loop", "__typename": "Bot"}}
 				]
 			}
 		}`)
@@ -1333,8 +1448,11 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		if info.Threads.Resolved != 1 {
 			t.Fatalf("expected resolved 1, got %d", info.Threads.Resolved)
 		}
-		if info.Approvals != 2 {
-			t.Fatalf("expected 2 unique approvers, got %d", info.Approvals)
+		if info.Approvals != 3 {
+			t.Fatalf("expected 3 unique approvers, got %d", info.Approvals)
+		}
+		if info.SFLReview != "approved" {
+			t.Fatalf("expected SFL approved, got %q", info.SFLReview)
 		}
 		if !info.AIClean {
 			t.Fatalf("expected AIClean=true for bot APPROVED with 0 comments")
@@ -1834,10 +1952,39 @@ func TestStateCellAllStates(t *testing.T) {
 func TestReviewCellAllDecisions(t *testing.T) {
 	var buf bytes.Buffer
 	styler := newTableStyler(&buf, false)
-	for _, review := range []string{"approved", "changes", "review", "-"} {
-		cell := styler.reviewCell(review)
-		if cell.text != review {
-			t.Fatalf("reviewCell(%q).text = %q", review, cell.text)
+	tests := []struct {
+		review string
+		want   string
+	}{
+		{review: "approved", want: "✓"},
+		{review: "changes", want: "✗"},
+		{review: "review", want: "•"},
+		{review: "-", want: "-"},
+	}
+	for _, tc := range tests {
+		cell := styler.reviewCell(tc.review)
+		if cell.text != tc.want {
+			t.Fatalf("reviewCell(%q).text = %q, want %q", tc.review, cell.text, tc.want)
+		}
+	}
+}
+
+func TestSFLReviewCellAllDecisions(t *testing.T) {
+	var buf bytes.Buffer
+	styler := newTableStyler(&buf, false)
+	tests := []struct {
+		review string
+		want   string
+	}{
+		{review: "approved", want: "✓"},
+		{review: "changes", want: "✗"},
+		{review: "commented", want: "•"},
+		{review: "-", want: "-"},
+	}
+	for _, tc := range tests {
+		cell := styler.sflReviewCell(tc.review)
+		if cell.text != tc.want {
+			t.Fatalf("sflReviewCell(%q).text = %q, want %q", tc.review, cell.text, tc.want)
 		}
 	}
 }
@@ -2264,8 +2411,8 @@ func TestWriteRow(t *testing.T) {
 		t.Fatalf("writeRow should end with last cell + newline, got %q", got)
 	}
 
-	// First cell should have padding (8 - 5 + 2 = 5 spaces)
-	if !strings.Contains(got, "hello     world") {
+	// First cell should have padding (8 - 5 + 1 = 4 spaces).
+	if !strings.Contains(got, "hello    world") {
 		t.Fatalf("writeRow padding incorrect, got %q", got)
 	}
 }
@@ -2375,7 +2522,7 @@ func TestFitColumnsToTerminal(t *testing.T) {
 			for i, w := range result {
 				totalWidth += w
 				if i < len(result)-1 {
-					totalWidth += 2
+					totalWidth += tableColumnGap
 				}
 			}
 

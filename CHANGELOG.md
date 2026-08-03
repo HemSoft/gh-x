@@ -7,6 +7,16 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Added an `SFL` column that shows the latest formal SFL Reviewer decision
+  independently from aggregate AI finding status.
+
+### Changed
+
+- Condensed pull request tables with one-space column gaps, compact review
+  decision symbols, and `Rev` and `Upd` headers.
+
 ### Fixed
 
 - Fixed the comments column `!` marker so it appears when the latest AI
@@ -70,7 +80,7 @@ and this project uses semantic versioning.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.2.2...HEAD
 [0.18.0]: https://github.com/HemSoft/gh-x/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/HemSoft/gh-x/compare/v0.16.1...v0.17.0
 [0.16.0]: https://github.com/HemSoft/gh-x/compare/v0.15.4...v0.16.0
