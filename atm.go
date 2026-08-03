@@ -484,7 +484,7 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 		Author:    authorName,
 		State:     normalizeState(node.State, node.IsDraft),
 		Review:    normalizeReviewDecision(node.ReviewDecision),
-		SFLReview: detectSFLReview(aiNodes),
+		SFLReview: detectSFLReview(aiNodes, ""),
 		Approvals: countUniqueApprovers(approverLogins),
 		Checks:    normalizeCheckState(checkItems),
 		Comments:  formatComments(threads),

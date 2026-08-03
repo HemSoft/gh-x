@@ -776,6 +776,7 @@ type aiReviewNode struct {
 	AuthorType   string
 	CommentCount int
 	OccurredAt   time.Time
+	CommitOID    string
 }
 
 // aiReviewThread holds thread resolution state and authorship for AI review detection.
@@ -840,11 +841,16 @@ func isSFLReviewer(login string) bool {
 	return normalized == "set-it-free-loop" || normalized == "sfl-app"
 }
 
-// detectSFLReview returns the latest formal SFL review decision.
-func detectSFLReview(reviews []aiReviewNode) string {
+// detectSFLReview returns the latest formal SFL review decision for the
+// current pull request head. An empty head preserves compatibility for callers
+// that do not have commit metadata.
+func detectSFLReview(reviews []aiReviewNode, headRefOID string) string {
 	status := "-"
 	for _, review := range reviews {
 		if !isSFLReviewer(review.AuthorLogin) {
+			continue
+		}
+		if headRefOID != "" && !strings.EqualFold(review.CommitOID, headRefOID) {
 			continue
 		}
 		switch strings.ToUpper(review.State) {
@@ -1205,7 +1211,7 @@ func fetchPRSupplementalBatch(owner, name string, prNumbers []int) (map[int]prSu
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`pr%d: pullRequest(number: %d) { number headRefOid comments(last: 100) { nodes { body createdAt author { login __typename } } } reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(first: 100) { nodes { state submittedAt author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
+			`pr%d: pullRequest(number: %d) { number headRefOid comments(last: 100) { totalCount nodes { body createdAt author { login __typename } } } reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(last: 100) { totalCount nodes { state submittedAt commit { oid } author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
 			num, num,
 		))
 	}
@@ -1249,7 +1255,8 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		Number     int    `json:"number"`
 		HeadRefOID string `json:"headRefOid"`
 		Comments   struct {
-			Nodes []struct {
+			TotalCount int `json:"totalCount"`
+			Nodes      []struct {
 				Body      string    `json:"body"`
 				CreatedAt time.Time `json:"createdAt"`
 				Author    struct {
@@ -1273,10 +1280,14 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			} `json:"nodes"`
 		} `json:"reviewThreads"`
 		Reviews struct {
-			Nodes []struct {
+			TotalCount int `json:"totalCount"`
+			Nodes      []struct {
 				State       string    `json:"state"`
 				SubmittedAt time.Time `json:"submittedAt"`
-				Author      struct {
+				Commit      struct {
+					OID string `json:"oid"`
+				} `json:"commit"`
+				Author struct {
 					Login    string `json:"login"`
 					Typename string `json:"__typename"`
 				} `json:"author"`
@@ -1309,6 +1320,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			AuthorType:   r.Author.Typename,
 			CommentCount: r.Comments.TotalCount,
 			OccurredAt:   r.SubmittedAt,
+			CommitOID:    r.Commit.OID,
 		})
 	}
 	for _, comment := range prData.Comments.Nodes {
@@ -1342,14 +1354,28 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		approverLogins = append(approverLogins, r.Author.Login)
 	}
 
+	aiReview := detectAIReview(aiNodes, aiThreads)
+	sflReview := detectSFLReview(aiNodes, prData.HeadRefOID)
+	aiClean := isAIReviewClean(aiNodes, aiThreads)
+	commentsTruncated := prData.Comments.TotalCount > len(prData.Comments.Nodes)
+	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
+	reviewsTruncated := prData.Reviews.TotalCount > len(prData.Reviews.Nodes)
+	if commentsTruncated || threadsTruncated || reviewsTruncated {
+		aiReview = "?"
+		aiClean = false
+	}
+	if reviewsTruncated {
+		sflReview = "?"
+	}
+
 	return prData.Number, prSupplementalInfo{
 		Threads: reviewThreadInfo{
 			Total:    prData.ReviewThreads.TotalCount,
 			Resolved: countResolvedThreads(aiThreads),
 		},
-		AIReview:  detectAIReview(aiNodes, aiThreads),
-		SFLReview: detectSFLReview(aiNodes),
-		AIClean:   isAIReviewClean(aiNodes, aiThreads),
+		AIReview:  aiReview,
+		SFLReview: sflReview,
+		AIClean:   aiClean,
 		Approvals: countUniqueApprovers(approverLogins),
 	}, true
 }

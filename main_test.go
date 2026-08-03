@@ -52,9 +52,10 @@ func TestBuildListArgsIncludesFilters(t *testing.T) {
 
 func TestDetectSFLReview(t *testing.T) {
 	tests := []struct {
-		name    string
-		reviews []aiReviewNode
-		want    string
+		name       string
+		reviews    []aiReviewNode
+		headRefOID string
+		want       string
 	}{
 		{name: "absent", want: "-"},
 		{name: "approved", reviews: []aiReviewNode{
@@ -66,6 +67,12 @@ func TestDetectSFLReview(t *testing.T) {
 		{name: "sfl app bot login", reviews: []aiReviewNode{
 			{State: "APPROVED", AuthorLogin: "sfl-app[bot]"},
 		}, want: "approved"},
+		{name: "stale sfl app review ignored", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "sfl-app[bot]", CommitOID: "old-head"},
+		}, headRefOID: "current-head", want: "-"},
+		{name: "current-head sfl app review accepted", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "sfl-app[bot]", CommitOID: "current-head"},
+		}, headRefOID: "current-head", want: "approved"},
 		{name: "commented", reviews: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "set-it-free-loop"},
 		}, want: "commented"},
@@ -84,7 +91,7 @@ func TestDetectSFLReview(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := detectSFLReview(tc.reviews); got != tc.want {
+			if got := detectSFLReview(tc.reviews, tc.headRefOID); got != tc.want {
 				t.Fatalf("detectSFLReview() = %q, want %q", got, tc.want)
 			}
 		})
@@ -1634,6 +1641,39 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 		if info.AIReview != "fail" || info.AIClean {
 			t.Fatalf("expected AI failure, got review=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
+	t.Run("truncated supplemental connections fail closed", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "current-head",
+			"comments": {
+				"totalCount": 101,
+				"nodes": [{
+					"body": "Codex Review: Didn't find any major issues. Reviewed commit: current-he",
+					"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+				}]
+			},
+			"reviewThreads": {"totalCount": 101, "nodes": []},
+			"reviews": {
+				"totalCount": 101,
+				"nodes": [{
+					"state": "APPROVED",
+					"commit": {"oid": "current-head"},
+					"author": {"login": "sfl-app", "__typename": "Bot"},
+					"comments": {"totalCount": 0}
+				}]
+			},
+			"approvedReviews": {"totalCount": 1, "nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "?" || info.SFLReview != "?" || info.AIClean {
+			t.Fatalf("expected truncated data to fail closed, got AI=%q SFL=%q clean=%v", info.AIReview, info.SFLReview, info.AIClean)
 		}
 	})
 
