@@ -125,7 +125,8 @@ func TestStatusWorktreeCandidateReason(t *testing.T) {
 		{name: "Git prunable with open PR", mutate: func(w *statusWorktree) { w.Prunable = true; w.Exists = false }, openHeads: map[string]bool{"feature": true}, mergedKnown: true, prsKnown: true},
 		{name: "Git prunable with PR state unavailable", mutate: func(w *statusWorktree) { w.Prunable = true; w.Exists = false }, mergedKnown: true},
 		{name: "locked Git prunable", mutate: func(w *statusWorktree) { w.Prunable = true; w.Locked = true }},
-		{name: "merged detached Git prunable", mutate: func(w *statusWorktree) { w.Prunable = true; w.Detached = true; w.DetachedMerged = true; w.Branch = "" }, want: true},
+		{name: "merged detached Git prunable", mutate: func(w *statusWorktree) { w.Prunable = true; w.Detached = true; w.DetachedMerged = true; w.Branch = "" }, prsKnown: true, want: true},
+		{name: "merged detached Git prunable with PR state unavailable", mutate: func(w *statusWorktree) { w.Prunable = true; w.Detached = true; w.DetachedMerged = true; w.Branch = "" }},
 		{name: "unmerged detached Git prunable", mutate: func(w *statusWorktree) { w.Prunable = true; w.Detached = true; w.Branch = "" }},
 	}
 
@@ -235,7 +236,7 @@ func TestFetchStatusDashboard(t *testing.T) {
 	}, "\n") + "\n"
 	worktreeOutput := strings.Join([]string{
 		"worktree C:/repo", "HEAD a", "branch refs/heads/main", "",
-		"worktree C:/repo.worktrees/issue-7", "HEAD b", "branch refs/heads/feature/status", "",
+		"worktree C:/repo.worktrees/issue-7 ", "HEAD b", "branch refs/heads/feature/status", "",
 		"worktree C:/repo.worktrees/old", "HEAD c", "branch refs/heads/old", "",
 	}, "\x00")
 	statusCommandFunc = func(name string, args ...string) (string, error) {
@@ -248,7 +249,7 @@ func TestFetchStatusDashboard(t *testing.T) {
 		case "git worktree list --porcelain -z":
 			return worktreeOutput, nil
 		case "git rev-parse --show-toplevel":
-			return "C:/repo.worktrees/issue-7\n", nil
+			return "C:/repo.worktrees/issue-7 \r\n", nil
 		case "git -C C:/repo status --porcelain=v2 --branch":
 			return "# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n", nil
 		case "git for-each-ref --merged=refs/heads/main --format=%(refname:short) refs/heads":

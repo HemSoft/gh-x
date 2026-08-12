@@ -156,7 +156,7 @@ func fetchStatusDashboard() (statusDashboard, error) {
 	if err != nil {
 		return statusDashboard{}, fmt.Errorf("git repository root: %w", err)
 	}
-	currentRoot := strings.TrimSpace(root)
+	currentRoot := strings.TrimRight(root, "\r\n")
 	defaultBranch := resolveStatusDefaultBranch(branches)
 	if defaultBranch == "" {
 		defaultBranch = statusDefaultBranchFunc()
@@ -433,7 +433,7 @@ func statusWorktreeCandidateReason(worktree statusWorktree, defaultBranch string
 		return ""
 	}
 	if worktree.Prunable {
-		if worktree.Detached && !worktree.DetachedMerged {
+		if !pullRequestsKnown || (worktree.Detached && !worktree.DetachedMerged) {
 			return ""
 		}
 		if !worktree.Detached && !statusBranchSafeForCleanup(worktree.Branch, merged, openHeads, mergedKnown, pullRequestsKnown) {
