@@ -220,6 +220,7 @@ const atmPRFieldsFragment = `
         reviewDecision
         updatedAt
         headRefName
+        headRefOid
         baseRefName
         url
         repository { nameWithOwner }
@@ -248,6 +249,7 @@ const atmPRFieldsFragment = `
         reviews(first: 100) {
           nodes {
             state
+            commit { oid }
             author { login __typename }
             comments { totalCount }
           }
@@ -296,6 +298,20 @@ func buildAtmMultiSearchQuery(queries []string, limit int) string {
 	return sb.String()
 }
 
+type atmReviewNode struct {
+	State  string `json:"state"`
+	Commit struct {
+		OID string `json:"oid"`
+	} `json:"commit"`
+	Author struct {
+		Login    string `json:"login"`
+		Typename string `json:"__typename"`
+	} `json:"author"`
+	Comments struct {
+		TotalCount int `json:"totalCount"`
+	} `json:"comments"`
+}
+
 // atmPullRequestNode represents a PR returned from the GraphQL search query.
 type atmPullRequestNode struct {
 	Number         int       `json:"number"`
@@ -306,6 +322,7 @@ type atmPullRequestNode struct {
 	ReviewDecision string    `json:"reviewDecision"`
 	UpdatedAt      time.Time `json:"updatedAt"`
 	HeadRefName    string    `json:"headRefName"`
+	HeadRefOID     string    `json:"headRefOid"`
 	BaseRefName    string    `json:"baseRefName"`
 	URL            string    `json:"url"`
 	Repository     struct {
@@ -335,16 +352,7 @@ type atmPullRequestNode struct {
 		} `json:"nodes"`
 	} `json:"latestReviews"`
 	Reviews struct {
-		Nodes []struct {
-			State  string `json:"state"`
-			Author struct {
-				Login    string `json:"login"`
-				Typename string `json:"__typename"`
-			} `json:"author"`
-			Comments struct {
-				TotalCount int `json:"totalCount"`
-			} `json:"comments"`
-		} `json:"nodes"`
+		Nodes []atmReviewNode `json:"nodes"`
 	} `json:"reviews"`
 	ReviewThreads struct {
 		TotalCount int `json:"totalCount"`
@@ -455,6 +463,7 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 	for _, r := range node.Reviews.Nodes {
 		aiNodes = append(aiNodes, aiReviewNode{
 			State:        r.State,
+			CommitOID:    r.Commit.OID,
 			AuthorLogin:  r.Author.Login,
 			AuthorType:   r.Author.Typename,
 			CommentCount: r.Comments.TotalCount,
@@ -484,7 +493,7 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 		Author:    authorName,
 		State:     normalizeState(node.State, node.IsDraft),
 		Review:    normalizeReviewDecision(node.ReviewDecision),
-		SFLReview: detectSFLReview(aiNodes, ""),
+		SFLReview: detectSFLReview(aiNodes, node.HeadRefOID),
 		Approvals: countUniqueApprovers(approverLogins),
 		Checks:    normalizeCheckState(checkItems),
 		Comments:  formatComments(threads),

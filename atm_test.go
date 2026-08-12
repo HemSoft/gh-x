@@ -143,6 +143,9 @@ func TestBuildAtmGraphQLQuery(t *testing.T) {
 	if !strings.Contains(query, "statusCheckRollup") {
 		t.Fatal("expected statusCheckRollup in query")
 	}
+	if !strings.Contains(query, "headRefOid") || !strings.Contains(query, "commit { oid }") {
+		t.Fatal("expected current-head review metadata in query")
+	}
 }
 
 func TestResolveAtmOrg(t *testing.T) {
@@ -251,23 +254,7 @@ func TestMapAtmNode(t *testing.T) {
 			},
 		}},
 	}
-	node.Reviews.Nodes = []struct {
-		State  string `json:"state"`
-		Author struct {
-			Login    string `json:"login"`
-			Typename string `json:"__typename"`
-		} `json:"author"`
-		Comments struct {
-			TotalCount int `json:"totalCount"`
-		} `json:"comments"`
-	}{
-		{State: "APPROVED", Author: struct {
-			Login    string `json:"login"`
-			Typename string `json:"__typename"`
-		}{Login: "reviewer1"}, Comments: struct {
-			TotalCount int `json:"totalCount"`
-		}{TotalCount: 0}},
-	}
+	node.Reviews.Nodes = []atmReviewNode{makeAtmReview("APPROVED", "reviewer1", 0, "")}
 	node.ReviewThreads.TotalCount = 2
 	node.ReviewThreads.Nodes = []struct {
 		IsResolved bool `json:"isResolved"`
@@ -410,6 +397,25 @@ func TestMapAtmNodeNoChecks(t *testing.T) {
 	}
 }
 
+func TestMapAtmNodeFiltersStaleSFLReviews(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	node := atmPullRequestNode{
+		Number:     7,
+		Title:      "Current SFL state",
+		State:      "OPEN",
+		UpdatedAt:  now,
+		HeadRefOID: "current-head",
+	}
+	node.Reviews.Nodes = []atmReviewNode{
+		makeAtmReview("APPROVED", "sfl-app[bot]", 0, "old-head"),
+		makeAtmReview("CHANGES_REQUESTED", "sfl-app[bot]", 1, "current-head"),
+	}
+
+	if got := mapAtmNode(node, now).SFLReview; got != "changes" {
+		t.Fatalf("SFLReview = %q, want changes from current head", got)
+	}
+}
+
 func TestMapAtmNodeAIClean(t *testing.T) {
 	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
 	node := atmPullRequestNode{
@@ -420,23 +426,7 @@ func TestMapAtmNodeAIClean(t *testing.T) {
 		URL:       "https://github.com/Org/repo/pull/99",
 	}
 	node.Repository.NameWithOwner = "Org/repo"
-	node.Reviews.Nodes = []struct {
-		State  string `json:"state"`
-		Author struct {
-			Login    string `json:"login"`
-			Typename string `json:"__typename"`
-		} `json:"author"`
-		Comments struct {
-			TotalCount int `json:"totalCount"`
-		} `json:"comments"`
-	}{
-		{State: "APPROVED", Author: struct {
-			Login    string `json:"login"`
-			Typename string `json:"__typename"`
-		}{Login: "copilot-pull-request-reviewer"}, Comments: struct {
-			TotalCount int `json:"totalCount"`
-		}{TotalCount: 0}},
-	}
+	node.Reviews.Nodes = []atmReviewNode{makeAtmReview("APPROVED", "copilot-pull-request-reviewer", 0, "")}
 
 	dp := mapAtmNode(node, now)
 	if dp.AIClean == nil || !*dp.AIClean {
@@ -946,42 +936,9 @@ func TestRenderAtmResultsAIReviewPass(t *testing.T) {
 			Number: 42,
 			Title:  "Reviewed by bot",
 			URL:    "https://github.com/test/repo/pull/42",
-			Reviews: struct {
-				Nodes []struct {
-					State  string `json:"state"`
-					Author struct {
-						Login    string `json:"login"`
-						Typename string `json:"__typename"`
-					} `json:"author"`
-					Comments struct {
-						TotalCount int `json:"totalCount"`
-					} `json:"comments"`
-				} `json:"nodes"`
-			}{
-				Nodes: []struct {
-					State  string `json:"state"`
-					Author struct {
-						Login    string `json:"login"`
-						Typename string `json:"__typename"`
-					} `json:"author"`
-					Comments struct {
-						TotalCount int `json:"totalCount"`
-					} `json:"comments"`
-				}{
-					{
-						State: "APPROVED",
-						Author: struct {
-							Login    string `json:"login"`
-							Typename string `json:"__typename"`
-						}{"copilot-pull-request-reviewer[bot]", ""},
-						Comments: struct {
-							TotalCount int `json:"totalCount"`
-						}{0},
-					},
-				},
-			},
 		},
 	}
+	nodes[0].Reviews.Nodes = []atmReviewNode{makeAtmReview("APPROVED", "copilot-pull-request-reviewer[bot]", 0, "")}
 	var buf bytes.Buffer
 	options := atmOptions{json: true}
 	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -1166,21 +1123,7 @@ func TestRenderAtmResultsReadyFilter(t *testing.T) {
 	}{Contexts: struct {
 		Nodes []checkItem `json:"nodes"`
 	}{Nodes: []checkItem{{Typename: "CheckRun", Name: "ci", Status: "COMPLETED", Conclusion: "SUCCESS"}}}}}}}
-	nodes[0].Reviews.Nodes = []struct {
-		State  string `json:"state"`
-		Author struct {
-			Login    string `json:"login"`
-			Typename string `json:"__typename"`
-		} `json:"author"`
-		Comments struct {
-			TotalCount int `json:"totalCount"`
-		} `json:"comments"`
-	}{{State: "APPROVED", Author: struct {
-		Login    string `json:"login"`
-		Typename string `json:"__typename"`
-	}{Login: "copilot-pull-request-reviewer[bot]"}, Comments: struct {
-		TotalCount int `json:"totalCount"`
-	}{TotalCount: 0}}}
+	nodes[0].Reviews.Nodes = []atmReviewNode{makeAtmReview("APPROVED", "copilot-pull-request-reviewer[bot]", 0, "")}
 
 	var buf bytes.Buffer
 	options := atmOptions{json: true, ready: true}
@@ -1195,4 +1138,12 @@ func TestRenderAtmResultsReadyFilter(t *testing.T) {
 	if strings.Contains(output, `"number": 2`) {
 		t.Fatalf("did not expect draft PR #2 in output, got:\n%s", output)
 	}
+}
+
+func makeAtmReview(state, login string, commentCount int, commitOID string) atmReviewNode {
+	review := atmReviewNode{State: state}
+	review.Author.Login = login
+	review.Comments.TotalCount = commentCount
+	review.Commit.OID = commitOID
+	return review
 }

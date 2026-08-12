@@ -911,37 +911,6 @@ func sortAIReviewsChronologically(reviews []aiReviewNode) {
 	})
 }
 
-// classifyAIReviews scans review nodes for bot-authored reviews and returns
-// whether a clean pass (no comments), issues, or bot participation was found.
-// hasCleanPass is true when a bot review (APPROVED or COMMENTED) has zero
-// review comments, indicating the reviewer found nothing to flag.
-func classifyAIReviews(reviews []aiReviewNode) (hasCleanPass, hasIssues, hasBotReview bool) {
-	for _, r := range reviews {
-		if !isAIReviewer(r.AuthorLogin) && r.AuthorType != "Bot" {
-			continue
-		}
-		hasBotReview = true
-
-		switch strings.ToUpper(r.State) {
-		case "APPROVED":
-			if r.CommentCount == 0 {
-				hasCleanPass = true
-			} else {
-				hasIssues = true
-			}
-		case "CHANGES_REQUESTED":
-			hasIssues = true
-		case "COMMENTED":
-			if r.CommentCount == 0 {
-				hasCleanPass = true
-			} else {
-				hasIssues = true
-			}
-		}
-	}
-	return
-}
-
 // latestAIReviewIsClean returns true when the most recent bot-authored review
 // is a clean pass (APPROVED or COMMENTED state with zero review comments).
 // Reviews are expected in submission order, as returned by the GitHub API.
@@ -1002,28 +971,42 @@ func hasUnresolvedAIThreads(threads []aiReviewThread) bool {
 	return false
 }
 
-// detectAIReview determines the AI review status by combining review state with
-// thread resolution. A review that left comments is only "pass" when positive
-// evidence exists that all AI-authored threads have been resolved.
+// detectAIReview determines the AI review status from the latest bot review and
+// thread resolution. A later clean review supersedes older findings, but any
+// unresolved AI-authored thread still forces a failure.
 func detectAIReview(reviews []aiReviewNode, threads []aiReviewThread) string {
-	hasCleanPass, hasIssues, hasBotReview := classifyAIReviews(reviews)
-
-	if !hasBotReview {
+	latest, ok := latestAIReview(reviews)
+	if !ok {
 		return "-"
 	}
-	if hasIssues {
+	if hasUnresolvedAIThreads(threads) {
+		return "fail"
+	}
+
+	switch strings.ToUpper(latest.State) {
+	case "APPROVED", "COMMENTED":
+		if latest.CommentCount == 0 || allAIThreadsResolved(threads) {
+			return "pass"
+		}
+		return "fail"
+	case "CHANGES_REQUESTED":
 		if allAIThreadsResolved(threads) {
 			return "pass"
 		}
 		return "fail"
+	default:
+		return "-"
 	}
-	if hasCleanPass {
-		if hasUnresolvedAIThreads(threads) {
-			return "fail"
+}
+
+func latestAIReview(reviews []aiReviewNode) (aiReviewNode, bool) {
+	for i := len(reviews) - 1; i >= 0; i-- {
+		review := reviews[i]
+		if isAIReviewer(review.AuthorLogin) || review.AuthorType == "Bot" {
+			return review, true
 		}
-		return "pass"
 	}
-	return "-"
+	return aiReviewNode{}, false
 }
 
 // extractReportedContexts collects the context/check names from statusCheckRollup items.
@@ -1211,7 +1194,7 @@ func fetchPRSupplementalBatch(owner, name string, prNumbers []int) (map[int]prSu
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`pr%d: pullRequest(number: %d) { number headRefOid comments(last: 100) { totalCount nodes { body createdAt author { login __typename } } } reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(last: 100) { totalCount nodes { state submittedAt commit { oid } author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
+			`pr%d: pullRequest(number: %d) { number headRefOid comments(last: 100) { totalCount nodes { body createdAt author { login __typename } } } reviewThreads(last: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(last: 100) { totalCount nodes { state submittedAt commit { oid } author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
 			num, num,
 		))
 	}
@@ -1354,14 +1337,13 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		approverLogins = append(approverLogins, r.Author.Login)
 	}
 
-	commentsTruncated := prData.Comments.TotalCount > len(prData.Comments.Nodes)
 	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
 	reviewsTruncated := prData.Reviews.TotalCount > len(prData.Reviews.Nodes)
 	aiReview, sflReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
 		aiThreads,
 		prData.HeadRefOID,
-		anyConnectionTruncated(commentsTruncated, threadsTruncated, reviewsTruncated),
+		anyConnectionTruncated(threadsTruncated, reviewsTruncated),
 		reviewsTruncated,
 	)
 
