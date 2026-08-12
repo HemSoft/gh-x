@@ -189,18 +189,26 @@ func executeIssueList(options issueListOptions, stdout io.Writer, now time.Time)
 		return nil
 	}
 
-	issues, err := fetchIssuesFunc(options)
+	displayIssues, err := fetchDisplayIssues(options, now)
 	if err != nil {
 		return err
+	}
+
+	colorEnabled := term.FromEnv().IsColorEnabled()
+	return renderIssueTable(stdout, displayIssues, options, colorEnabled)
+}
+
+func fetchDisplayIssues(options issueListOptions, now time.Time) ([]displayIssue, error) {
+	issues, err := fetchIssuesFunc(options)
+	if err != nil {
+		return nil, err
 	}
 
 	displayIssues := make([]displayIssue, len(issues))
 	for i, entry := range issues {
 		displayIssues[i] = buildDisplayIssue(entry, now)
 	}
-
-	colorEnabled := term.FromEnv().IsColorEnabled()
-	return renderIssueTable(stdout, displayIssues, options, colorEnabled)
+	return displayIssues, nil
 }
 
 func buildDisplayIssue(entry issueEntry, now time.Time) displayIssue {
@@ -278,6 +286,23 @@ func renderIssueTable(stdout io.Writer, issues []displayIssue, options issueList
 		fmt.Fprintf(stdout, "Issues for %s\n\n", repoLabel)
 	}
 
+	if err := renderIssueRows(stdout, issues, colorEnabled); err != nil {
+		return err
+	}
+
+	if colorEnabled {
+		cmd := "gh issue view " + strconv.Itoa(issues[0].Number)
+		if options.repo != "" {
+			cmd += " --repo " + options.repo
+		}
+		writeOSC52(stdout, cmd)
+		fmt.Fprintf(stdout, "\n→ %s  (copied — Ctrl+V to paste)\n", cmd)
+	}
+
+	return nil
+}
+
+func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool) error {
 	styler := newTableStyler(stdout, colorEnabled)
 
 	headerLabels := []string{"#", "Title", "Author", "State", "Labels", "Assignees", "Updated"}
@@ -309,15 +334,6 @@ func renderIssueTable(stdout io.Writer, issues []displayIssue, options issueList
 	writeRow(stdout, headers, colWidths)
 	for _, row := range rows {
 		writeRow(stdout, row, colWidths)
-	}
-
-	if colorEnabled {
-		cmd := "gh issue view " + strconv.Itoa(issues[0].Number)
-		if options.repo != "" {
-			cmd += " --repo " + options.repo
-		}
-		writeOSC52(stdout, cmd)
-		fmt.Fprintf(stdout, "\n→ %s  (copied — Ctrl+V to paste)\n", cmd)
 	}
 
 	return nil

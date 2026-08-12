@@ -109,6 +109,11 @@ type displayPullRequest struct {
 	updatedAt time.Time // unexported; used for sorting
 }
 
+type pullRequestListResult struct {
+	Entries  []pullRequest
+	Rendered []displayPullRequest
+}
+
 func (s tableStyler) numberCell(number int, url string) tableCell {
 	return s.linkCell(fmt.Sprintf("#%d", number), url, termenv.ANSIGreen)
 }
@@ -229,23 +234,33 @@ func defaultListOptions() listOptions {
 }
 
 func executeList(options listOptions, stdout io.Writer) error {
-	arguments := buildListArgs(options)
-	commandOutput, commandError, err := gh.Exec(arguments...)
+	result, err := fetchPullRequestList(options, time.Now().UTC())
 	if err != nil {
-		return wrapExecError(err, commandError.String())
+		return err
 	}
 	if options.web {
 		return nil
 	}
+	return renderListOutput(stdout, options, result.Rendered)
+}
+
+func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListResult, error) {
+	arguments := buildListArgs(options)
+	commandOutput, commandError, err := ghExecFunc(arguments...)
+	if err != nil {
+		return pullRequestListResult{}, wrapExecError(err, commandError.String())
+	}
+	if options.web {
+		return pullRequestListResult{}, nil
+	}
 	var pullRequests []pullRequest
 	if err := json.Unmarshal(commandOutput.Bytes(), &pullRequests); err != nil {
-		return fmt.Errorf("decode gh pr list output: %w", err)
+		return pullRequestListResult{}, fmt.Errorf("decode gh pr list output: %w", err)
 	}
-	now := time.Now().UTC()
 	supplemental, supplementalFailed, repoOwner, repoName := fetchSupplementalData(options.repo, pullRequests)
 	requiredByBranch := fetchRequiredChecks(repoOwner, repoName, pullRequests)
 	rendered := enrichPullRequests(pullRequests, supplemental, supplementalFailed, requiredByBranch, now)
-	return renderListOutput(stdout, options, rendered)
+	return pullRequestListResult{Entries: pullRequests, Rendered: rendered}, nil
 }
 
 func wrapExecError(err error, stderr string) error {
@@ -493,6 +508,18 @@ func renderTableWithStyle(stdout io.Writer, options listOptions, pullRequests []
 		return nil
 	}
 
+	if err := renderPullRequestRows(stdout, pullRequests, colorEnabled); err != nil {
+		return err
+	}
+
+	if options.limit > 0 && len(pullRequests) >= options.limit {
+		fmt.Fprintf(stdout, "\nShowing %d pull requests (limit reached). Use --limit to show more.\n", options.limit)
+	}
+
+	return nil
+}
+
+func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, colorEnabled bool) error {
 	styler := newTableStyler(stdout, colorEnabled)
 
 	headerLabels := []string{"#", "Title", "Author", "State", "Rev", "SFL", "AI", "Appv", "Checks", "Cmts", "Branch", "Upd"}
@@ -529,10 +556,6 @@ func renderTableWithStyle(stdout io.Writer, options listOptions, pullRequests []
 	writeRow(stdout, headers, colWidths)
 	for _, row := range rows {
 		writeRow(stdout, row, colWidths)
-	}
-
-	if options.limit > 0 && len(pullRequests) >= options.limit {
-		fmt.Fprintf(stdout, "\nShowing %d pull requests (limit reached). Use --limit to show more.\n", options.limit)
 	}
 
 	return nil

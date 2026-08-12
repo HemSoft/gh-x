@@ -9,6 +9,9 @@ and this project uses semantic versioning.
 
 ### Added
 
+- Expanded `gh x status` into a structured repository health dashboard with
+  default-branch health, local/remote/dangling branch counts, conservative
+  worktree cleanup candidates, and separate open issue and pull request tables.
 - Added an `SFL` column that shows the latest formal SFL Reviewer decision
   independently from aggregate AI finding status.
 

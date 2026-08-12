@@ -2,9 +2,47 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 )
+
+func TestFetchPullRequestList(t *testing.T) {
+	saved := ghExecFunc
+	defer func() { ghExecFunc = saved }()
+
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		command := strings.Join(args, " ")
+		if !strings.Contains(command, "pr list") || !strings.Contains(command, "--limit 30") || !strings.Contains(command, "--state open") {
+			t.Fatalf("unexpected arguments: %s", command)
+		}
+		return *bytes.NewBufferString("[]"), bytes.Buffer{}, nil
+	}
+
+	result, err := fetchPullRequestList(listOptions{repo: "owner/repo", limit: 30, state: "open"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 0 || len(result.Rendered) != 0 {
+		t.Fatalf("expected empty result, got %#v", result)
+	}
+}
+
+func TestFetchPullRequestListError(t *testing.T) {
+	saved := ghExecFunc
+	defer func() { ghExecFunc = saved }()
+
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		return bytes.Buffer{}, *bytes.NewBufferString("offline"), errors.New("exit status 1")
+	}
+
+	_, err := fetchPullRequestList(defaultListOptions(), time.Now())
+	if err == nil || !strings.Contains(err.Error(), "offline") {
+		t.Fatalf("expected wrapped stderr, got %v", err)
+	}
+}
 
 func TestResolveAuthorFromOrg_SearchError(t *testing.T) {
 	saved := ghExecFunc
