@@ -867,6 +867,22 @@ func detectSFLReview(reviews []aiReviewNode, headRefOID string) string {
 	return status
 }
 
+// currentHeadReviewNodes keeps only review evidence tied to the current head.
+// An empty head preserves compatibility for callers that lack commit metadata.
+func currentHeadReviewNodes(reviews []aiReviewNode, headRefOID string) []aiReviewNode {
+	if headRefOID == "" {
+		return reviews
+	}
+
+	current := make([]aiReviewNode, 0, len(reviews))
+	for _, review := range reviews {
+		if strings.EqualFold(review.CommitOID, headRefOID) {
+			current = append(current, review)
+		}
+	}
+	return current
+}
+
 func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, bool) {
 	login := strings.TrimSuffix(strings.ToLower(comment.AuthorLogin), "[bot]")
 	if login != "chatgpt-codex-connector" {
@@ -895,6 +911,7 @@ func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, 
 		AuthorType:   comment.AuthorType,
 		CommentCount: commentCount,
 		OccurredAt:   comment.OccurredAt,
+		CommitOID:    headRefOID,
 	}, true
 }
 
@@ -1375,9 +1392,10 @@ func summarizeSupplementalReviews(
 	aiIncomplete bool,
 	sflIncomplete bool,
 ) (aiReview, sflReview string, aiClean bool) {
-	aiReview = detectAIReview(aiNodes, aiThreads)
-	sflReview = detectSFLReview(aiNodes, headRefOID)
-	aiClean = isAIReviewClean(aiNodes, aiThreads)
+	currentReviews := currentHeadReviewNodes(aiNodes, headRefOID)
+	aiReview = detectAIReview(currentReviews, aiThreads)
+	sflReview = detectSFLReview(currentReviews, headRefOID)
+	aiClean = isAIReviewClean(currentReviews, aiThreads)
 	if aiIncomplete {
 		aiReview = "?"
 		aiClean = false
@@ -1389,15 +1407,6 @@ func summarizeSupplementalReviews(
 }
 
 func boolPtr(b bool) *bool { return &b }
-
-// aiCleanPtr returns a non-nil *bool (true) only when the AI review is clean.
-// When not clean, it returns nil so the omitempty JSON tag omits the field.
-func aiCleanPtr(reviews []aiReviewNode, threads []aiReviewThread) *bool {
-	if isAIReviewClean(reviews, threads) {
-		return boolPtr(true)
-	}
-	return nil
-}
 
 func trimTitle(title string, limit int) string {
 	title = strings.TrimSpace(title)

@@ -146,6 +146,9 @@ func TestBuildAtmGraphQLQuery(t *testing.T) {
 	if !strings.Contains(query, "headRefOid") || !strings.Contains(query, "commit { oid }") {
 		t.Fatal("expected current-head review metadata in query")
 	}
+	if !strings.Contains(query, "reviews(first: 100) {\n          totalCount") {
+		t.Fatal("expected review completeness metadata in query")
+	}
 }
 
 func TestResolveAtmOrg(t *testing.T) {
@@ -342,6 +345,16 @@ func TestMapAtmNodeSFLApprovalWithOutstandingComments(t *testing.T) {
 							"comments": {"nodes": [{
 								"author": {"login": "set-it-free-loop", "__typename": "Bot"}
 							}]}
+						}, {
+							"isResolved": false,
+							"comments": {"nodes": [{
+								"author": {"login": "set-it-free-loop", "__typename": "Bot"}
+							}]}
+						}, {
+							"isResolved": false,
+							"comments": {"nodes": [{
+								"author": {"login": "set-it-free-loop", "__typename": "Bot"}
+							}]}
 						}]
 					},
 					"approvedReviews": {"nodes": [{
@@ -413,6 +426,80 @@ func TestMapAtmNodeFiltersStaleSFLReviews(t *testing.T) {
 
 	if got := mapAtmNode(node, now).SFLReview; got != "changes" {
 		t.Fatalf("SFLReview = %q, want changes from current head", got)
+	}
+}
+
+func TestMapAtmNodeFiltersStaleAIReviews(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	node := atmPullRequestNode{
+		Number:     8,
+		Title:      "Current AI state",
+		State:      "OPEN",
+		UpdatedAt:  now,
+		HeadRefOID: "current-head",
+	}
+	node.Reviews.TotalCount = 2
+	node.Reviews.Nodes = []atmReviewNode{
+		makeAtmReview("COMMENTED", "coderabbitai[bot]", 0, "current-head"),
+		makeAtmReview("CHANGES_REQUESTED", "coderabbitai[bot]", 1, "old-head"),
+	}
+
+	dp := mapAtmNode(node, now)
+	if dp.AIReview != "pass" {
+		t.Fatalf("AIReview = %q, want pass from current-head review", dp.AIReview)
+	}
+	if dp.AIClean == nil || !*dp.AIClean {
+		t.Fatal("expected current-head clean review to set AIClean")
+	}
+}
+
+func TestMapAtmNodeFailsClosedWhenReviewsTruncated(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	node := atmPullRequestNode{
+		Number:     9,
+		Title:      "Incomplete reviews",
+		State:      "OPEN",
+		UpdatedAt:  now,
+		HeadRefOID: "current-head",
+	}
+	node.Reviews.TotalCount = 101
+	node.Reviews.Nodes = []atmReviewNode{
+		makeAtmReview("APPROVED", "coderabbitai[bot]", 0, "current-head"),
+	}
+
+	dp := mapAtmNode(node, now)
+	if dp.AIReview != "?" || dp.SFLReview != "?" {
+		t.Fatalf("expected incomplete reviews to produce unknown status, got AI=%q SFL=%q", dp.AIReview, dp.SFLReview)
+	}
+	if dp.AIClean != nil {
+		t.Fatalf("expected incomplete reviews to suppress AIClean, got %v", *dp.AIClean)
+	}
+}
+
+func TestMapAtmNodeFailsClosedWhenThreadsTruncated(t *testing.T) {
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	node := atmPullRequestNode{
+		Number:     10,
+		Title:      "Incomplete threads",
+		State:      "OPEN",
+		UpdatedAt:  now,
+		HeadRefOID: "current-head",
+	}
+	node.Reviews.TotalCount = 1
+	node.Reviews.Nodes = []atmReviewNode{
+		makeAtmReview("APPROVED", "coderabbitai[bot]", 0, "current-head"),
+	}
+	node.ReviewThreads.TotalCount = 101
+
+	dp := mapAtmNode(node, now)
+	if dp.AIReview != "?" {
+		t.Fatalf("expected incomplete threads to produce unknown AI status, got %q", dp.AIReview)
+	}
+	if dp.SFLReview != "-" {
+		t.Fatalf("thread truncation should not obscure complete SFL reviews, got %q", dp.SFLReview)
+	}
+	if dp.AIClean != nil {
+		t.Fatalf("expected incomplete threads to suppress AIClean, got %v", *dp.AIClean)
 	}
 }
 

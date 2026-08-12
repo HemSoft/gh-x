@@ -247,6 +247,7 @@ const atmPRFieldsFragment = `
           }
         }
         reviews(first: 100) {
+          totalCount
           nodes {
             state
             commit { oid }
@@ -352,7 +353,8 @@ type atmPullRequestNode struct {
 		} `json:"nodes"`
 	} `json:"latestReviews"`
 	Reviews struct {
-		Nodes []atmReviewNode `json:"nodes"`
+		TotalCount int             `json:"totalCount"`
+		Nodes      []atmReviewNode `json:"nodes"`
 	} `json:"reviews"`
 	ReviewThreads struct {
 		TotalCount int `json:"totalCount"`
@@ -471,15 +473,23 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 	}
 
 	aiThreads := extractAtmReviewThreads(node)
+	reviewsTruncated := node.Reviews.TotalCount > len(node.Reviews.Nodes)
+	threadsTruncated := node.ReviewThreads.TotalCount > len(node.ReviewThreads.Nodes)
+	aiReview, sflReview, aiClean := summarizeSupplementalReviews(
+		aiNodes,
+		aiThreads,
+		node.HeadRefOID,
+		anyConnectionTruncated(reviewsTruncated, threadsTruncated),
+		reviewsTruncated,
+	)
+	var aiCleanValue *bool
+	if aiClean {
+		aiCleanValue = boolPtr(true)
+	}
 
 	threads := reviewThreadInfo{
 		Total:    node.ReviewThreads.TotalCount,
 		Resolved: countResolvedThreads(aiThreads),
-	}
-
-	aiReview := detectAIReview(aiNodes, aiThreads)
-	if aiReview == "" {
-		aiReview = "-"
 	}
 
 	var approverLogins []string
@@ -493,12 +503,12 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 		Author:    authorName,
 		State:     normalizeState(node.State, node.IsDraft),
 		Review:    normalizeReviewDecision(node.ReviewDecision),
-		SFLReview: detectSFLReview(aiNodes, node.HeadRefOID),
+		SFLReview: sflReview,
 		Approvals: countUniqueApprovers(approverLogins),
 		Checks:    normalizeCheckState(checkItems),
 		Comments:  formatComments(threads),
 		AIReview:  aiReview,
-		AIClean:   aiCleanPtr(aiNodes, aiThreads),
+		AIClean:   aiCleanValue,
 		Branch:    formatBranch(node.HeadRefName),
 		Updated:   formatRelativeTime(node.UpdatedAt, now),
 		URL:       node.URL,

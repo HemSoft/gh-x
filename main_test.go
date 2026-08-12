@@ -1564,6 +1564,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			"reviews": {"nodes": [{
 				"state": "COMMENTED",
 				"submittedAt": "2026-07-18T21:00:00Z",
+				"commit": {"oid": "682de6badb7404709e1183f4e8ed194c9ae6e34a"},
 				"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
 				"comments": {"totalCount": 1}
 			}]},
@@ -1595,6 +1596,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			"reviews": {"nodes": [{
 				"state": "COMMENTED",
 				"submittedAt": "2026-07-18T20:00:00Z",
+				"commit": {"oid": "682de6badb7404709e1183f4e8ed194c9ae6e34a"},
 				"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
 				"comments": {"totalCount": 1}
 			}]},
@@ -1610,6 +1612,30 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 		if info.AIReview != "pass" {
 			t.Fatalf("expected newer Codex comment to set AIReview=pass, got %q", info.AIReview)
+		}
+	})
+
+	t.Run("stale formal AI review is ignored", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "current-head",
+			"comments": {"totalCount": 0, "nodes": []},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"totalCount": 1, "nodes": [{
+				"state": "APPROVED",
+				"commit": {"oid": "old-head"},
+				"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
+				"comments": {"totalCount": 0}
+			}]},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "-" || info.AIClean {
+			t.Fatalf("expected stale formal review to be ignored, got AI=%q clean=%v", info.AIReview, info.AIClean)
 		}
 	})
 
