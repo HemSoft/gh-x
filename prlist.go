@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -81,12 +82,15 @@ type review struct {
 // checkItem represents a single entry in the statusCheckRollup array.
 // CheckRun items use Status+Conclusion; StatusContext items use State.
 type checkItem struct {
-	Typename   string `json:"__typename"`
-	Name       string `json:"name"`    // CheckRun name
-	Context    string `json:"context"` // StatusContext context
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	State      string `json:"state"`
+	Typename     string    `json:"__typename"`
+	Name         string    `json:"name"`    // CheckRun name
+	Context      string    `json:"context"` // StatusContext context
+	WorkflowName string    `json:"workflowName"`
+	Status       string    `json:"status"`
+	Conclusion   string    `json:"conclusion"`
+	State        string    `json:"state"`
+	StartedAt    time.Time `json:"startedAt"`
+	CompletedAt  time.Time `json:"completedAt"`
 }
 
 type displayPullRequest struct {
@@ -628,7 +632,7 @@ func normalizeCheckState(items []checkItem) string {
 
 	hasFail := false
 	hasPending := false
-	for _, item := range items {
+	for _, item := range latestCheckItems(items) {
 		f, p := classifyCheckItem(item)
 		hasFail = hasFail || f
 		hasPending = hasPending || p
@@ -642,6 +646,58 @@ func normalizeCheckState(items []checkItem) string {
 	default:
 		return "pass"
 	}
+}
+
+// latestCheckItems collapses repeated check contexts from reruns so stale
+// failures do not override a newer result for the same workflow and job.
+func latestCheckItems(items []checkItem) []checkItem {
+	latestIndexes := make(map[string]int)
+	result := make([]checkItem, 0, len(items))
+	for _, item := range items {
+		key := checkItemIdentity(item)
+		if key == "" {
+			result = append(result, item)
+			continue
+		}
+
+		index, exists := latestIndexes[key]
+		if !exists {
+			latestIndexes[key] = len(result)
+			result = append(result, item)
+			continue
+		}
+
+		currentTime := checkItemTimestamp(result[index])
+		candidateTime := checkItemTimestamp(item)
+		if currentTime.IsZero() || (!candidateTime.IsZero() && !candidateTime.Before(currentTime)) {
+			result[index] = item
+		}
+	}
+	return result
+}
+
+func checkItemIdentity(item checkItem) string {
+	switch item.Typename {
+	case "CheckRun":
+		if item.Name == "" {
+			return ""
+		}
+		return "check:" + strings.ToLower(item.WorkflowName) + ":" + strings.ToLower(item.Name)
+	case "StatusContext":
+		if item.Context == "" {
+			return ""
+		}
+		return "status:" + strings.ToLower(item.Context)
+	default:
+		return ""
+	}
+}
+
+func checkItemTimestamp(item checkItem) time.Time {
+	if !item.StartedAt.IsZero() {
+		return item.StartedAt
+	}
+	return item.CompletedAt
 }
 
 func formatAuthor(login, name string) string {
@@ -719,6 +775,8 @@ type aiReviewNode struct {
 	AuthorLogin  string
 	AuthorType   string
 	CommentCount int
+	OccurredAt   time.Time
+	CommitOID    string
 }
 
 // aiReviewThread holds thread resolution state and authorship for AI review detection.
@@ -726,6 +784,15 @@ type aiReviewThread struct {
 	AuthorLogin string
 	AuthorType  string
 	IsResolved  bool
+}
+
+// aiReviewComment holds PR conversation comments that may contain a
+// current-head Codex review summary.
+type aiReviewComment struct {
+	Body        string
+	AuthorLogin string
+	AuthorType  string
+	OccurredAt  time.Time
 }
 
 func formatComments(info reviewThreadInfo) string {
@@ -771,14 +838,19 @@ func isAIReviewer(login string) bool {
 func isSFLReviewer(login string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(login))
 	normalized = strings.TrimSuffix(normalized, "[bot]")
-	return normalized == "set-it-free-loop"
+	return normalized == "set-it-free-loop" || normalized == "sfl-app"
 }
 
-// detectSFLReview returns the latest formal SFL review decision.
-func detectSFLReview(reviews []aiReviewNode) string {
+// detectSFLReview returns the latest formal SFL review decision for the
+// current pull request head. An empty head preserves compatibility for callers
+// that do not have commit metadata.
+func detectSFLReview(reviews []aiReviewNode, headRefOID string) string {
 	status := "-"
 	for _, review := range reviews {
 		if !isSFLReviewer(review.AuthorLogin) {
+			continue
+		}
+		if headRefOID != "" && !strings.EqualFold(review.CommitOID, headRefOID) {
 			continue
 		}
 		switch strings.ToUpper(review.State) {
@@ -795,35 +867,65 @@ func detectSFLReview(reviews []aiReviewNode) string {
 	return status
 }
 
-// classifyAIReviews scans review nodes for bot-authored reviews and returns
-// whether a clean pass (no comments), issues, or bot participation was found.
-// hasCleanPass is true when a bot review (APPROVED or COMMENTED) has zero
-// review comments, indicating the reviewer found nothing to flag.
-func classifyAIReviews(reviews []aiReviewNode) (hasCleanPass, hasIssues, hasBotReview bool) {
-	for _, r := range reviews {
-		if !isAIReviewer(r.AuthorLogin) && r.AuthorType != "Bot" {
-			continue
-		}
-		hasBotReview = true
+// currentHeadReviewNodes keeps only review evidence tied to the current head.
+// An empty head preserves compatibility for callers that lack commit metadata.
+func currentHeadReviewNodes(reviews []aiReviewNode, headRefOID string) []aiReviewNode {
+	if headRefOID == "" {
+		return reviews
+	}
 
-		switch strings.ToUpper(r.State) {
-		case "APPROVED":
-			if r.CommentCount == 0 {
-				hasCleanPass = true
-			} else {
-				hasIssues = true
-			}
-		case "CHANGES_REQUESTED":
-			hasIssues = true
-		case "COMMENTED":
-			if r.CommentCount == 0 {
-				hasCleanPass = true
-			} else {
-				hasIssues = true
-			}
+	current := make([]aiReviewNode, 0, len(reviews))
+	for _, review := range reviews {
+		if strings.EqualFold(review.CommitOID, headRefOID) {
+			current = append(current, review)
 		}
 	}
-	return
+	return current
+}
+
+func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, bool) {
+	login := strings.TrimSuffix(strings.ToLower(comment.AuthorLogin), "[bot]")
+	if login != "chatgpt-codex-connector" {
+		return aiReviewNode{}, false
+	}
+
+	body := strings.ToLower(comment.Body)
+	if !strings.Contains(body, "codex review:") || headRefOID == "" {
+		return aiReviewNode{}, false
+	}
+
+	shaLength := min(10, len(headRefOID))
+	if !strings.Contains(body, strings.ToLower(headRefOID[:shaLength])) {
+		return aiReviewNode{}, false
+	}
+
+	commentCount := 1
+	if strings.Contains(body, "didn't find any major issues") ||
+		strings.Contains(body, "did not find any major issues") {
+		commentCount = 0
+	}
+
+	return aiReviewNode{
+		State:        "COMMENTED",
+		AuthorLogin:  comment.AuthorLogin,
+		AuthorType:   comment.AuthorType,
+		CommentCount: commentCount,
+		OccurredAt:   comment.OccurredAt,
+		CommitOID:    headRefOID,
+	}, true
+}
+
+func sortAIReviewsChronologically(reviews []aiReviewNode) {
+	sort.SliceStable(reviews, func(i, j int) bool {
+		left, right := reviews[i].OccurredAt, reviews[j].OccurredAt
+		if left.IsZero() {
+			return !right.IsZero()
+		}
+		if right.IsZero() {
+			return false
+		}
+		return left.Before(right)
+	})
 }
 
 // latestAIReviewIsClean returns true when the most recent bot-authored review
@@ -847,23 +949,18 @@ func latestAIReviewIsClean(reviews []aiReviewNode) bool {
 	return hasBotReview && clean
 }
 
-// isAIReviewClean returns true when the latest bot-authored review gave a
-// clean pass (zero review comments) and no AI-authored thread remains
-// unresolved. Earlier bot reviews that left comments do not disqualify the
-// PR once their threads are resolved and a fresh clean review exists.
+// isAIReviewClean returns true when AI review is effectively clear for the bang
+// marker: no unresolved AI threads, and either the latest bot review left zero
+// comments or every AI-authored thread from earlier findings has been resolved
+// (detectAIReview reports "pass").
 func isAIReviewClean(reviews []aiReviewNode, threads []aiReviewThread) bool {
-	if !latestAIReviewIsClean(reviews) {
+	if hasUnresolvedAIThreads(threads) {
 		return false
 	}
-	for _, t := range threads {
-		if !isAIReviewer(t.AuthorLogin) && t.AuthorType != "Bot" {
-			continue
-		}
-		if !t.IsResolved {
-			return false
-		}
+	if latestAIReviewIsClean(reviews) {
+		return true
 	}
-	return true
+	return detectAIReview(reviews, threads) == "pass" && allAIThreadsResolved(threads)
 }
 
 // allAIThreadsResolved returns true when at least one AI-authored thread exists
@@ -882,25 +979,51 @@ func allAIThreadsResolved(threads []aiReviewThread) bool {
 	return aiThreadCount > 0
 }
 
-// detectAIReview determines the AI review status by combining review state with
-// thread resolution. A review that left comments is only "pass" when positive
-// evidence exists that all AI-authored threads have been resolved.
-func detectAIReview(reviews []aiReviewNode, threads []aiReviewThread) string {
-	hasCleanPass, hasIssues, hasBotReview := classifyAIReviews(reviews)
+func hasUnresolvedAIThreads(threads []aiReviewThread) bool {
+	for _, t := range threads {
+		if (isAIReviewer(t.AuthorLogin) || t.AuthorType == "Bot") && !t.IsResolved {
+			return true
+		}
+	}
+	return false
+}
 
-	if !hasBotReview {
+// detectAIReview determines the AI review status from the latest bot review and
+// thread resolution. A later clean review supersedes older findings, but any
+// unresolved AI-authored thread still forces a failure.
+func detectAIReview(reviews []aiReviewNode, threads []aiReviewThread) string {
+	latest, ok := latestAIReview(reviews)
+	if !ok {
 		return "-"
 	}
-	if hasIssues {
+	if hasUnresolvedAIThreads(threads) {
+		return "fail"
+	}
+
+	switch strings.ToUpper(latest.State) {
+	case "APPROVED", "COMMENTED":
+		if latest.CommentCount == 0 || allAIThreadsResolved(threads) {
+			return "pass"
+		}
+		return "fail"
+	case "CHANGES_REQUESTED":
 		if allAIThreadsResolved(threads) {
 			return "pass"
 		}
 		return "fail"
+	default:
+		return "-"
 	}
-	if hasCleanPass {
-		return "pass"
+}
+
+func latestAIReview(reviews []aiReviewNode) (aiReviewNode, bool) {
+	for i := len(reviews) - 1; i >= 0; i-- {
+		review := reviews[i]
+		if isAIReviewer(review.AuthorLogin) || review.AuthorType == "Bot" {
+			return review, true
+		}
 	}
-	return "-"
+	return aiReviewNode{}, false
 }
 
 // extractReportedContexts collects the context/check names from statusCheckRollup items.
@@ -1088,7 +1211,7 @@ func fetchPRSupplementalBatch(owner, name string, prNumbers []int) (map[int]prSu
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`pr%d: pullRequest(number: %d) { number reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(first: 100) { nodes { state author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
+			`pr%d: pullRequest(number: %d) { number headRefOid comments(last: 100) { totalCount nodes { body createdAt author { login __typename } } } reviewThreads(last: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(last: 100) { totalCount nodes { state submittedAt commit { oid } author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
 			num, num,
 		))
 	}
@@ -1129,7 +1252,19 @@ func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, error) 
 // Returns the PR number, supplemental info, and whether parsing succeeded.
 func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool) {
 	var prData struct {
-		Number        int `json:"number"`
+		Number     int    `json:"number"`
+		HeadRefOID string `json:"headRefOid"`
+		Comments   struct {
+			TotalCount int `json:"totalCount"`
+			Nodes      []struct {
+				Body      string    `json:"body"`
+				CreatedAt time.Time `json:"createdAt"`
+				Author    struct {
+					Login    string `json:"login"`
+					Typename string `json:"__typename"`
+				} `json:"author"`
+			} `json:"nodes"`
+		} `json:"comments"`
 		ReviewThreads struct {
 			TotalCount int `json:"totalCount"`
 			Nodes      []struct {
@@ -1145,8 +1280,13 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			} `json:"nodes"`
 		} `json:"reviewThreads"`
 		Reviews struct {
-			Nodes []struct {
-				State  string `json:"state"`
+			TotalCount int `json:"totalCount"`
+			Nodes      []struct {
+				State       string    `json:"state"`
+				SubmittedAt time.Time `json:"submittedAt"`
+				Commit      struct {
+					OID string `json:"oid"`
+				} `json:"commit"`
 				Author struct {
 					Login    string `json:"login"`
 					Typename string `json:"__typename"`
@@ -1179,8 +1319,23 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			AuthorLogin:  r.Author.Login,
 			AuthorType:   r.Author.Typename,
 			CommentCount: r.Comments.TotalCount,
+			OccurredAt:   r.SubmittedAt,
+			CommitOID:    r.Commit.OID,
 		})
 	}
+	hasCurrentHeadCodexReview := false
+	for _, comment := range prData.Comments.Nodes {
+		if node, ok := codexReviewNode(aiReviewComment{
+			Body:        comment.Body,
+			AuthorLogin: comment.Author.Login,
+			AuthorType:  comment.Author.Typename,
+			OccurredAt:  comment.CreatedAt,
+		}, prData.HeadRefOID); ok {
+			aiNodes = append(aiNodes, node)
+			hasCurrentHeadCodexReview = true
+		}
+	}
+	sortAIReviewsChronologically(aiNodes)
 
 	var aiThreads []aiReviewThread
 	for _, t := range prData.ReviewThreads.Nodes {
@@ -1201,28 +1356,61 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		approverLogins = append(approverLogins, r.Author.Login)
 	}
 
+	commentsTruncated := prData.Comments.TotalCount > len(prData.Comments.Nodes)
+	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
+	reviewsTruncated := prData.Reviews.TotalCount > len(prData.Reviews.Nodes)
+	commentsIncomplete := commentsTruncated && !hasCurrentHeadCodexReview
+	aiReview, sflReview, aiClean := summarizeSupplementalReviews(
+		aiNodes,
+		aiThreads,
+		prData.HeadRefOID,
+		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsTruncated),
+		reviewsTruncated,
+	)
+
 	return prData.Number, prSupplementalInfo{
 		Threads: reviewThreadInfo{
 			Total:    prData.ReviewThreads.TotalCount,
 			Resolved: countResolvedThreads(aiThreads),
 		},
-		AIReview:  detectAIReview(aiNodes, aiThreads),
-		SFLReview: detectSFLReview(aiNodes),
-		AIClean:   isAIReviewClean(aiNodes, aiThreads),
+		AIReview:  aiReview,
+		SFLReview: sflReview,
+		AIClean:   aiClean,
 		Approvals: countUniqueApprovers(approverLogins),
 	}, true
 }
 
-func boolPtr(b bool) *bool { return &b }
-
-// aiCleanPtr returns a non-nil *bool (true) only when the AI review is clean.
-// When not clean, it returns nil so the omitempty JSON tag omits the field.
-func aiCleanPtr(reviews []aiReviewNode, threads []aiReviewThread) *bool {
-	if isAIReviewClean(reviews, threads) {
-		return boolPtr(true)
+func anyConnectionTruncated(truncated ...bool) bool {
+	for _, value := range truncated {
+		if value {
+			return true
+		}
 	}
-	return nil
+	return false
 }
+
+func summarizeSupplementalReviews(
+	aiNodes []aiReviewNode,
+	aiThreads []aiReviewThread,
+	headRefOID string,
+	aiIncomplete bool,
+	sflIncomplete bool,
+) (aiReview, sflReview string, aiClean bool) {
+	currentReviews := currentHeadReviewNodes(aiNodes, headRefOID)
+	aiReview = detectAIReview(currentReviews, aiThreads)
+	sflReview = detectSFLReview(currentReviews, headRefOID)
+	aiClean = isAIReviewClean(currentReviews, aiThreads)
+	if aiIncomplete {
+		aiReview = "?"
+		aiClean = false
+	}
+	if sflIncomplete {
+		sflReview = "?"
+	}
+	return
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 func trimTitle(title string, limit int) string {
 	title = strings.TrimSpace(title)

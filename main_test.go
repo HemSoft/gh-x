@@ -52,9 +52,10 @@ func TestBuildListArgsIncludesFilters(t *testing.T) {
 
 func TestDetectSFLReview(t *testing.T) {
 	tests := []struct {
-		name    string
-		reviews []aiReviewNode
-		want    string
+		name       string
+		reviews    []aiReviewNode
+		headRefOID string
+		want       string
 	}{
 		{name: "absent", want: "-"},
 		{name: "approved", reviews: []aiReviewNode{
@@ -63,6 +64,18 @@ func TestDetectSFLReview(t *testing.T) {
 		{name: "rest bot login", reviews: []aiReviewNode{
 			{State: "CHANGES_REQUESTED", AuthorLogin: "set-it-free-loop[bot]"},
 		}, want: "changes"},
+		{name: "sfl app bot login", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "sfl-app[bot]"},
+		}, want: "approved"},
+		{name: "stale sfl app review ignored", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "sfl-app[bot]", CommitOID: "old-head"},
+		}, headRefOID: "current-head", want: "-"},
+		{name: "current-head sfl app review accepted", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "sfl-app[bot]", CommitOID: "current-head"},
+		}, headRefOID: "current-head", want: "approved"},
+		{name: "sfl review without commit metadata ignored", reviews: []aiReviewNode{
+			{State: "APPROVED", AuthorLogin: "sfl-app[bot]"},
+		}, headRefOID: "current-head", want: "-"},
 		{name: "commented", reviews: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "set-it-free-loop"},
 		}, want: "commented"},
@@ -81,7 +94,7 @@ func TestDetectSFLReview(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := detectSFLReview(tc.reviews); got != tc.want {
+			if got := detectSFLReview(tc.reviews, tc.headRefOID); got != tc.want {
 				t.Fatalf("detectSFLReview() = %q, want %q", got, tc.want)
 			}
 		})
@@ -438,6 +451,11 @@ func TestDetectAIReview(t *testing.T) {
 		{name: "copilot no comments", nodes: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0},
 		}, want: "pass"},
+		{name: "clean review with unresolved AI thread", nodes: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", CommentCount: 0},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "coderabbitai[bot]", IsResolved: false},
+		}, want: "fail"},
 		{name: "copilot-pull-request-reviewer no comments", nodes: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", CommentCount: 0},
 		}, want: "pass"},
@@ -483,6 +501,10 @@ func TestDetectAIReview(t *testing.T) {
 			{State: "CHANGES_REQUESTED", AuthorLogin: "copilot[bot]", CommentCount: 1},
 		}, threads: []aiReviewThread{
 			{AuthorLogin: "copilot[bot]", IsResolved: true},
+		}, want: "pass"},
+		{name: "newer clean review supersedes older findings", nodes: []aiReviewNode{
+			{State: "CHANGES_REQUESTED", AuthorLogin: "copilot[bot]", CommentCount: 1},
+			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", CommentCount: 0},
 		}, want: "pass"},
 		{name: "dismissed bot review ignored", nodes: []aiReviewNode{
 			{State: "DISMISSED", AuthorLogin: "coderabbitai[bot]", CommentCount: 0},
@@ -578,6 +600,18 @@ func TestIsAIReviewClean(t *testing.T) {
 		{name: "latest bot review has comments after clean pass", reviews: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0},
 			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 2},
+		}, want: false},
+		{name: "findings addressed all AI threads resolved", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", CommentCount: 2},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", IsResolved: true},
+			{AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", IsResolved: true},
+		}, want: true},
+		{name: "findings with one unresolved thread", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", CommentCount: 2},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", IsResolved: true},
+			{AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", IsResolved: false},
 		}, want: false},
 		{name: "unresolved human thread ignored", reviews: []aiReviewNode{
 			{State: "APPROVED", AuthorLogin: "copilot[bot]", CommentCount: 0},
@@ -1495,6 +1529,242 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 	})
 
+	t.Run("current-head clean Codex comment counts as AI pass", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "682de6badb7404709e1183f4e8ed194c9ae6e34a",
+			"comments": {"nodes": [{
+				"body": "Codex Review: Didn't find any major issues. Nice work!\n\n**Reviewed commit:** 682de6badb",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"nodes": []},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		num, info, ok := parsePRSupplementalNode(raw)
+		if !ok || num != 47 {
+			t.Fatalf("expected PR 47, got number=%d ok=%v", num, ok)
+		}
+		if info.AIReview != "pass" || !info.AIClean {
+			t.Fatalf("expected clean AI pass, got review=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
+	t.Run("newer formal review overrides older clean Codex comment", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "682de6badb7404709e1183f4e8ed194c9ae6e34a",
+			"comments": {"nodes": [{
+				"body": "Codex Review: Didn't find any major issues. Nice work!\n\n**Reviewed commit:** 682de6badb",
+				"createdAt": "2026-07-18T20:00:00Z",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"nodes": [{
+				"state": "COMMENTED",
+				"submittedAt": "2026-07-18T21:00:00Z",
+				"commit": {"oid": "682de6badb7404709e1183f4e8ed194c9ae6e34a"},
+				"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
+				"comments": {"totalCount": 1}
+			}]},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIClean {
+			t.Fatal("expected newer formal review with findings to keep AIClean false")
+		}
+		if info.AIReview != "fail" {
+			t.Fatalf("expected newer formal review to set AIReview=fail, got %q", info.AIReview)
+		}
+	})
+
+	t.Run("newer clean Codex comment overrides older formal review", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "682de6badb7404709e1183f4e8ed194c9ae6e34a",
+			"comments": {"nodes": [{
+				"body": "Codex Review: Didn't find any major issues. Nice work!\n\n**Reviewed commit:** 682de6badb",
+				"createdAt": "2026-07-18T21:00:00Z",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"nodes": [{
+				"state": "COMMENTED",
+				"submittedAt": "2026-07-18T20:00:00Z",
+				"commit": {"oid": "682de6badb7404709e1183f4e8ed194c9ae6e34a"},
+				"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
+				"comments": {"totalCount": 1}
+			}]},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if !info.AIClean {
+			t.Fatal("expected newer clean Codex comment to set AIClean true")
+		}
+		if info.AIReview != "pass" {
+			t.Fatalf("expected newer Codex comment to set AIReview=pass, got %q", info.AIReview)
+		}
+	})
+
+	t.Run("stale formal AI review is ignored", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "current-head",
+			"comments": {"totalCount": 0, "nodes": []},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"totalCount": 1, "nodes": [{
+				"state": "APPROVED",
+				"commit": {"oid": "old-head"},
+				"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
+				"comments": {"totalCount": 0}
+			}]},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "-" || info.AIClean {
+			t.Fatalf("expected stale formal review to be ignored, got AI=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
+	t.Run("stale clean Codex comment is ignored", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "aaaaaaaaaabbbbbbbbbbccccccccccdddddddddd",
+			"comments": {"nodes": [{
+				"body": "Codex Review: Didn't find any major issues. Nice work!\n\n**Reviewed commit:** 682de6badb",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"nodes": []},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "-" || info.AIClean {
+			t.Fatalf("expected stale review to be ignored, got review=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
+	t.Run("current-head Codex findings count as AI failure", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "682de6badb7404709e1183f4e8ed194c9ae6e34a",
+			"comments": {"nodes": [{
+				"body": "Codex Review: Found an issue that should be addressed.\n\n**Reviewed commit:** 682de6badb",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"nodes": []},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "fail" || info.AIClean {
+			t.Fatalf("expected AI failure, got review=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
+	t.Run("truncated supplemental connections fail closed", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "current-head",
+			"comments": {
+				"totalCount": 101,
+				"nodes": [{
+					"body": "Codex Review: Didn't find any major issues. Reviewed commit: current-he",
+					"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+				}]
+			},
+			"reviewThreads": {"totalCount": 101, "nodes": []},
+			"reviews": {
+				"totalCount": 101,
+				"nodes": [{
+					"state": "APPROVED",
+					"commit": {"oid": "current-head"},
+					"author": {"login": "sfl-app", "__typename": "Bot"},
+					"comments": {"totalCount": 0}
+				}]
+			},
+			"approvedReviews": {"totalCount": 1, "nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "?" || info.SFLReview != "?" || info.AIClean {
+			t.Fatalf("expected truncated data to fail closed, got AI=%q SFL=%q clean=%v", info.AIReview, info.SFLReview, info.AIClean)
+		}
+	})
+
+	t.Run("truncated older conversation comments keep recent review evidence", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 47,
+			"headRefOid": "current-head",
+			"comments": {
+				"totalCount": 101,
+				"nodes": [{
+					"body": "Codex Review: Didn't find any major issues. Reviewed commit: current-he",
+					"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+				}]
+			},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"totalCount": 0, "nodes": []},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "pass" || !info.AIClean {
+			t.Fatalf("expected recent clean review to survive old comment truncation, got AI=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
+	t.Run("truncated comments without current-head Codex evidence fail closed", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 48,
+			"headRefOid": "current-head",
+			"comments": {"totalCount": 101, "nodes": []},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"totalCount": 1, "nodes": [{
+				"state": "APPROVED",
+				"commit": {"oid": "current-head"},
+				"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
+				"comments": {"totalCount": 0}
+			}]},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "?" || info.AIClean {
+			t.Fatalf("expected missing current-head Codex evidence to fail closed, got AI=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
 	t.Run("invalid JSON", func(t *testing.T) {
 		_, _, ok := parsePRSupplementalNode([]byte(`{invalid`))
 		if ok {
@@ -1570,6 +1840,92 @@ func TestClassifyCheckItem(t *testing.T) {
 	}
 }
 
+func TestNormalizeCheckStateUsesLatestNamedCheckRun(t *testing.T) {
+	oldRun := time.Date(2026, 8, 3, 6, 47, 0, 0, time.UTC)
+	newRun := time.Date(2026, 8, 3, 19, 7, 0, 0, time.UTC)
+	checkRun := func(workflow, conclusion, status string, startedAt time.Time) checkItem {
+		return checkItem{
+			Typename:     "CheckRun",
+			Name:         "agent",
+			WorkflowName: workflow,
+			Status:       status,
+			Conclusion:   conclusion,
+			StartedAt:    startedAt,
+		}
+	}
+
+	tests := []struct {
+		name  string
+		items []checkItem
+		want  string
+	}{
+		{
+			name: "new success replaces old failure",
+			items: []checkItem{
+				checkRun("SFL Review", "FAILURE", "COMPLETED", oldRun),
+				checkRun("SFL Review", "SUCCESS", "COMPLETED", newRun),
+			},
+			want: "pass",
+		},
+		{
+			name: "api order does not matter",
+			items: []checkItem{
+				checkRun("SFL Review", "SUCCESS", "COMPLETED", newRun),
+				checkRun("SFL Review", "FAILURE", "COMPLETED", oldRun),
+			},
+			want: "pass",
+		},
+		{
+			name: "new failure replaces old success",
+			items: []checkItem{
+				checkRun("SFL Review", "SUCCESS", "COMPLETED", oldRun),
+				checkRun("SFL Review", "FAILURE", "COMPLETED", newRun),
+			},
+			want: "fail",
+		},
+		{
+			name: "new pending replaces old success",
+			items: []checkItem{
+				checkRun("SFL Review", "SUCCESS", "COMPLETED", oldRun),
+				checkRun("SFL Review", "", "IN_PROGRESS", newRun),
+			},
+			want: "pending",
+		},
+		{
+			name: "same job name in different workflows remains distinct",
+			items: []checkItem{
+				checkRun("SFL Review", "SUCCESS", "COMPLETED", newRun),
+				checkRun("Other Workflow", "FAILURE", "COMPLETED", oldRun),
+			},
+			want: "fail",
+		},
+		{
+			name: "new status context replaces old state without timestamps",
+			items: []checkItem{
+				{Typename: "StatusContext", Context: "deploy", State: "FAILURE"},
+				{Typename: "StatusContext", Context: "deploy", State: "SUCCESS"},
+			},
+			want: "pass",
+		},
+		{
+			name: "check run without identity remains distinct",
+			items: []checkItem{
+				checkRun("CI", "SUCCESS", "COMPLETED", newRun),
+				{Typename: "CheckRun", Status: "COMPLETED", Conclusion: "FAILURE"},
+			},
+			want: "fail",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeCheckState(tc.items); got != tc.want {
+				t.Fatalf("normalizeCheckState() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCountResolvedThreads(t *testing.T) {
 	threads := []aiReviewThread{
 		{IsResolved: true},
@@ -1591,29 +1947,6 @@ func TestCountUniqueApprovers(t *testing.T) {
 	}
 	if got := countUniqueApprovers(nil); got != 0 {
 		t.Fatalf("expected 0 for nil, got %d", got)
-	}
-}
-
-func TestClassifyAIReviews(t *testing.T) {
-	tests := []struct {
-		name                                 string
-		reviews                              []aiReviewNode
-		wantCleanPass, wantIssues, wantFound bool
-	}{
-		{"no bot reviews", []aiReviewNode{{State: "APPROVED", AuthorLogin: "human"}}, false, false, false},
-		{"bot approved", []aiReviewNode{{State: "APPROVED", AuthorLogin: "copilot[bot]", CommentCount: 0}}, true, false, true},
-		{"bot approved with comments", []aiReviewNode{{State: "APPROVED", AuthorLogin: "copilot[bot]", CommentCount: 3}}, false, true, true},
-		{"bot changes requested", []aiReviewNode{{State: "CHANGES_REQUESTED", AuthorLogin: "copilot[bot]"}}, false, true, true},
-		{"bot commented with 0 comments", []aiReviewNode{{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0}}, true, false, true},
-		{"bot commented with comments", []aiReviewNode{{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 3}}, false, true, true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			a, i, f := classifyAIReviews(tc.reviews)
-			if a != tc.wantCleanPass || i != tc.wantIssues || f != tc.wantFound {
-				t.Fatalf("got (%v,%v,%v) want (%v,%v,%v)", a, i, f, tc.wantCleanPass, tc.wantIssues, tc.wantFound)
-			}
-		})
 	}
 }
 
