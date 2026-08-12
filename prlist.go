@@ -1323,6 +1323,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			CommitOID:    r.Commit.OID,
 		})
 	}
+	hasCurrentHeadCodexReview := false
 	for _, comment := range prData.Comments.Nodes {
 		if node, ok := codexReviewNode(aiReviewComment{
 			Body:        comment.Body,
@@ -1331,6 +1332,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			OccurredAt:  comment.CreatedAt,
 		}, prData.HeadRefOID); ok {
 			aiNodes = append(aiNodes, node)
+			hasCurrentHeadCodexReview = true
 		}
 	}
 	sortAIReviewsChronologically(aiNodes)
@@ -1354,13 +1356,15 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		approverLogins = append(approverLogins, r.Author.Login)
 	}
 
+	commentsTruncated := prData.Comments.TotalCount > len(prData.Comments.Nodes)
 	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
 	reviewsTruncated := prData.Reviews.TotalCount > len(prData.Reviews.Nodes)
+	commentsIncomplete := commentsTruncated && !hasCurrentHeadCodexReview
 	aiReview, sflReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
 		aiThreads,
 		prData.HeadRefOID,
-		anyConnectionTruncated(threadsTruncated, reviewsTruncated),
+		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsTruncated),
 		reviewsTruncated,
 	)
 

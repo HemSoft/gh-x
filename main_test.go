@@ -1741,6 +1741,30 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 	})
 
+	t.Run("truncated comments without current-head Codex evidence fail closed", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 48,
+			"headRefOid": "current-head",
+			"comments": {"totalCount": 101, "nodes": []},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"totalCount": 1, "nodes": [{
+				"state": "APPROVED",
+				"commit": {"oid": "current-head"},
+				"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
+				"comments": {"totalCount": 0}
+			}]},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "?" || info.AIClean {
+			t.Fatalf("expected missing current-head Codex evidence to fail closed, got AI=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
 	t.Run("invalid JSON", func(t *testing.T) {
 		_, _, ok := parsePRSupplementalNode([]byte(`{invalid`))
 		if ok {
