@@ -44,13 +44,14 @@ func TestChangeStatusText(t *testing.T) {
 
 func TestParseStatusBranchRefs(t *testing.T) {
 	output := strings.Join([]string{
-		"refs/heads/main\tmain\torigin/main\t\t\tC:/repo",
-		"refs/heads/old\told\torigin/old\t[gone]\t\t",
-		"refs/remotes/origin/HEAD\torigin\t\t\trefs/remotes/origin/main\t",
-		"refs/remotes/origin/main\torigin/main\t\t\t\t",
+		"refs/heads/main\tmain\torigin/main\t\t",
+		"refs/heads/old\told\torigin/old\t[gone]\t",
+		"refs/remotes/origin/HEAD\torigin\t\t\trefs/remotes/origin/main",
+		"refs/remotes/origin/main\torigin/main\t\t\t",
 	}, "\n") + "\n"
 
 	got := parseStatusBranchRefs(output)
+	attachStatusWorktreePaths(&got, []statusWorktree{{Path: "C:/repo", Branch: "main"}})
 	if got.LocalCount != 2 || got.RemoteCount != 1 || got.DanglingCount != 1 {
 		t.Fatalf("unexpected branch inventory: %#v", got)
 	}
@@ -59,6 +60,21 @@ func TestParseStatusBranchRefs(t *testing.T) {
 	}
 	if defaultBranch := resolveStatusDefaultBranch(got); defaultBranch != "main" {
 		t.Fatalf("default branch = %q, want main", defaultBranch)
+	}
+}
+
+func TestFetchHostedDefaultBranch(t *testing.T) {
+	saved := ghExecFunc
+	defer func() { ghExecFunc = saved }()
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		if got := strings.Join(args, " "); got != "repo view --json defaultBranchRef --jq .defaultBranchRef.name" {
+			t.Fatalf("unexpected arguments: %s", got)
+		}
+		return *bytes.NewBufferString("trunk\n"), bytes.Buffer{}, nil
+	}
+
+	if got := fetchHostedDefaultBranch(); got != "trunk" {
+		t.Fatalf("hosted default branch = %q, want trunk", got)
 	}
 }
 
@@ -211,11 +227,11 @@ func TestFetchStatusDashboard(t *testing.T) {
 	}
 
 	branchOutput := strings.Join([]string{
-		"refs/heads/feature/status\tfeature/status\torigin/main\t\t\tC:/repo.worktrees/issue-7",
-		"refs/heads/main\tmain\torigin/main\t\t\tC:/repo",
-		"refs/heads/old\told\torigin/old\t[gone]\t\tC:/repo.worktrees/old",
-		"refs/remotes/origin/HEAD\torigin\t\t\trefs/remotes/origin/main\t",
-		"refs/remotes/origin/main\torigin/main\t\t\t\t",
+		"refs/heads/feature/status\tfeature/status\torigin/main\t\t",
+		"refs/heads/main\tmain\torigin/main\t\t",
+		"refs/heads/old\told\torigin/old\t[gone]\t",
+		"refs/remotes/origin/HEAD\torigin\t\t\trefs/remotes/origin/main",
+		"refs/remotes/origin/main\torigin/main\t\t\t",
 	}, "\n") + "\n"
 	worktreeOutput := strings.Join([]string{
 		"worktree C:/repo", "HEAD a", "branch refs/heads/main", "",
@@ -272,6 +288,44 @@ func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
 	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
 		return pullRequestListResult{Entries: make([]pullRequest, statusListLimit)}, nil
 	}
+	installStatusDashboardGitFixture()
+
+	dashboard, err := fetchStatusDashboard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statusCleanupCandidateCount(dashboard.Worktrees) != 0 {
+		t.Fatal("limited PR rows must suppress cleanup candidates")
+	}
+}
+
+func TestFetchStatusDashboardKeepsLocalHealthWhenGitHubFails(t *testing.T) {
+	defer saveStatusFuncs()()
+	statusRepoLabelFunc = func(string) string { return "owner/repo" }
+	statusIssueListFunc = func(issueListOptions, time.Time) ([]displayIssue, error) {
+		return nil, errors.New("issues offline")
+	}
+	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
+		return pullRequestListResult{}, errors.New("pull requests offline")
+	}
+	installStatusDashboardGitFixture()
+
+	dashboard, err := fetchStatusDashboard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.DefaultBranch != "main" || dashboard.Branches.LocalCount != 2 || len(dashboard.Worktrees) != 2 {
+		t.Fatalf("local health was not preserved: %#v", dashboard)
+	}
+	if dashboard.IssuesErr == nil || dashboard.PullRequestsErr == nil {
+		t.Fatalf("GitHub section errors were not preserved: %#v", dashboard)
+	}
+	if statusCleanupCandidateCount(dashboard.Worktrees) != 0 {
+		t.Fatal("unavailable PR data must suppress cleanup candidates")
+	}
+}
+
+func installStatusDashboardGitFixture() {
 	statusPathExistsFunc = func(string) bool { return true }
 	statusCommandFunc = func(name string, args ...string) (string, error) {
 		key := name + " " + strings.Join(args, " ")
@@ -279,7 +333,7 @@ func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
 		case "git status --porcelain=v2 --branch":
 			return "# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n", nil
 		case "git for-each-ref --format=" + statusBranchFormat + " refs/heads refs/remotes":
-			return "refs/heads/main\tmain\torigin/main\t\t\tC:/repo\nrefs/heads/old\told\torigin/old\t\t\tC:/old\nrefs/remotes/origin/HEAD\torigin\t\t\trefs/remotes/origin/main\t\n", nil
+			return "refs/heads/main\tmain\torigin/main\t\t\nrefs/heads/old\told\torigin/old\t\t\nrefs/remotes/origin/HEAD\torigin\t\t\trefs/remotes/origin/main\n", nil
 		case "git worktree list --porcelain -z":
 			return strings.Join([]string{"worktree C:/repo", "HEAD a", "branch refs/heads/main", "", "worktree C:/old", "HEAD b", "branch refs/heads/old", ""}, "\x00"), nil
 		case "git rev-parse --show-toplevel":
@@ -293,14 +347,6 @@ func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
 		default:
 			return "", fmt.Errorf("unexpected command: %s", key)
 		}
-	}
-
-	dashboard, err := fetchStatusDashboard()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if statusCleanupCandidateCount(dashboard.Worktrees) != 0 {
-		t.Fatal("limited PR rows must suppress cleanup candidates")
 	}
 }
 
@@ -418,6 +464,7 @@ func saveStatusFuncs() func() {
 	savedIssues := statusIssueListFunc
 	savedPullRequests := statusPullRequestListFunc
 	savedRepoLabel := statusRepoLabelFunc
+	savedDefaultBranch := statusDefaultBranchFunc
 	savedNow := statusNowFunc
 	savedPathExists := statusPathExistsFunc
 	return func() {
@@ -426,6 +473,7 @@ func saveStatusFuncs() func() {
 		statusIssueListFunc = savedIssues
 		statusPullRequestListFunc = savedPullRequests
 		statusRepoLabelFunc = savedRepoLabel
+		statusDefaultBranchFunc = savedDefaultBranch
 		statusNowFunc = savedNow
 		statusPathExistsFunc = savedPathExists
 	}

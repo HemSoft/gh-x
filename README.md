@@ -42,9 +42,12 @@ gh x version            # show version and check for updates (also: --version, -
 
 `gh x status` starts with a repository health header for the resolved default
 branch and current worktree. It counts local, remote, and dangling branches,
-then reports linked worktrees and conservative cleanup candidates. A worktree is
-only suggested when it is not current, primary, locked, dirty, the default
-branch, unmerged, or associated with an open pull request.
+then reports linked worktrees and conservative cleanup candidates. A linked
+worktree is suggested only when it is unlocked, clean, merged into the default
+branch, and has no open pull request. Git-prunable records must also have a
+branch or detached commit known to be merged. Current, primary, locked, and
+default-branch worktrees are never suggested. Suggestions are informational;
+the command never deletes or prunes a worktree.
 
 Open issues and enriched open pull requests appear in separate tables below the
 header. Local Git status still renders when GitHub data is unavailable.

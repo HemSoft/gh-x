@@ -83,7 +83,7 @@ type statusDashboard struct {
 
 const (
 	statusListLimit    = 30
-	statusBranchFormat = "%(refname)%09%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(symref)%09%(worktreepath)"
+	statusBranchFormat = "%(refname)%09%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(symref)"
 )
 
 func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
@@ -128,6 +128,7 @@ var (
 	statusIssueListFunc       = fetchDisplayIssues
 	statusPullRequestListFunc = fetchPullRequestList
 	statusRepoLabelFunc       = resolveRepoLabel
+	statusDefaultBranchFunc   = fetchHostedDefaultBranch
 	statusNowFunc             = func() time.Time { return time.Now().UTC() }
 	statusPathExistsFunc      = statusPathExists
 )
@@ -149,6 +150,7 @@ func fetchStatusDashboard() (statusDashboard, error) {
 		return statusDashboard{}, fmt.Errorf("git worktree list: %w", err)
 	}
 	worktrees := parseStatusWorktrees(worktreeOutput)
+	attachStatusWorktreePaths(&branches, worktrees)
 
 	root, err := statusCommandFunc("git", "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -156,6 +158,9 @@ func fetchStatusDashboard() (statusDashboard, error) {
 	}
 	currentRoot := strings.TrimSpace(root)
 	defaultBranch := resolveStatusDefaultBranch(branches)
+	if defaultBranch == "" {
+		defaultBranch = statusDefaultBranchFunc()
+	}
 
 	dashboard := statusDashboard{
 		Repository:    statusRepoLabelFunc(""),
@@ -170,6 +175,8 @@ func fetchStatusDashboard() (statusDashboard, error) {
 	dashboard.Issues, dashboard.IssuesErr = statusIssueListFunc(issueOptions, now)
 
 	prOptions := defaultListOptions()
+	prOptions.limit = statusListLimit
+	prOptions.state = "open"
 	prResult, prErr := statusPullRequestListFunc(prOptions, now)
 	dashboard.PullRequestsErr = prErr
 	if prErr == nil {
@@ -205,21 +212,34 @@ func parseStatusBranchRefs(output string) statusBranchInventory {
 			continue
 		}
 		fields := strings.Split(strings.TrimRight(line, "\r"), "\t")
-		if len(fields) != 6 {
+		if len(fields) != 5 && len(fields) != 6 {
 			continue
 		}
 		ref := statusBranchRef{
-			FullName:     fields[0],
-			ShortName:    fields[1],
-			Upstream:     fields[2],
-			Track:        fields[3],
-			Symref:       fields[4],
-			WorktreePath: fields[5],
+			FullName:  fields[0],
+			ShortName: fields[1],
+			Upstream:  fields[2],
+			Track:     fields[3],
+			Symref:    fields[4],
+		}
+		if len(fields) == 6 {
+			ref.WorktreePath = fields[5]
 		}
 		inventory.Refs = append(inventory.Refs, ref)
 		classifyStatusBranchRef(&inventory, ref)
 	}
 	return inventory
+}
+
+func attachStatusWorktreePaths(inventory *statusBranchInventory, worktrees []statusWorktree) {
+	for _, worktree := range worktrees {
+		ref, ok := inventory.Local[worktree.Branch]
+		if !ok {
+			continue
+		}
+		ref.WorktreePath = worktree.Path
+		inventory.Local[worktree.Branch] = ref
+	}
 }
 
 func classifyStatusBranchRef(inventory *statusBranchInventory, ref statusBranchRef) {
@@ -255,6 +275,14 @@ func branchNameFromRemoteHEAD(ref statusBranchRef) string {
 		return strings.TrimPrefix(ref.Symref, remotePrefix)
 	}
 	return ""
+}
+
+func fetchHostedDefaultBranch() string {
+	stdout, _, err := ghExecFunc("repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(stdout.String())
 }
 
 func parseStatusWorktrees(output string) []statusWorktree {
