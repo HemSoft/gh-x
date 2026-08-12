@@ -33,9 +33,24 @@ gh x pr me [flags]      # all your open PRs (authored + assigned) across an org
 gh x pr atm [flags]     # org-wide PRs needing your attention
 gh x pr review [number] # read-only agentic PR review
 gh x pr changelog       # show release notes for recent versions
+gh x status             # repository, branch, worktree, issue, and PR health
 gh x run list [flags]   # workflow runs with clickable IDs
 gh x version            # show version and check for updates (also: --version, -v)
 ```
+
+## What `gh x status` adds
+
+`gh x status` starts with a repository health header for the resolved default
+branch and current worktree. It counts local, remote, and dangling branches,
+then reports linked worktrees and conservative cleanup candidates. A linked
+worktree is suggested only when it is unlocked, clean, merged into the default
+branch, and has no open pull request. Git-prunable records must also have a
+branch or detached commit known to be merged. Current, primary, locked, and
+default-branch worktrees are never suggested. Suggestions are informational;
+the command never deletes or prunes a worktree.
+
+Open issues and enriched open pull requests appear in separate tables below the
+header. Local Git status still renders when GitHub data is unavailable.
 
 ## What `gh x pr list` adds
 

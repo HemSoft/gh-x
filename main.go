@@ -540,7 +540,7 @@ Usage:
   gh x <command> [flags]
 
 Available Commands:
-  status     Show compact git and GitHub repository status
+  status     Show repository health, issues, and pull requests
   changelog  Show release notes for recent versions
   pr         Pull request commands (list, me, atm, review, changelog)
   issue      Issue commands (list)
