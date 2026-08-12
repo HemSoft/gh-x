@@ -79,7 +79,7 @@ func TestParseStatusWorktrees(t *testing.T) {
 	if !got[1].Locked || got[1].Path != "C:/repo worktrees/locked" {
 		t.Fatalf("unexpected locked worktree: %#v", got[1])
 	}
-	if !got[2].Prunable || !strings.Contains(got[2].PrunableReason, "non-existent") {
+	if !got[2].Prunable || !got[2].Detached || got[2].Head != "fed" || !strings.Contains(got[2].PrunableReason, "non-existent") {
 		t.Fatalf("unexpected prunable worktree: %#v", got[2])
 	}
 }
@@ -109,6 +109,8 @@ func TestStatusWorktreeCandidateReason(t *testing.T) {
 		{name: "Git prunable with open PR", mutate: func(w *statusWorktree) { w.Prunable = true; w.Exists = false }, openHeads: map[string]bool{"feature": true}, mergedKnown: true, prsKnown: true},
 		{name: "Git prunable with PR state unavailable", mutate: func(w *statusWorktree) { w.Prunable = true; w.Exists = false }, mergedKnown: true},
 		{name: "locked Git prunable", mutate: func(w *statusWorktree) { w.Prunable = true; w.Locked = true }},
+		{name: "merged detached Git prunable", mutate: func(w *statusWorktree) { w.Prunable = true; w.Detached = true; w.DetachedMerged = true; w.Branch = "" }, want: true},
+		{name: "unmerged detached Git prunable", mutate: func(w *statusWorktree) { w.Prunable = true; w.Detached = true; w.Branch = "" }},
 	}
 
 	for _, tc := range tests {
@@ -122,6 +124,22 @@ func TestStatusWorktreeCandidateReason(t *testing.T) {
 				t.Fatalf("candidate = %v (%q), want %v", got, reason, tc.want)
 			}
 		})
+	}
+}
+
+func TestAssessDetachedWorktreeMerge(t *testing.T) {
+	defer saveStatusFuncs()()
+	statusCommandFunc = func(name string, args ...string) (string, error) {
+		if got := name + " " + strings.Join(args, " "); got != "git merge-base --is-ancestor abc refs/heads/main" {
+			return "", fmt.Errorf("unexpected command: %s", got)
+		}
+		return "", nil
+	}
+
+	worktree := statusWorktree{Head: "abc", Detached: true, Prunable: true}
+	assessDetachedWorktreeMerge(&worktree, "main")
+	if !worktree.DetachedMerged {
+		t.Fatal("expected detached HEAD merged into main")
 	}
 }
 
@@ -244,6 +262,45 @@ func TestFetchStatusDashboard(t *testing.T) {
 	}
 	if got.Worktrees[1].CleanupCandidate {
 		t.Fatal("current feature worktree must never be a cleanup candidate")
+	}
+}
+
+func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
+	defer saveStatusFuncs()()
+	statusRepoLabelFunc = func(string) string { return "owner/repo" }
+	statusIssueListFunc = func(issueListOptions, time.Time) ([]displayIssue, error) { return nil, nil }
+	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
+		return pullRequestListResult{Entries: make([]pullRequest, statusListLimit)}, nil
+	}
+	statusPathExistsFunc = func(string) bool { return true }
+	statusCommandFunc = func(name string, args ...string) (string, error) {
+		key := name + " " + strings.Join(args, " ")
+		switch key {
+		case "git status --porcelain=v2 --branch":
+			return "# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n", nil
+		case "git for-each-ref --format=" + statusBranchFormat + " refs/heads refs/remotes":
+			return "refs/heads/main\tmain\torigin/main\t\t\tC:/repo\nrefs/heads/old\told\torigin/old\t\t\tC:/old\nrefs/remotes/origin/HEAD\torigin\t\t\trefs/remotes/origin/main\t\n", nil
+		case "git worktree list --porcelain -z":
+			return strings.Join([]string{"worktree C:/repo", "HEAD a", "branch refs/heads/main", "", "worktree C:/old", "HEAD b", "branch refs/heads/old", ""}, "\x00"), nil
+		case "git rev-parse --show-toplevel":
+			return "C:/repo\n", nil
+		case "git -C C:/repo status --porcelain=v2 --branch":
+			return "# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n", nil
+		case "git for-each-ref --merged=refs/heads/main --format=%(refname:short) refs/heads":
+			return "main\nold\n", nil
+		case "git -C C:/old status --porcelain":
+			return "", nil
+		default:
+			return "", fmt.Errorf("unexpected command: %s", key)
+		}
+	}
+
+	dashboard, err := fetchStatusDashboard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statusCleanupCandidateCount(dashboard.Worktrees) != 0 {
+		t.Fatal("limited PR rows must suppress cleanup candidates")
 	}
 }
 

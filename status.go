@@ -50,7 +50,10 @@ type statusBranchInventory struct {
 
 type statusWorktree struct {
 	Path             string
+	Head             string
 	Branch           string
+	Detached         bool
+	DetachedMerged   bool
 	Locked           bool
 	Prunable         bool
 	PrunableReason   string
@@ -175,7 +178,8 @@ func fetchStatusDashboard() (statusDashboard, error) {
 
 	merged, mergedKnown := fetchMergedStatusBranches(defaultBranch)
 	openHeads := openPullRequestHeads(prResult.Entries)
-	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, defaultBranch, merged, openHeads, mergedKnown, prErr == nil)
+	pullRequestsKnown := prErr == nil && len(prResult.Entries) < prOptions.limit
+	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, defaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
 	return dashboard, nil
 }
 
@@ -287,8 +291,12 @@ func applyStatusWorktreeField(worktree *statusWorktree, key, value string) bool 
 	case "worktree":
 		worktree.Path = value
 		return true
+	case "HEAD":
+		worktree.Head = value
 	case "branch":
 		worktree.Branch = strings.TrimPrefix(value, "refs/heads/")
+	case "detached":
+		worktree.Detached = true
 	case "locked":
 		worktree.Locked = true
 	case "prunable":
@@ -361,10 +369,19 @@ func assessStatusWorktrees(worktrees []statusWorktree, currentRoot, defaultBranc
 		worktree := &worktrees[i]
 		worktree.Current = sameStatusPath(worktree.Path, currentRoot)
 		assessStatusWorktreeCleanliness(worktree, defaultBranch)
+		assessDetachedWorktreeMerge(worktree, defaultBranch)
 		worktree.CleanupReason = statusWorktreeCandidateReason(*worktree, defaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
 		worktree.CleanupCandidate = worktree.CleanupReason != ""
 	}
 	return worktrees
+}
+
+func assessDetachedWorktreeMerge(worktree *statusWorktree, defaultBranch string) {
+	if !worktree.Prunable || !worktree.Detached || worktree.Head == "" || defaultBranch == "" {
+		return
+	}
+	_, err := statusCommandFunc("git", "merge-base", "--is-ancestor", worktree.Head, "refs/heads/"+defaultBranch)
+	worktree.DetachedMerged = err == nil
 }
 
 func assessStatusWorktreeCleanliness(worktree *statusWorktree, defaultBranch string) {
@@ -388,7 +405,10 @@ func statusWorktreeCandidateReason(worktree statusWorktree, defaultBranch string
 		return ""
 	}
 	if worktree.Prunable {
-		if worktree.Branch != "" && !statusBranchSafeForCleanup(worktree.Branch, merged, openHeads, mergedKnown, pullRequestsKnown) {
+		if worktree.Detached && !worktree.DetachedMerged {
+			return ""
+		}
+		if !worktree.Detached && !statusBranchSafeForCleanup(worktree.Branch, merged, openHeads, mergedKnown, pullRequestsKnown) {
 			return ""
 		}
 		if worktree.PrunableReason != "" {
