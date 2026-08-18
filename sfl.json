@@ -1,13 +1,15 @@
 {
-  "version": "2.0.0",
-  "deployedAt": "2026-08-03T18:53:04Z",
+  "version": "2.1.0-rc.13",
+  "deployedAt": "2026-08-18T20:42:14Z",
   "tier": "review",
   "source": "HemSoft/set-it-free-loop",
-  "sourceSha": "2fa3dd4cf999c7dc1bafce641a9e7ca41764758a",
+  "sourceSha": "25be595c148a27a195178a4ec9d73225ea3924cd",
   "components": [
     "governance",
     "labels",
-    "sfl-pr-review"
+    "sfl-pr-review",
+    "sfl-pr-review-auto",
+    "sfl-pr-review-recovery"
   ],
   "enginePolicy": {
     "defaultProfile": "codex-gpt-55-high",
