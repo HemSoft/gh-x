@@ -150,7 +150,7 @@ func TestPreserveWatchAuxiliaryFieldsOnPartialRefresh(t *testing.T) {
 		SFLReview: "?",
 	}}
 
-	got := preserveWatchAuxiliaryFields(previous, current, true, true)
+	got := preserveWatchAuxiliaryFields(previous, current, true, map[int]bool{1: true})
 	if got[0].Checks != "pending" || got[0].Comments != "2/4" || got[0].AIReview != "pass" || got[0].SFLReview != "approved" || got[0].Approvals != 3 || got[0].AIClean == nil || !*got[0].AIClean {
 		t.Fatalf("expected prior auxiliary values to survive partial refresh, got %#v", got[0])
 	}
@@ -163,6 +163,12 @@ func TestAuxiliaryRefreshErrorIdentifiesPartialFailures(t *testing.T) {
 	got := auxiliaryRefreshError(true, true)
 	if got == nil || !strings.Contains(got.Error(), "supplemental pull request data") || !strings.Contains(got.Error(), "required check rules") {
 		t.Fatalf("expected both partial refresh failures, got %v", got)
+	}
+}
+
+func TestParseRequiredCheckRulesReportsMalformedData(t *testing.T) {
+	if _, ok := parseRequiredCheckRulesResult([]byte("{")); ok {
+		t.Fatal("expected malformed required-check rules to be reported as a failure")
 	}
 }
 

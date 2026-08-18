@@ -274,7 +274,7 @@ func applyWatchRefreshResult(state *watchState, options listOptions, refresh wat
 		state.rows,
 		refresh.result.Rendered,
 		refresh.result.SupplementalFailed,
-		refresh.result.RequiredChecksFailed,
+		refresh.result.FailedRequiredCheckPRs,
 	)
 	state.rows, state.changes = reconcileWatchRows(state.rows, current)
 	state.lastRefresh = refresh.now
@@ -289,8 +289,8 @@ func applyWatchRefreshResult(state *watchState, options listOptions, refresh wat
 	state.backoff = options.interval
 }
 
-func preserveWatchAuxiliaryFields(previous, current []displayPullRequest, supplementalFailed, requiredChecksFailed bool) []displayPullRequest {
-	if !supplementalFailed && !requiredChecksFailed {
+func preserveWatchAuxiliaryFields(previous, current []displayPullRequest, supplementalFailed bool, failedRequiredCheckPRs map[int]bool) []displayPullRequest {
+	if !supplementalFailed && len(failedRequiredCheckPRs) == 0 {
 		return current
 	}
 	previousByNumber := make(map[int]displayPullRequest, len(previous))
@@ -309,7 +309,7 @@ func preserveWatchAuxiliaryFields(previous, current []displayPullRequest, supple
 			current[index].SFLReview = before.SFLReview
 			current[index].Approvals = before.Approvals
 		}
-		if requiredChecksFailed && before.checksDowngraded {
+		if failedRequiredCheckPRs[current[index].Number] && before.checksDowngraded {
 			current[index].Checks = before.Checks
 			current[index].checksDowngraded = true
 		}
