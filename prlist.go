@@ -1135,10 +1135,18 @@ func parseRequiredCheckRulesResult(data []byte) (map[string]bool, bool) {
 			return nil, false
 		}
 	}
+	if _, err := decodeRequiredCheckRules(data); err != nil {
+		return nil, false
+	}
 	return parseRequiredCheckRules(data), true
 }
 
 func parseRequiredCheckRules(data []byte) map[string]bool {
+	contexts, _ := decodeRequiredCheckRules(data)
+	return contexts
+}
+
+func decodeRequiredCheckRules(data []byte) (map[string]bool, error) {
 	var rules []struct {
 		Type       string `json:"type"`
 		Parameters struct {
@@ -1148,7 +1156,7 @@ func parseRequiredCheckRules(data []byte) map[string]bool {
 		} `json:"parameters"`
 	}
 	if err := json.Unmarshal(data, &rules); err != nil {
-		return nil
+		return nil, err
 	}
 	contexts := make(map[string]bool)
 	for _, rule := range rules {
@@ -1161,9 +1169,9 @@ func parseRequiredCheckRules(data []byte) map[string]bool {
 		}
 	}
 	if len(contexts) == 0 {
-		return nil
+		return nil, nil
 	}
-	return contexts
+	return contexts, nil
 }
 
 func resolveRepo(repoOverride string) (string, string, error) {
