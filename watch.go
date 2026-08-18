@@ -261,7 +261,7 @@ func applyWatchRefreshResult(state *watchState, options listOptions, refresh wat
 		state.refreshErr = refresh.err
 		state.changes = nil
 		state.nextDelay = state.backoff
-		state.backoff = nextWatchBackoff(state.backoff)
+		state.backoff = nextWatchBackoff(state.backoff, options.interval)
 		return
 	}
 	state.rows, state.changes = reconcileWatchRows(state.rows, refresh.result.Rendered)
@@ -271,10 +271,14 @@ func applyWatchRefreshResult(state *watchState, options listOptions, refresh wat
 	state.backoff = options.interval
 }
 
-func nextWatchBackoff(current time.Duration) time.Duration {
+func nextWatchBackoff(current, minimum time.Duration) time.Duration {
 	next := current * 2
-	if next > maximumWatchBackoff {
-		return maximumWatchBackoff
+	maximum := maximumWatchBackoff
+	if minimum > maximum {
+		maximum = minimum
+	}
+	if next > maximum {
+		return maximum
 	}
 	return next
 }

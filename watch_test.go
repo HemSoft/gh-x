@@ -137,11 +137,14 @@ func TestSummarizeWatchChangesLimitsFooter(t *testing.T) {
 }
 
 func TestNextWatchBackoffCaps(t *testing.T) {
-	if got := nextWatchBackoff(30 * time.Second); got != time.Minute {
+	if got := nextWatchBackoff(30*time.Second, 30*time.Second); got != time.Minute {
 		t.Fatalf("expected one doubling, got %s", got)
 	}
-	if got := nextWatchBackoff(maximumWatchBackoff); got != maximumWatchBackoff {
+	if got := nextWatchBackoff(maximumWatchBackoff, 30*time.Second); got != maximumWatchBackoff {
 		t.Fatalf("expected cap to remain %s, got %s", maximumWatchBackoff, got)
+	}
+	if got := nextWatchBackoff(maximumWatchBackoff, 10*time.Minute); got != 10*time.Minute {
+		t.Fatalf("expected configured interval floor, got %s", got)
 	}
 }
 
