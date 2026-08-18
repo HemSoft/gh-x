@@ -151,7 +151,12 @@ func runPr(args []string, stdout io.Writer, stderr io.Writer) error {
 }
 
 func watchRequested(args []string) bool {
-	for _, arg := range args {
+	for index := 0; index < len(args); index++ {
+		if args[index] == "--repo" || args[index] == "-R" {
+			index++
+			continue
+		}
+		arg := args[index]
 		if arg == "--watch" || arg == "--monitor" {
 			return true
 		}
