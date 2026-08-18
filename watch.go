@@ -278,8 +278,12 @@ func applyWatchRefreshResult(state *watchState, options listOptions, refresh wat
 	)
 	state.rows, state.changes = reconcileWatchRows(state.rows, current)
 	state.lastRefresh = refresh.now
-	if refresh.result.AuxiliaryErr != nil {
-		state.refreshErr = refresh.result.AuxiliaryErr
+	auxiliaryErr := refresh.result.AuxiliaryErr
+	if auxiliaryErr == nil {
+		auxiliaryErr = auxiliaryRefreshError(refresh.result.SupplementalFailed, refresh.result.RequiredChecksFailed)
+	}
+	if auxiliaryErr != nil {
+		state.refreshErr = auxiliaryErr
 		state.nextDelay = state.backoff
 		state.backoff = nextWatchBackoff(state.backoff, options.interval)
 		return
@@ -302,19 +306,23 @@ func preserveWatchAuxiliaryFields(previous, current []displayPullRequest, supple
 		if !ok {
 			continue
 		}
-		if supplementalFailed {
-			current[index].Comments = before.Comments
-			current[index].AIReview = before.AIReview
-			current[index].AIClean = before.AIClean
-			current[index].SFLReview = before.SFLReview
-			current[index].Approvals = before.Approvals
-		}
-		if failedRequiredCheckPRs[current[index].Number] && before.checksDowngraded {
-			current[index].Checks = before.Checks
-			current[index].checksDowngraded = true
-		}
+		preserveWatchRowAuxiliaryFields(&current[index], before, supplementalFailed, failedRequiredCheckPRs[current[index].Number])
 	}
 	return current
+}
+
+func preserveWatchRowAuxiliaryFields(current *displayPullRequest, before displayPullRequest, supplementalFailed, requiredChecksFailed bool) {
+	if supplementalFailed {
+		current.Comments = before.Comments
+		current.AIReview = before.AIReview
+		current.AIClean = before.AIClean
+		current.SFLReview = before.SFLReview
+		current.Approvals = before.Approvals
+	}
+	if requiredChecksFailed && before.checksDowngraded && current.Checks != "fail" && current.Checks != "merge" {
+		current.Checks = before.Checks
+		current.checksDowngraded = true
+	}
 }
 
 func nextWatchBackoff(current, minimum time.Duration) time.Duration {

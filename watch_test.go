@@ -166,6 +166,37 @@ func TestAuxiliaryRefreshErrorIdentifiesPartialFailures(t *testing.T) {
 	}
 }
 
+func TestApplyWatchRefreshResultKeepsAuxiliaryRefreshStale(t *testing.T) {
+	state := watchState{
+		rows:      []displayPullRequest{{Number: 1, Checks: "pass"}},
+		backoff:   30 * time.Second,
+		nextDelay: 30 * time.Second,
+	}
+	applyWatchRefreshResult(&state, listOptions{interval: 30 * time.Second}, watchRefreshResult{
+		now: time.Now(),
+		result: pullRequestListResult{
+			Rendered:           []displayPullRequest{{Number: 1, Checks: "pass"}},
+			SupplementalFailed: true,
+		},
+	})
+	if state.refreshErr == nil {
+		t.Fatal("expected auxiliary refresh failure to remain visible")
+	}
+	if state.nextDelay != 30*time.Second {
+		t.Fatalf("expected retry delay to use current backoff, got %s", state.nextDelay)
+	}
+}
+
+func TestPreserveWatchAuxiliaryFieldsKeepsDefinitiveCheckState(t *testing.T) {
+	previous := []displayPullRequest{{Number: 1, Checks: "pending", checksDowngraded: true}}
+	current := []displayPullRequest{{Number: 1, Checks: "fail"}}
+
+	got := preserveWatchAuxiliaryFields(previous, current, false, map[int]bool{1: true})
+	if got[0].Checks != "fail" {
+		t.Fatalf("expected fresh definitive check failure to win, got %q", got[0].Checks)
+	}
+}
+
 func TestParseRequiredCheckRulesReportsMalformedData(t *testing.T) {
 	if _, ok := parseRequiredCheckRulesResult([]byte("{")); ok {
 		t.Fatal("expected malformed required-check rules to be reported as a failure")
