@@ -26,6 +26,9 @@ var ghExecFunc = gh.Exec
 // fetchPRSupplementalBatchFunc is swapped in tests to avoid real API calls.
 var fetchPRSupplementalBatchFunc = fetchPRSupplementalBatch
 
+// fetchPullRequestListFunc is swapped in watch tests to avoid real API calls.
+var fetchPullRequestListFunc = fetchPullRequestList
+
 type listOptions struct {
 	repo      string
 	limit     int
@@ -39,6 +42,8 @@ type listOptions struct {
 	draftOnly bool
 	web       bool
 	json      bool
+	watch     bool
+	interval  time.Duration
 	labels    stringSliceFlag
 }
 

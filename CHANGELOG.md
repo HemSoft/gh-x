@@ -9,6 +9,9 @@ and this project uses semantic versioning.
 
 ### Added
 
+- Added interactive, read-only `gh x pr list --watch` monitoring with a
+  `--monitor` alias, configurable refresh intervals, stable rows, and concise
+  refresh status and change summaries.
 - Expanded `gh x status` into a structured repository health dashboard with
   default-branch health, local/remote/dangling branch counts, conservative
   worktree cleanup candidates, and separate open issue and pull request tables.
