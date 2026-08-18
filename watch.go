@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/term"
@@ -18,6 +20,7 @@ const (
 	defaultWatchInterval = 30 * time.Second
 	minimumWatchInterval = 10 * time.Second
 	maximumWatchBackoff  = 5 * time.Minute
+	watchEscapeTimeout   = 50 * time.Millisecond
 )
 
 var (
@@ -57,12 +60,15 @@ type watchState struct {
 }
 
 type rawWatchTerminal struct {
-	stdout    io.Writer
-	fd        int
-	state     *xterm.State
-	keys      chan byte
-	closeOnce sync.Once
-	closeErr  error
+	stdout     io.Writer
+	fd         int
+	state      *xterm.State
+	keys       chan byte
+	closeOnce  sync.Once
+	closeErr   error
+	signalCh   chan os.Signal
+	signalDone chan struct{}
+	signalOnce sync.Once
 }
 
 func runWatch(options listOptions, stdout io.Writer, _ io.Writer) (err error) {
@@ -125,14 +131,49 @@ func watchExitRequested(key byte, refresh bool) bool {
 }
 
 func waitWatchEvent(keys <-chan byte, delay time.Duration) (byte, bool, error) {
+	for {
+		select {
+		case key, ok := <-keys:
+			if !ok {
+				return 0, false, errors.New("watch input closed")
+			}
+			if key != 0x1b || !consumeWatchEscapeSequence(keys) {
+				return key, false, nil
+			}
+		case <-watchAfterFunc(delay):
+			return 0, true, nil
+		}
+	}
+}
+
+func consumeWatchEscapeSequence(keys <-chan byte) bool {
+	next, ok := readWatchByteWithTimeout(keys)
+	if !ok {
+		return false
+	}
+	if next != '[' && next != 'O' {
+		return true
+	}
+
+	for {
+		key, ok := readWatchByteWithTimeout(keys)
+		if !ok {
+			return true
+		}
+		if key >= '@' && key <= '~' {
+			return true
+		}
+	}
+}
+
+func readWatchByteWithTimeout(keys <-chan byte) (byte, bool) {
+	timer := time.NewTimer(watchEscapeTimeout)
+	defer timer.Stop()
 	select {
 	case key, ok := <-keys:
-		if !ok {
-			return 0, false, errors.New("watch input closed")
-		}
-		return key, false, nil
-	case <-watchAfterFunc(delay):
-		return 0, true, nil
+		return key, ok
+	case <-timer.C:
+		return 0, false
 	}
 }
 
@@ -335,6 +376,7 @@ func openWatchTerminal(stdout io.Writer) (watchTerminal, error) {
 	}
 
 	terminal := &rawWatchTerminal{stdout: stdout, fd: fd, state: state, keys: make(chan byte, 1)}
+	terminal.watchSignals()
 	go terminal.readKeys()
 	return terminal, nil
 }
@@ -359,9 +401,41 @@ func (t *rawWatchTerminal) readKeys() {
 
 func (t *rawWatchTerminal) Close() error {
 	t.closeOnce.Do(func() {
+		t.stopWatchingSignals()
 		restoreErr := xterm.Restore(t.fd, t.state)
 		_, screenErr := io.WriteString(t.stdout, "\x1b[?1049l")
 		t.closeErr = errors.Join(restoreErr, screenErr)
 	})
 	return t.closeErr
+}
+
+func (t *rawWatchTerminal) watchSignals() {
+	t.signalCh = make(chan os.Signal, 1)
+	t.signalDone = make(chan struct{})
+	signal.Notify(t.signalCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		select {
+		case sig := <-t.signalCh:
+			_ = t.Close()
+			os.Exit(watchSignalExitCode(sig))
+		case <-t.signalDone:
+		}
+	}()
+}
+
+func (t *rawWatchTerminal) stopWatchingSignals() {
+	if t.signalCh == nil {
+		return
+	}
+	signal.Stop(t.signalCh)
+	t.signalOnce.Do(func() {
+		close(t.signalDone)
+	})
+}
+
+func watchSignalExitCode(sig os.Signal) int {
+	if signal, ok := sig.(syscall.Signal); ok {
+		return 128 + int(signal)
+	}
+	return 130
 }

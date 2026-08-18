@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -114,6 +115,28 @@ func TestNextWatchBackoffCaps(t *testing.T) {
 	}
 	if got := nextWatchBackoff(maximumWatchBackoff); got != maximumWatchBackoff {
 		t.Fatalf("expected cap to remain %s, got %s", maximumWatchBackoff, got)
+	}
+}
+
+func TestWaitWatchEventIgnoresTerminalEscapeSequences(t *testing.T) {
+	keys := make(chan byte, 4)
+	keys <- 0x1b
+	keys <- '['
+	keys <- 'A'
+	keys <- 'x'
+
+	key, refresh, err := waitWatchEvent(keys, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refresh || key != 'x' {
+		t.Fatalf("expected navigation sequence to be ignored before x, got key %q refresh=%t", key, refresh)
+	}
+}
+
+func TestWatchSignalExitCode(t *testing.T) {
+	if got := watchSignalExitCode(syscall.SIGTERM); got != 128+int(syscall.SIGTERM) {
+		t.Fatalf("expected SIGTERM exit code %d, got %d", 128+int(syscall.SIGTERM), got)
 	}
 }
 
