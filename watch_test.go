@@ -143,6 +143,55 @@ func TestWaitWatchEventIgnoresTerminalEscapeSequences(t *testing.T) {
 	}
 }
 
+func TestWatchRefreshRemainsExitableWhileFetchIsBlocked(t *testing.T) {
+	savedTTY := watchTTYFunc
+	savedOpen := openWatchTerminalFunc
+	savedFetch := fetchPullRequestListFunc
+	savedAfter := watchAfterFunc
+	defer func() {
+		watchTTYFunc = savedTTY
+		openWatchTerminalFunc = savedOpen
+		fetchPullRequestListFunc = savedFetch
+		watchAfterFunc = savedAfter
+	}()
+
+	terminal := &fakeWatchTerminal{keys: make(chan byte, 1)}
+	refreshStarted := make(chan struct{})
+	releaseRefresh := make(chan struct{})
+	watchTTYFunc = func() bool { return true }
+	openWatchTerminalFunc = func(io.Writer) (watchTerminal, error) { return terminal, nil }
+	fetchCalls := 0
+	fetchPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
+		fetchCalls++
+		if fetchCalls == 1 {
+			return pullRequestListResult{Rendered: []displayPullRequest{{Number: 1, State: "open", Checks: "pass"}}}, nil
+		}
+		close(refreshStarted)
+		<-releaseRefresh
+		return pullRequestListResult{}, nil
+	}
+	watchAfterFunc = func(time.Duration) <-chan time.Time {
+		channel := make(chan time.Time, 1)
+		channel <- time.Now()
+		return channel
+	}
+
+	go func() {
+		<-refreshStarted
+		terminal.keys <- 0x1b
+	}()
+
+	var output bytes.Buffer
+	err := runWatch(listOptions{repo: "HemSoft/gh-x", limit: 30, interval: 30 * time.Second}, &output, io.Discard)
+	close(releaseRefresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal.closed {
+		t.Fatal("expected terminal cleanup after escape during refresh")
+	}
+}
+
 func TestWatchSignalExitCode(t *testing.T) {
 	if got := watchSignalExitCode(syscall.SIGTERM); got != 128+int(syscall.SIGTERM) {
 		t.Fatalf("expected SIGTERM exit code %d, got %d", 128+int(syscall.SIGTERM), got)

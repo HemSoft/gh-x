@@ -59,6 +59,12 @@ type watchState struct {
 	backoff     time.Duration
 }
 
+type watchRefreshResult struct {
+	now    time.Time
+	result pullRequestListResult
+	err    error
+}
+
 type rawWatchTerminal struct {
 	stdout     io.Writer
 	fd         int
@@ -122,7 +128,14 @@ func runWatchLoop(options listOptions, stdout io.Writer, repoLabel string, state
 		if err := renderWatchScreen(stdout, options, repoLabel, state.rows, state.lastRefresh, 0, nil, nil, true); err != nil {
 			return err
 		}
-		refreshWatchState(&state, options)
+		refreshResult, exit, err := waitWatchRefresh(startWatchRefresh(options), keys)
+		if err != nil {
+			return err
+		}
+		if exit {
+			return nil
+		}
+		applyWatchRefreshResult(&state, options, refreshResult)
 	}
 }
 
@@ -131,6 +144,7 @@ func watchExitRequested(key byte, refresh bool) bool {
 }
 
 func waitWatchEvent(keys <-chan byte, delay time.Duration) (byte, bool, error) {
+	refreshTimer := watchAfterFunc(delay)
 	for {
 		select {
 		case key, ok := <-keys:
@@ -140,10 +154,52 @@ func waitWatchEvent(keys <-chan byte, delay time.Duration) (byte, bool, error) {
 			if key != 0x1b || !consumeWatchEscapeSequence(keys) {
 				return key, false, nil
 			}
-		case <-watchAfterFunc(delay):
+		case <-refreshTimer:
 			return 0, true, nil
 		}
 	}
+}
+
+func startWatchRefresh(options listOptions) <-chan watchRefreshResult {
+	results := make(chan watchRefreshResult, 1)
+	nowFunc := watchNowFunc
+	fetchFunc := fetchPullRequestListFunc
+	go func() {
+		now := nowFunc()
+		result, err := fetchFunc(options, now)
+		results <- watchRefreshResult{now: now, result: result, err: err}
+	}()
+	return results
+}
+
+func waitWatchRefresh(refresh <-chan watchRefreshResult, keys <-chan byte) (watchRefreshResult, bool, error) {
+	for {
+		select {
+		case result := <-refresh:
+			return result, false, nil
+		case key, ok := <-keys:
+			exit, err := watchRefreshKeyExit(keys, key, ok)
+			if err != nil {
+				return watchRefreshResult{}, false, err
+			}
+			if exit {
+				return watchRefreshResult{}, true, nil
+			}
+		}
+	}
+}
+
+func watchRefreshKeyExit(keys <-chan byte, key byte, ok bool) (bool, error) {
+	if !ok {
+		return false, errors.New("watch input closed")
+	}
+	if key == 0x03 {
+		return true, nil
+	}
+	if key != 0x1b {
+		return false, nil
+	}
+	return !consumeWatchEscapeSequence(keys), nil
 }
 
 func consumeWatchEscapeSequence(keys <-chan byte) bool {
@@ -177,18 +233,16 @@ func readWatchByteWithTimeout(keys <-chan byte) (byte, bool) {
 	}
 }
 
-func refreshWatchState(state *watchState, options listOptions) {
-	now := watchNowFunc()
-	result, err := fetchPullRequestListFunc(options, now)
-	if err != nil {
-		state.refreshErr = err
+func applyWatchRefreshResult(state *watchState, options listOptions, refresh watchRefreshResult) {
+	if refresh.err != nil {
+		state.refreshErr = refresh.err
 		state.changes = nil
 		state.nextDelay = state.backoff
 		state.backoff = nextWatchBackoff(state.backoff)
 		return
 	}
-	state.rows, state.changes = reconcileWatchRows(state.rows, result.Rendered)
-	state.lastRefresh = now
+	state.rows, state.changes = reconcileWatchRows(state.rows, refresh.result.Rendered)
+	state.lastRefresh = refresh.now
 	state.refreshErr = nil
 	state.nextDelay = options.interval
 	state.backoff = options.interval
