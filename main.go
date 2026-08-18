@@ -152,6 +152,9 @@ func runPr(args []string, stdout io.Writer, stderr io.Writer) error {
 
 func watchRequested(args []string) bool {
 	for index := 0; index < len(args); index++ {
+		if args[index] == "--" {
+			return false
+		}
 		if prFlagTakesValue(args[index]) {
 			index++
 			continue

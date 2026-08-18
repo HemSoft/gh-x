@@ -64,10 +64,9 @@ func TestRunPrRejectsWatchForNonListCommands(t *testing.T) {
 }
 
 func TestRunPrTreatsWatchValueAsRepoValue(t *testing.T) {
-	for _, args := range [][]string{{"view", "--repo", "--watch"}, {"42", "--repo", "--monitor"}} {
-		err := runPr(args, io.Discard, io.Discard)
-		if err == nil || strings.Contains(err.Error(), "only supported for gh x pr list") {
-			t.Fatalf("runPr(%v) misclassified a repo value: %v", args, err)
+	for _, args := range [][]string{{"--repo", "--watch"}, {"-R", "--monitor"}} {
+		if watchRequested(args) {
+			t.Fatalf("watchRequested(%v) misclassified a repo value", args)
 		}
 	}
 }

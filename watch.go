@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,7 +21,7 @@ const (
 	defaultWatchInterval = 30 * time.Second
 	minimumWatchInterval = 10 * time.Second
 	maximumWatchBackoff  = 5 * time.Minute
-	watchEscapeTimeout   = 50 * time.Millisecond
+	watchEscapeTimeout   = 250 * time.Millisecond
 )
 
 var (
@@ -75,6 +76,7 @@ type rawWatchTerminal struct {
 	signalCh   chan os.Signal
 	signalDone chan struct{}
 	signalOnce sync.Once
+	signalStop atomic.Bool
 }
 
 func runWatch(options listOptions, stdout io.Writer, _ io.Writer) (err error) {
@@ -151,9 +153,17 @@ func waitWatchEvent(keys <-chan byte, delay time.Duration) (byte, bool, error) {
 			if !ok {
 				return 0, false, errors.New("watch input closed")
 			}
-			if key != 0x1b || !consumeWatchEscapeSequence(keys) {
+			if key != 0x1b {
 				return key, false, nil
 			}
+			escape := readWatchEscapeSequence(keys)
+			if escape.sequence {
+				continue
+			}
+			if escape.hasNext {
+				return escape.next, false, nil
+			}
+			return key, false, nil
 		case <-refreshTimer:
 			return 0, true, nil
 		}
@@ -199,25 +209,38 @@ func watchRefreshKeyExit(keys <-chan byte, key byte, ok bool) (bool, error) {
 	if key != 0x1b {
 		return false, nil
 	}
-	return !consumeWatchEscapeSequence(keys), nil
+	escape := readWatchEscapeSequence(keys)
+	if escape.sequence {
+		return false, nil
+	}
+	if escape.hasNext {
+		return escape.next == 0x03, nil
+	}
+	return true, nil
 }
 
-func consumeWatchEscapeSequence(keys <-chan byte) bool {
+type watchEscapeResult struct {
+	sequence bool
+	next     byte
+	hasNext  bool
+}
+
+func readWatchEscapeSequence(keys <-chan byte) watchEscapeResult {
 	next, ok := readWatchByteWithTimeout(keys)
 	if !ok {
-		return false
+		return watchEscapeResult{}
 	}
 	if next != '[' && next != 'O' {
-		return true
+		return watchEscapeResult{next: next, hasNext: true}
 	}
 
 	for {
 		key, ok := readWatchByteWithTimeout(keys)
 		if !ok {
-			return true
+			return watchEscapeResult{sequence: true}
 		}
 		if key >= '@' && key <= '~' {
-			return true
+			return watchEscapeResult{sequence: true}
 		}
 	}
 }
@@ -470,6 +493,9 @@ func (t *rawWatchTerminal) watchSignals() {
 	go func() {
 		select {
 		case sig := <-t.signalCh:
+			if !t.signalStop.CompareAndSwap(false, true) {
+				return
+			}
 			_ = t.Close()
 			os.Exit(watchSignalExitCode(sig))
 		case <-t.signalDone:
@@ -481,6 +507,7 @@ func (t *rawWatchTerminal) stopWatchingSignals() {
 	if t.signalCh == nil {
 		return
 	}
+	t.signalStop.Store(true)
 	signal.Stop(t.signalCh)
 	t.signalOnce.Do(func() {
 		close(t.signalDone)
