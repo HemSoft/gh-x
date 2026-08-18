@@ -86,6 +86,7 @@ func TestWatchRequestedSkipsEveryPRValueFlag(t *testing.T) {
 		{command: "list", args: []string{"--search", "--monitor"}},
 		{command: "list", args: []string{"--label", "--watch"}},
 		{command: "list", args: []string{"--interval", "--monitor"}},
+		{command: "changelog", args: []string{"--limit", "--watch"}},
 	} {
 		if watchRequested(testCase.command, testCase.args) {
 			t.Fatalf("watchRequested(%s, %v) misclassified a flag value", testCase.command, testCase.args)
@@ -132,25 +133,36 @@ func TestWatchFieldChangesIgnoreMetadata(t *testing.T) {
 func TestPreserveWatchAuxiliaryFieldsOnPartialRefresh(t *testing.T) {
 	clean := true
 	previous := []displayPullRequest{{
-		Number:    1,
-		Checks:    "pass",
-		Comments:  "2/4",
-		AIReview:  "pass",
-		AIClean:   &clean,
-		SFLReview: "approved",
-		Approvals: 3,
+		Number:           1,
+		Checks:           "pending",
+		checksDowngraded: true,
+		Comments:         "2/4",
+		AIReview:         "pass",
+		AIClean:          &clean,
+		SFLReview:        "approved",
+		Approvals:        3,
 	}}
 	current := []displayPullRequest{{
 		Number:    1,
-		Checks:    "pending",
+		Checks:    "pass",
 		Comments:  "?",
 		AIReview:  "?",
 		SFLReview: "?",
 	}}
 
 	got := preserveWatchAuxiliaryFields(previous, current, true, true)
-	if got[0].Checks != "pass" || got[0].Comments != "2/4" || got[0].AIReview != "pass" || got[0].SFLReview != "approved" || got[0].Approvals != 3 || got[0].AIClean == nil || !*got[0].AIClean {
+	if got[0].Checks != "pending" || got[0].Comments != "2/4" || got[0].AIReview != "pass" || got[0].SFLReview != "approved" || got[0].Approvals != 3 || got[0].AIClean == nil || !*got[0].AIClean {
 		t.Fatalf("expected prior auxiliary values to survive partial refresh, got %#v", got[0])
+	}
+}
+
+func TestAuxiliaryRefreshErrorIdentifiesPartialFailures(t *testing.T) {
+	if got := auxiliaryRefreshError(false, false); got != nil {
+		t.Fatalf("expected no warning for a complete refresh, got %v", got)
+	}
+	got := auxiliaryRefreshError(true, true)
+	if got == nil || !strings.Contains(got.Error(), "supplemental pull request data") || !strings.Contains(got.Error(), "required check rules") {
+		t.Fatalf("expected both partial refresh failures, got %v", got)
 	}
 }
 

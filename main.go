@@ -178,7 +178,7 @@ func prFlagTakesValue(command, arg string) bool {
 		},
 		"atm":       {"--org": {}, "-o": {}, "--limit": {}, "-L": {}},
 		"me":        {"--org": {}, "-o": {}, "--limit": {}, "-L": {}},
-		"changelog": {"--version": {}},
+		"changelog": {"--version": {}, "--limit": {}, "-L": {}},
 		"list": {
 			"--repo": {}, "-R": {}, "--limit": {}, "-L": {}, "--state": {}, "-s": {},
 			"--author": {}, "-A": {}, "--assignee": {}, "-a": {}, "--app": {},

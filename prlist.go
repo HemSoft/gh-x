@@ -115,7 +115,8 @@ type displayPullRequest struct {
 	URL       string `json:"url"`
 	Repo      string `json:"repo,omitempty"`
 
-	updatedAt time.Time // unexported; used for sorting
+	checksDowngraded bool      // unexported; required-check rules downgraded a pass
+	updatedAt        time.Time // unexported; used for sorting
 }
 
 type pullRequestListResult struct {
@@ -123,6 +124,7 @@ type pullRequestListResult struct {
 	Rendered             []displayPullRequest
 	SupplementalFailed   bool
 	RequiredChecksFailed bool
+	AuxiliaryErr         error
 }
 
 func (s tableStyler) numberCell(number int, url string) tableCell {
@@ -276,6 +278,7 @@ func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListRe
 		Rendered:             rendered,
 		SupplementalFailed:   supplementalFailed,
 		RequiredChecksFailed: requiredChecksFailed,
+		AuxiliaryErr:         auxiliaryRefreshError(supplementalFailed, requiredChecksFailed),
 	}, nil
 }
 
@@ -384,6 +387,20 @@ func fetchRequiredChecks(owner, name string, prs []pullRequest) (map[string]map[
 	return result, failed
 }
 
+func auxiliaryRefreshError(supplementalFailed, requiredChecksFailed bool) error {
+	failed := make([]string, 0, 2)
+	if supplementalFailed {
+		failed = append(failed, "supplemental pull request data")
+	}
+	if requiredChecksFailed {
+		failed = append(failed, "required check rules")
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+	return fmt.Errorf("partial refresh: %s unavailable", strings.Join(failed, " and "))
+}
+
 func uniqueBaseBranches(prs []pullRequest) []string {
 	seen := make(map[string]bool)
 	var branches []string
@@ -444,6 +461,7 @@ func downgradeChecksIfMissing(dp *displayPullRequest, requiredByBranch map[strin
 	for ctx := range required {
 		if !reported[ctx] {
 			dp.Checks = "pending"
+			dp.checksDowngraded = true
 			return
 		}
 	}

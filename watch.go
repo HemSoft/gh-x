@@ -105,7 +105,13 @@ func runWatchSession(options listOptions, stdout io.Writer, repoLabel string, te
 		}
 	}()
 
-	state := watchState{rows: result.Rendered, lastRefresh: now, nextDelay: options.interval, backoff: options.interval}
+	state := watchState{
+		rows:        result.Rendered,
+		lastRefresh: now,
+		refreshErr:  result.AuxiliaryErr,
+		nextDelay:   options.interval,
+		backoff:     options.interval,
+	}
 	keys := terminal.Keys()
 	return runWatchLoop(options, stdout, repoLabel, state, keys)
 }
@@ -272,6 +278,12 @@ func applyWatchRefreshResult(state *watchState, options listOptions, refresh wat
 	)
 	state.rows, state.changes = reconcileWatchRows(state.rows, current)
 	state.lastRefresh = refresh.now
+	if refresh.result.AuxiliaryErr != nil {
+		state.refreshErr = refresh.result.AuxiliaryErr
+		state.nextDelay = state.backoff
+		state.backoff = nextWatchBackoff(state.backoff, options.interval)
+		return
+	}
 	state.refreshErr = nil
 	state.nextDelay = options.interval
 	state.backoff = options.interval
@@ -297,8 +309,9 @@ func preserveWatchAuxiliaryFields(previous, current []displayPullRequest, supple
 			current[index].SFLReview = before.SFLReview
 			current[index].Approvals = before.Approvals
 		}
-		if requiredChecksFailed {
+		if requiredChecksFailed && before.checksDowngraded {
 			current[index].Checks = before.Checks
+			current[index].checksDowngraded = true
 		}
 	}
 	return current
