@@ -198,8 +198,10 @@ func TestPreserveWatchAuxiliaryFieldsKeepsDefinitiveCheckState(t *testing.T) {
 }
 
 func TestParseRequiredCheckRulesReportsMalformedData(t *testing.T) {
-	if _, ok := parseRequiredCheckRulesResult([]byte("{")); ok {
-		t.Fatal("expected malformed required-check rules to be reported as a failure")
+	for _, data := range []string{"{", "[null]", "[1]"} {
+		if _, ok := parseRequiredCheckRulesResult([]byte(data)); ok {
+			t.Fatalf("expected malformed required-check rules %q to be reported as a failure", data)
+		}
 	}
 }
 
