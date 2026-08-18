@@ -65,28 +65,34 @@ func TestRunPrRejectsWatchForNonListCommands(t *testing.T) {
 
 func TestRunPrTreatsWatchValueAsRepoValue(t *testing.T) {
 	for _, args := range [][]string{{"--repo", "--watch"}, {"-R", "--monitor"}} {
-		if watchRequested(args) {
+		if watchRequested("view", args) {
 			t.Fatalf("watchRequested(%v) misclassified a repo value", args)
 		}
 	}
 }
 
 func TestWatchRequestedSkipsEveryPRValueFlag(t *testing.T) {
-	for _, args := range [][]string{
-		{"--instructions", "--watch"},
-		{"--command", "--monitor"},
-		{"--org", "--watch"},
-		{"--version", "--monitor"},
-		{"--limit", "--watch"},
-		{"--state", "--monitor"},
-		{"--assignee", "--watch"},
-		{"--search", "--monitor"},
-		{"--label", "--watch"},
-		{"--interval", "--monitor"},
+	for _, testCase := range []struct {
+		command string
+		args    []string
+	}{
+		{command: "review", args: []string{"--instructions", "--watch"}},
+		{command: "review", args: []string{"--command", "--monitor"}},
+		{command: "atm", args: []string{"--org", "--watch"}},
+		{command: "changelog", args: []string{"--version", "--monitor"}},
+		{command: "me", args: []string{"--limit", "--watch"}},
+		{command: "list", args: []string{"--state", "--monitor"}},
+		{command: "list", args: []string{"--assignee", "--watch"}},
+		{command: "list", args: []string{"--search", "--monitor"}},
+		{command: "list", args: []string{"--label", "--watch"}},
+		{command: "list", args: []string{"--interval", "--monitor"}},
 	} {
-		if watchRequested(args) {
-			t.Fatalf("watchRequested(%v) misclassified a flag value", args)
+		if watchRequested(testCase.command, testCase.args) {
+			t.Fatalf("watchRequested(%s, %v) misclassified a flag value", testCase.command, testCase.args)
 		}
+	}
+	if !watchRequested("atm", []string{"-a", "--watch"}) {
+		t.Fatal("watchRequested should detect --watch after atm's boolean -a flag")
 	}
 }
 
@@ -120,6 +126,31 @@ func TestWatchFieldChangesIgnoreMetadata(t *testing.T) {
 	after := displayPullRequest{Number: 1, Title: "new", Branch: "new", Updated: "1m", State: "open", Checks: "pass"}
 	if changes := watchFieldChanges(before, after); len(changes) != 0 {
 		t.Fatalf("expected metadata-only changes to be ignored, got %#v", changes)
+	}
+}
+
+func TestPreserveWatchAuxiliaryFieldsOnPartialRefresh(t *testing.T) {
+	clean := true
+	previous := []displayPullRequest{{
+		Number:    1,
+		Checks:    "pass",
+		Comments:  "2/4",
+		AIReview:  "pass",
+		AIClean:   &clean,
+		SFLReview: "approved",
+		Approvals: 3,
+	}}
+	current := []displayPullRequest{{
+		Number:    1,
+		Checks:    "pending",
+		Comments:  "?",
+		AIReview:  "?",
+		SFLReview: "?",
+	}}
+
+	got := preserveWatchAuxiliaryFields(previous, current, true, true)
+	if got[0].Checks != "pass" || got[0].Comments != "2/4" || got[0].AIReview != "pass" || got[0].SFLReview != "approved" || got[0].Approvals != 3 || got[0].AIClean == nil || !*got[0].AIClean {
+		t.Fatalf("expected prior auxiliary values to survive partial refresh, got %#v", got[0])
 	}
 }
 

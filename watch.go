@@ -264,11 +264,44 @@ func applyWatchRefreshResult(state *watchState, options listOptions, refresh wat
 		state.backoff = nextWatchBackoff(state.backoff, options.interval)
 		return
 	}
-	state.rows, state.changes = reconcileWatchRows(state.rows, refresh.result.Rendered)
+	current := preserveWatchAuxiliaryFields(
+		state.rows,
+		refresh.result.Rendered,
+		refresh.result.SupplementalFailed,
+		refresh.result.RequiredChecksFailed,
+	)
+	state.rows, state.changes = reconcileWatchRows(state.rows, current)
 	state.lastRefresh = refresh.now
 	state.refreshErr = nil
 	state.nextDelay = options.interval
 	state.backoff = options.interval
+}
+
+func preserveWatchAuxiliaryFields(previous, current []displayPullRequest, supplementalFailed, requiredChecksFailed bool) []displayPullRequest {
+	if !supplementalFailed && !requiredChecksFailed {
+		return current
+	}
+	previousByNumber := make(map[int]displayPullRequest, len(previous))
+	for _, row := range previous {
+		previousByNumber[row.Number] = row
+	}
+	for index := range current {
+		before, ok := previousByNumber[current[index].Number]
+		if !ok {
+			continue
+		}
+		if supplementalFailed {
+			current[index].Comments = before.Comments
+			current[index].AIReview = before.AIReview
+			current[index].AIClean = before.AIClean
+			current[index].SFLReview = before.SFLReview
+			current[index].Approvals = before.Approvals
+		}
+		if requiredChecksFailed {
+			current[index].Checks = before.Checks
+		}
+	}
+	return current
 }
 
 func nextWatchBackoff(current, minimum time.Duration) time.Duration {

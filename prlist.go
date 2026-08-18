@@ -119,8 +119,10 @@ type displayPullRequest struct {
 }
 
 type pullRequestListResult struct {
-	Entries  []pullRequest
-	Rendered []displayPullRequest
+	Entries              []pullRequest
+	Rendered             []displayPullRequest
+	SupplementalFailed   bool
+	RequiredChecksFailed bool
 }
 
 func (s tableStyler) numberCell(number int, url string) tableCell {
@@ -267,9 +269,14 @@ func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListRe
 		return pullRequestListResult{}, fmt.Errorf("decode gh pr list output: %w", err)
 	}
 	supplemental, supplementalFailed, repoOwner, repoName := fetchSupplementalData(options.repo, pullRequests)
-	requiredByBranch := fetchRequiredChecks(repoOwner, repoName, pullRequests)
+	requiredByBranch, requiredChecksFailed := fetchRequiredChecks(repoOwner, repoName, pullRequests)
 	rendered := enrichPullRequests(pullRequests, supplemental, supplementalFailed, requiredByBranch, now)
-	return pullRequestListResult{Entries: pullRequests, Rendered: rendered}, nil
+	return pullRequestListResult{
+		Entries:              pullRequests,
+		Rendered:             rendered,
+		SupplementalFailed:   supplementalFailed,
+		RequiredChecksFailed: requiredChecksFailed,
+	}, nil
 }
 
 func wrapExecError(err error, stderr string) error {
@@ -333,7 +340,7 @@ func runView(args []string, stdout io.Writer, _ io.Writer) error {
 
 	prs := []pullRequest{pr}
 	supplemental, supplementalFailed, repoOwner, repoName := fetchSupplementalData(repo, prs)
-	requiredByBranch := fetchRequiredChecks(repoOwner, repoName, prs)
+	requiredByBranch, _ := fetchRequiredChecks(repoOwner, repoName, prs)
 	rendered := enrichPullRequests(prs, supplemental, supplementalFailed, requiredByBranch, time.Now().UTC())
 
 	// Render as a single-row table with no limit footer
@@ -361,17 +368,20 @@ func fetchSupplementalData(repo string, prs []pullRequest) (map[int]prSupplement
 }
 
 // fetchRequiredChecks retrieves required check contexts per base branch (best-effort).
-func fetchRequiredChecks(owner, name string, prs []pullRequest) map[string]map[string]bool {
+func fetchRequiredChecks(owner, name string, prs []pullRequest) (map[string]map[string]bool, bool) {
 	result := make(map[string]map[string]bool)
 	if owner == "" {
-		return result
+		return result, len(prs) > 0
 	}
+	failed := false
 	for _, base := range uniqueBaseBranches(prs) {
-		if ctx := fetchRequiredCheckContexts(owner, name, base); ctx != nil {
+		if ctx, ok := fetchRequiredCheckContexts(owner, name, base); ok && len(ctx) > 0 {
 			result[base] = ctx
+		} else if !ok {
+			failed = true
 		}
 	}
-	return result
+	return result, failed
 }
 
 func uniqueBaseBranches(prs []pullRequest) []string {
@@ -1075,13 +1085,13 @@ func extractReportedContexts(items []checkItem) map[string]bool {
 // fetchRequiredCheckContexts returns the set of required status check context
 // names for a branch, derived from repository rulesets. Best-effort: returns
 // nil on error so callers fall back to per-item normalization only.
-func fetchRequiredCheckContexts(owner, name, branch string) map[string]bool {
+func fetchRequiredCheckContexts(owner, name, branch string) (map[string]bool, bool) {
 	endpoint := fmt.Sprintf("repos/%s/%s/rules/branches/%s", owner, name, url.PathEscape(branch))
 	stdout, _, err := gh.Exec("api", endpoint)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	return parseRequiredCheckRules(stdout.Bytes())
+	return parseRequiredCheckRules(stdout.Bytes()), true
 }
 
 func parseRequiredCheckRules(data []byte) map[string]bool {

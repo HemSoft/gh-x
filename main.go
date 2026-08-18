@@ -137,25 +137,25 @@ func runPr(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 	// Numeric first arg is shorthand for "view <number>"
 	if looksLikeNumber(args[0]) {
-		if watchRequested(args[1:]) {
+		if watchRequested("view", args[1:]) {
 			return errors.New("--watch and --monitor are only supported for gh x pr list")
 		}
 		cmd := resolvePrCommand("view")
 		return cmd.handler(args, stdout, stderr)
 	}
-	if args[0] != "list" && watchRequested(args[1:]) {
+	if args[0] != "list" && watchRequested(args[0], args[1:]) {
 		return errors.New("--watch and --monitor are only supported for gh x pr list")
 	}
 	cmd := resolvePrCommand(args[0])
 	return cmd.handler(args[1:], stdout, stderr)
 }
 
-func watchRequested(args []string) bool {
+func watchRequested(command string, args []string) bool {
 	for index := 0; index < len(args); index++ {
 		if args[index] == "--" {
 			return false
 		}
-		if prFlagTakesValue(args[index]) {
+		if prFlagTakesValue(command, args[index]) {
 			index++
 			continue
 		}
@@ -167,17 +167,26 @@ func watchRequested(args []string) bool {
 	return false
 }
 
-func prFlagTakesValue(arg string) bool {
-	valueFlags := map[string]struct{}{
-		"--repo": {}, "-R": {}, "--org": {}, "-o": {}, "--version": {},
-		"--agent": {}, "-a": {}, "--command": {}, "--model": {}, "-m": {},
-		"--effort": {}, "--mode": {}, "--preset": {}, "--base": {}, "-B": {},
-		"--instructions": {}, "-i": {}, "--instructions-file": {}, "--reviewer": {},
-		"--limit": {}, "-L": {}, "--state": {}, "-s": {}, "--author": {}, "-A": {},
-		"--assignee": {}, "--app": {}, "--head": {}, "-H": {}, "--search": {}, "-S": {},
-		"--label": {}, "-l": {}, "--interval": {},
+func prFlagTakesValue(command, arg string) bool {
+	valueFlags := map[string]map[string]struct{}{
+		"view": {"--repo": {}, "-R": {}},
+		"review": {
+			"--repo": {}, "-R": {}, "--agent": {}, "-a": {}, "--command": {},
+			"--model": {}, "-m": {}, "--effort": {}, "--mode": {}, "--preset": {},
+			"--base": {}, "-B": {}, "--instructions": {}, "-i": {},
+			"--instructions-file": {}, "--reviewer": {},
+		},
+		"atm":       {"--org": {}, "-o": {}, "--limit": {}, "-L": {}},
+		"me":        {"--org": {}, "-o": {}, "--limit": {}, "-L": {}},
+		"changelog": {"--version": {}},
+		"list": {
+			"--repo": {}, "-R": {}, "--limit": {}, "-L": {}, "--state": {}, "-s": {},
+			"--author": {}, "-A": {}, "--assignee": {}, "-a": {}, "--app": {},
+			"--base": {}, "-B": {}, "--head": {}, "-H": {}, "--search": {}, "-S": {},
+			"--label": {}, "-l": {}, "--interval": {},
+		},
 	}
-	_, ok := valueFlags[arg]
+	_, ok := valueFlags[command][arg]
 	return ok
 }
 
