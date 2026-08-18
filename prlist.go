@@ -1129,6 +1129,9 @@ func parseRequiredCheckRulesResult(data []byte) (map[string]bool, bool) {
 	if err := json.Unmarshal(data, &rawRules); err != nil {
 		return nil, false
 	}
+	if rawRules == nil {
+		return nil, false
+	}
 	for _, rawRule := range rawRules {
 		var rule map[string]json.RawMessage
 		if err := json.Unmarshal(rawRule, &rule); err != nil || rule == nil {

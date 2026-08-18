@@ -200,6 +200,7 @@ func TestPreserveWatchAuxiliaryFieldsKeepsDefinitiveCheckState(t *testing.T) {
 func TestParseRequiredCheckRulesReportsMalformedData(t *testing.T) {
 	for _, data := range []string{
 		"{",
+		"null",
 		"[null]",
 		"[1]",
 		`[{"type":1}]`,
