@@ -173,6 +173,9 @@ func prFlagTakesValue(arg string) bool {
 		"--agent": {}, "-a": {}, "--command": {}, "--model": {}, "-m": {},
 		"--effort": {}, "--mode": {}, "--preset": {}, "--base": {}, "-B": {},
 		"--instructions": {}, "-i": {}, "--instructions-file": {}, "--reviewer": {},
+		"--limit": {}, "-L": {}, "--state": {}, "-s": {}, "--author": {}, "-A": {},
+		"--assignee": {}, "--app": {}, "--head": {}, "-H": {}, "--search": {}, "-S": {},
+		"--label": {}, "-l": {}, "--interval": {},
 	}
 	_, ok := valueFlags[arg]
 	return ok

@@ -77,6 +77,12 @@ func TestWatchRequestedSkipsEveryPRValueFlag(t *testing.T) {
 		{"--command", "--monitor"},
 		{"--org", "--watch"},
 		{"--version", "--monitor"},
+		{"--limit", "--watch"},
+		{"--state", "--monitor"},
+		{"--assignee", "--watch"},
+		{"--search", "--monitor"},
+		{"--label", "--watch"},
+		{"--interval", "--monitor"},
 	} {
 		if watchRequested(args) {
 			t.Fatalf("watchRequested(%v) misclassified a flag value", args)
