@@ -152,7 +152,7 @@ func runPr(args []string, stdout io.Writer, stderr io.Writer) error {
 
 func watchRequested(args []string) bool {
 	for index := 0; index < len(args); index++ {
-		if args[index] == "--repo" || args[index] == "-R" {
+		if prFlagTakesValue(args[index]) {
 			index++
 			continue
 		}
@@ -162,6 +162,17 @@ func watchRequested(args []string) bool {
 		}
 	}
 	return false
+}
+
+func prFlagTakesValue(arg string) bool {
+	valueFlags := map[string]struct{}{
+		"--repo": {}, "-R": {}, "--org": {}, "-o": {}, "--version": {},
+		"--agent": {}, "-a": {}, "--command": {}, "--model": {}, "-m": {},
+		"--effort": {}, "--mode": {}, "--preset": {}, "--base": {}, "-B": {},
+		"--instructions": {}, "-i": {}, "--instructions-file": {}, "--reviewer": {},
+	}
+	_, ok := valueFlags[arg]
+	return ok
 }
 
 func resolveRunCommand(name string) subcommand {

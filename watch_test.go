@@ -72,6 +72,19 @@ func TestRunPrTreatsWatchValueAsRepoValue(t *testing.T) {
 	}
 }
 
+func TestWatchRequestedSkipsEveryPRValueFlag(t *testing.T) {
+	for _, args := range [][]string{
+		{"--instructions", "--watch"},
+		{"--command", "--monitor"},
+		{"--org", "--watch"},
+		{"--version", "--monitor"},
+	} {
+		if watchRequested(args) {
+			t.Fatalf("watchRequested(%v) misclassified a flag value", args)
+		}
+	}
+}
+
 func TestReconcileWatchRowsPreservesExistingOrder(t *testing.T) {
 	previous := []displayPullRequest{
 		{Number: 2, Title: "two", Checks: "pending", State: "open"},
