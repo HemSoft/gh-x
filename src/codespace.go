@@ -84,7 +84,9 @@ func parseCodespaceListOptions(args []string, stderr io.Writer) (codespaceListOp
 var fetchCodespacesFunc = fetchCodespaces
 
 func fetchCodespaces() ([]codespaceEntry, error) {
-	stdoutBuf, stderrBuf, err := ghExecFunc("api", "/user/codespaces", "--paginate", "--jq", ".codespaces[]")
+	// /user/codespaces is scoped to the authenticated user, so a fallback
+	// would silently list a different account's codespaces.
+	stdoutBuf, stderrBuf, err := execGHActive("api", "/user/codespaces", "--paginate", "--jq", ".codespaces[]")
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("gh api codespaces: %w", err), stderrBuf.String())
 	}

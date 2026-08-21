@@ -54,10 +54,11 @@ repositories never trigger a retry because either token can read them. Tokens
 resolve lazily and are cached for the current process; they are not stored or
 shared between runs.
 
-Two flows are pinned to the active account and never fall back: user-scoped
-commands (`gh x pr me`, `gh x pr atm`) resolve "me" once, so retrying under a
-different identity could answer with someone else's pull requests; and pull
-request review submission is both identity-bound and non-idempotent.
+Two flows are pinned to the active account and never fall back: identity-scoped
+queries (`gh x pr me`, `gh x pr atm`, `gh x codespace list` — they resolve
+"me" or list the authenticated user's resources, so retrying under a different
+identity could answer with someone else's data); and pull request review
+submission, which is both identity-bound and non-idempotent.
 
 ## What `gh x status` adds
 
