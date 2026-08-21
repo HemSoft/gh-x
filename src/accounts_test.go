@@ -181,15 +181,44 @@ func TestExpandMeReference(t *testing.T) {
 
 	got, err := expandMeReference("@me")
 	if err != nil || got != "active-login" {
-		t.Fatalf("expandMeReference(\"@me\") = %q, %v; want active-login", got, err)
+		t.Fatalf(`expandMeReference("@me") = %q, %v; want active-login`, got, err)
 	}
-	got, err = expandMeReference("ME")
+	got, err = expandMeReference("@ME")
 	if err != nil || got != "active-login" {
-		t.Fatalf("expandMeReference(\"ME\") = %q, %v; want active-login", got, err)
+		t.Fatalf(`expandMeReference("@ME") = %q, %v; want active-login`, got, err)
+	}
+	got, err = expandMeReference("me")
+	if err != nil || got != "me" {
+		t.Fatalf(`literal login "me" must pass through, got %q, %v`, got, err)
 	}
 	got, err = expandMeReference("someone-else")
 	if err != nil || got != "someone-else" {
 		t.Fatalf("non-me value must pass through, got %q, %v", got, err)
+	}
+}
+
+func TestExpandSearchReferences(t *testing.T) {
+	saved := ghTransportFunc
+	t.Cleanup(func() { ghTransportFunc = saved })
+	ghTransportFunc = func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		return *bytes.NewBufferString("active-login\n"), bytes.Buffer{}, nil
+	}
+
+	cases := []struct{ in, want string }{
+		{"is:pr review-requested:@me", "is:pr review-requested:active-login"},
+		{"assignee:@me OR author:@me", "assignee:active-login OR author:active-login"},
+		{"(@me)", "(active-login)"},
+		{"is:pr label:docs", "is:pr label:docs"},
+		{"nomination", "nomination"},
+	}
+	for _, tc := range cases {
+		got, err := expandSearchReferences(tc.in)
+		if err != nil {
+			t.Fatalf("expandSearchReferences(%q) error: %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("expandSearchReferences(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
 

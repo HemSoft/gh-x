@@ -368,13 +368,13 @@ func TestCommentableLinesForPatchIncludesRightSideDiffLines(t *testing.T) {
 }
 
 func TestFetchReviewCommentableLinesUsesPaginatedFiles(t *testing.T) {
-	saved := ghExecFunc
-	defer func() { ghExecFunc = saved }()
+	saved := ghTransportFunc
+	defer func() { ghTransportFunc = saved }()
 
-	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	ghTransportFunc = func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		want := []string{"api", "repos/owner/repo/pulls/42/files?per_page=100", "--paginate", "--slurp"}
-		if !reflect.DeepEqual(args, want) {
-			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("unexpected gh args: %#v", args)
+		if !reflect.DeepEqual(inv.Args, want) {
+			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("unexpected gh args: %#v", inv.Args)
 		}
 		var stdout bytes.Buffer
 		stdout.WriteString(`[[{"filename":"src/app.go","patch":"@@ -1 +1,2 @@\n package main\n+var enabled = true"},{"filename":"README.md","patch":""}]]`)

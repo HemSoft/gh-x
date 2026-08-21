@@ -414,7 +414,8 @@ func fetchReviewCommentableLines(options prReviewOptions, pr reviewPullRequest) 
 	}
 
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/files?per_page=100", owner, name, pr.Number)
-	stdout, stderr, err := ghExecFunc("api", endpoint, "--paginate", "--slurp")
+	// Part of the review operation, which stays on the active account.
+	stdout, stderr, err := execGHActive("api", endpoint, "--paginate", "--slurp")
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("gh api pull request files: %w", err), stderr.String())
 	}

@@ -196,10 +196,11 @@ func resolveCurrentUser() (string, error) {
 	return login, nil
 }
 
-// expandMeReference replaces an "@me" filter value with the active account's
-// login so a later multi-account retry cannot reinterpret the identity.
+// expandMeReference replaces the "@me" filter value with the active account's
+// login so a later multi-account retry cannot reinterpret the identity. The
+// "@" prefix is required: a bare "me" is a literal login and passes through.
 func expandMeReference(value string) (string, error) {
-	if !strings.EqualFold(strings.TrimPrefix(value, "@"), "me") {
+	if !strings.HasPrefix(value, "@") || !strings.EqualFold(strings.TrimPrefix(value, "@"), "me") {
 		return value, nil
 	}
 	login, err := resolveCurrentUser()
@@ -209,9 +210,9 @@ func expandMeReference(value string) (string, error) {
 	return login, nil
 }
 
-// meReferencePattern matches @me tokens in --search queries, including a
-// single leading separator so qualifiers like review-requested:@me resolve.
-var meReferencePattern = regexp.MustCompile(`(?i)(^|[\s(])@me\b`)
+// meReferencePattern matches @me tokens in --search queries, including any
+// qualifier separator such as review-requested:@me.
+var meReferencePattern = regexp.MustCompile(`(?i)(^|[\s(:])@me\b`)
 
 // expandSearchReferences rewrites @me tokens inside a --search query so a
 // later multi-account retry cannot reinterpret the identity.
