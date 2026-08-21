@@ -164,6 +164,20 @@ func fetchIssues(options issueListOptions) ([]issueEntry, error) {
 
 func executeIssueList(options issueListOptions, stdout io.Writer, now time.Time) error {
 	if options.author != "" {
+		expanded, err := expandMeReference(options.author)
+		if err != nil {
+			return err
+		}
+		options.author = expanded
+	}
+	if options.assignee != "" {
+		expanded, err := expandMeReference(options.assignee)
+		if err != nil {
+			return err
+		}
+		options.assignee = expanded
+	}
+	if options.author != "" {
 		org := ""
 		if options.repo != "" {
 			if parts := strings.SplitN(options.repo, "/", 2); len(parts) == 2 {

@@ -169,6 +169,30 @@ func TestExecGHNoRetryForNonAccessErrors(t *testing.T) {
 	}
 }
 
+func TestExpandMeReference(t *testing.T) {
+	saved := ghTransportFunc
+	t.Cleanup(func() { ghTransportFunc = saved })
+	ghTransportFunc = func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		if strings.Join(inv.Args, " ") != "api user --jq .login" {
+			t.Fatalf("unexpected resolution call: %s", strings.Join(inv.Args, " "))
+		}
+		return *bytes.NewBufferString("active-login\n"), bytes.Buffer{}, nil
+	}
+
+	got, err := expandMeReference("@me")
+	if err != nil || got != "active-login" {
+		t.Fatalf("expandMeReference(\"@me\") = %q, %v; want active-login", got, err)
+	}
+	got, err = expandMeReference("ME")
+	if err != nil || got != "active-login" {
+		t.Fatalf("expandMeReference(\"ME\") = %q, %v; want active-login", got, err)
+	}
+	got, err = expandMeReference("someone-else")
+	if err != nil || got != "someone-else" {
+		t.Fatalf("non-me value must pass through, got %q, %v", got, err)
+	}
+}
+
 func TestExecGHActiveNeverFallsBack(t *testing.T) {
 	calls := 0
 	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {

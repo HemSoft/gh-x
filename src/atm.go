@@ -195,6 +195,19 @@ func resolveCurrentUser() (string, error) {
 	return login, nil
 }
 
+// expandMeReference replaces an "@me" filter value with the active account's
+// login so a later multi-account retry cannot reinterpret the identity.
+func expandMeReference(value string) (string, error) {
+	if !strings.EqualFold(strings.TrimPrefix(value, "@"), "me") {
+		return value, nil
+	}
+	login, err := resolveCurrentUser()
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve @me: %w", err)
+	}
+	return login, nil
+}
+
 func buildAtmSearchQuery(org, login string, reviewRequired bool) string {
 	if reviewRequired {
 		return fmt.Sprintf("is:pr is:open review-requested:%s org:%s", login, org)
