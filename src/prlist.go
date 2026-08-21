@@ -605,7 +605,8 @@ func resolveOrgHint(repoOverride string) string {
 	return owner
 }
 
-func resolveRepoLabel(repoOverride string) string {	if repoOverride != "" {
+func resolveRepoLabel(repoOverride string) string {
+	if repoOverride != "" {
 		return repoOverride
 	}
 
