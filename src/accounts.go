@@ -86,13 +86,15 @@ func execGHActive(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 }
 
 // fallbackEligible reports whether a failure should trigger an alternate
-// account attempt. Auth-plane commands never fall back, explicit token
-// environment overrides are respected, and only access-shaped errors qualify.
+// account attempt. Auth-plane commands never fall back, explicit github.com
+// token environment overrides are respected, and only access-shaped errors
+// qualify. GH_ENTERPRISE_TOKEN does not count: it governs Enterprise Server
+// hosts, not github.com.
 func fallbackEligible(args []string, stderr string) bool {
 	if len(args) == 0 || args[0] == "auth" {
 		return false
 	}
-	if os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != "" || os.Getenv("GH_ENTERPRISE_TOKEN") != "" {
+	if os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != "" {
 		return false
 	}
 	return isAccessError(stderr)

@@ -90,7 +90,7 @@ func buildMeQueriesWithQualifier(qualifier, login string) []string {
 // resolveOwnerQualifier returns "org:<owner>" for organizations
 // or "user:<owner>" for personal accounts.
 func resolveOwnerQualifier(owner string) string {
-	stdout, _, err := ghExecFunc("api", fmt.Sprintf("users/%s", owner), "--jq", ".type")
+	stdout, _, err := execGHActive("api", fmt.Sprintf("users/%s", owner), "--jq", ".type")
 	if err != nil {
 		return fmt.Sprintf("org:%s", owner)
 	}

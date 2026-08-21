@@ -123,16 +123,36 @@ func TestExecGHSkipsAuthCommands(t *testing.T) {
 }
 
 func TestExecGHSkipsFallbackWhenTokenEnvOverrideSet(t *testing.T) {
+	for _, variable := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
+		t.Run(variable, func(t *testing.T) {
+			calls := 0
+			withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+				calls++
+				return bytes.Buffer{}, *bytes.NewBufferString("Not Found"), errors.New("exit status 1")
+			}, []ghAccount{{Login: "a", Active: true}, {Login: "b", Active: false}}, map[string]string{"b": "tok"})
+			t.Setenv(variable, "explicit")
+
+			_, _, _ = execGH("api", "repos/owner/private")
+			if calls != 1 {
+				t.Fatalf("%s override must disable fallback, got %d calls", variable, calls)
+			}
+		})
+	}
+}
+
+func TestExecGHFallsBackDespiteEnterpriseToken(t *testing.T) {
 	calls := 0
 	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		calls++
-		return bytes.Buffer{}, *bytes.NewBufferString("Not Found"), errors.New("exit status 1")
+		if calls == 1 {
+			return bytes.Buffer{}, *bytes.NewBufferString("Not Found"), errors.New("exit status 1")
+		}
+		return bytes.Buffer{}, bytes.Buffer{}, nil
 	}, []ghAccount{{Login: "a", Active: true}, {Login: "b", Active: false}}, map[string]string{"b": "tok"})
-	t.Setenv("GH_TOKEN", "explicit")
+	t.Setenv("GH_ENTERPRISE_TOKEN", "ghs_enterprise")
 
-	_, _, _ = execGH("api", "repos/owner/private")
-	if calls != 1 {
-		t.Fatalf("explicit GH_TOKEN override must disable fallback, got %d calls", calls)
+	if _, _, err := execGH("api", "repos/owner/private"); err != nil {
+		t.Fatalf("enterprise token must not disable github.com fallback, got %v", err)
 	}
 }
 
