@@ -45,8 +45,8 @@ Comprehensive quality enforcement for this Go CLI extension. Every command opera
 
 - **Module**: `github.com/HemSoft/gh-x`
 - **Package**: `main` (single package)
-- **Source files**: `main.go`, `prlist.go`, `atm.go`, `me.go`, `changelog.go`
-- **Test files**: `main_test.go`, `atm_test.go`, `me_test.go`, `changelog_test.go`
+- **Source files**: `src/*.go`
+- **Test files**: `src/*_test.go`
 - **Build**: `go build ./...`
 - **Test**: `go test -race -count=1 ./...`
 - **Vet**: `go vet ./...`
@@ -232,11 +232,11 @@ logic they delegate to IS fully tested. Testing them would require mocking
 
 **Excluded functions** (0% coverage, ~53 mutations marked "not covered"):
 
-- `executeAtm`, `fetchAtmNodes`, `fetchAtmSingleSearch`, `fetchAtmMultiSearch`, `resolveCurrentUser` (atm.go)
-- `fetchReleases`, `fetchReleaseByTag` (changelog.go)
-- `main`, `runList`, `fetchLatestRelease` (main.go)
-- `executeList`, `fetchSupplementalData`, `fetchRequiredChecks`, `renderTable`, `resolveRepoLabel`, `fetchRequiredCheckContexts`, `fetchPRSupplemental` (prlist.go)
-- `buildMeQueries`, `resolveOwnerQualifier`, `executeMe`, `fetchMeNodes` (me.go)
+- `executeAtm`, `fetchAtmNodes`, `fetchAtmSingleSearch`, `fetchAtmMultiSearch`, `resolveCurrentUser` (`src/atm.go`)
+- `fetchReleases`, `fetchReleaseByTag` (`src/changelog.go`)
+- `main`, `runList`, `fetchLatestRelease` (`src/main.go`)
+- `executeList`, `fetchSupplementalData`, `fetchRequiredChecks`, `renderTable`, `resolveRepoLabel`, `fetchRequiredCheckContexts`, `fetchPRSupplemental` (`src/prlist.go`)
+- `buildMeQueries`, `resolveOwnerQualifier`, `executeMe`, `fetchMeNodes` (`src/me.go`)
 
 **When to revisit**: If any of these functions gain retry logic, caching, error
 recovery, or conditional branching beyond "call CLI → check error → parse result",

@@ -112,7 +112,7 @@ jobs:
             [[ "$os" == "windows" ]] && ext=".exe"
             output="dist/${os}-${arch}${ext}"
             echo "Building ${output}..."
-            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${tag} -X main.buildDate=${build_date}" -o "$output" .
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${tag} -X main.buildDate=${build_date}" -o "$output" ./src
           done
 
       - name: Generate release notes

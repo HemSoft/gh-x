@@ -12,6 +12,9 @@ and this project uses semantic versioning.
 - Added interactive, read-only `gh x pr list --watch` monitoring with a
   `--monitor` alias, configurable refresh intervals, stable rows, and concise
   refresh status and change summaries.
+- Added local Copilot and Codex CLI usage dashboards (`src/codex-dashboard`,
+  `src/dashboard-hub`) with launcher scripts, a combined hub, and an optional
+  Tailscale Serve installer for tailnet access.
 - Expanded `gh x status` into a structured repository health dashboard with
   default-branch health, local/remote/dangling branch counts, conservative
   worktree cleanup candidates, and separate open issue and pull request tables.
@@ -20,6 +23,8 @@ and this project uses semantic versioning.
 
 ### Changed
 
+- Moved all Go sources and tests under `src/`; build commands now target
+  `./src`.
 - Condensed pull request tables with one-space column gaps, compact review
   decision symbols, and `Rev` and `Upd` headers.
 

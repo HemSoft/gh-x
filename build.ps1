@@ -13,7 +13,7 @@ go test ./...
 
 Write-Host '--- build ---'
 $date = Get-Date -Format 'yyyy-MM-dd'
-go build -ldflags "-X main.version=$tag -X main.buildDate=$date" -o gh-x.exe .
+go build -ldflags "-X main.version=$tag -X main.buildDate=$date" -o gh-x.exe ./src
 
 # Install into gh extension directory so `gh x` uses the local build
 $extDir = Join-Path $env:LOCALAPPDATA 'GitHub CLI\extensions\gh-x'

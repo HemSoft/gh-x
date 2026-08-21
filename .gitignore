@@ -1,8 +1,12 @@
 # Build outputs
 gh-x
 gh-x.exe
+src.exe
 dist/
 bin/
+
+# Local agent state (generated dashboards, session artifacts)
+.codex/
 
 # Go
 coverage

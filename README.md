@@ -305,12 +305,12 @@ Requires Go 1.26+.
 
 ```bash
 # Build and install locally (one-time symlink setup)
-go build -o gh-x.exe .   # Windows
-go build -o gh-x .        # macOS/Linux
+go build -o gh-x.exe ./src   # Windows
+go build -o gh-x ./src       # macOS/Linux
 gh extension install .
 
 # After code changes, just rebuild — no reinstall needed
-go build -o gh-x.exe .
+go build -o gh-x.exe ./src
 gh x pr list
 ```
 
@@ -319,6 +319,40 @@ A convenience script is provided for Windows:
 ```powershell
 .\build.ps1   # runs vet → test → build
 ```
+
+### Local usage dashboards
+
+The repository includes launchers for the local Copilot CLI and Codex CLI
+usage dashboards:
+
+```powershell
+.\run.ps1        # open the Copilot dashboard in the active Copilot Canvas
+.\run-codex.ps1  # open the Codex dashboard in a standalone window
+.\run-dashboard-hub.ps1  # open the combined local dashboard hub
+```
+
+The Codex dashboard reads `~\.codex\state_5.sqlite` and local rollout JSONL
+files in read-only mode. It shows recent sessions, token and cache totals,
+requests, tool calls, context usage, runtimes, the latest weekly rate-limit
+snapshot, and projected usage at reset based on the current pace. Changed
+session rows glow after each refresh. The server listens only on `127.0.0.1`
+behind a random URL token. The Codex launcher starts that server in the
+background and opens it in a dedicated Microsoft Edge or Google Chrome app
+window. Later launches reuse the running local server.
+
+For phone access over Tailscale, install the persistent loopback-only hub once:
+
+```powershell
+.\install-dashboard-hub.ps1
+```
+
+The installer registers the `HemSoft CLI Dashboard Hub` logon task and mounts
+the hub at `/dashboards/` with Tailscale Serve. Existing Serve mounts are left
+in place. Open `https://<home-magicdns-name>/dashboards/` from another device
+on the tailnet. The installer also adds a raw TCP forward on tailnet port 80,
+so `http://<home-tailscale-ip>/` works when a client cannot resolve MagicDNS.
+Neither route is exposed to the LAN or public internet. The hub reads Codex state directly and uses the installed
+`copilot-spend` extension's read-only session-store adapter and current UI.
 
 ## How it works
 

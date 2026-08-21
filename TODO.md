@@ -16,8 +16,8 @@
 | ✅ | Medium | Document install and usage flows | README rewritten |
 | ✅ | Low | Prepare release packaging | Auto-release + 12 platforms |
 | ✅ | High | Design `gh x atm` | Multi-search GraphQL |
-| ✅ | High | Implement `gh x atm` | Full impl in `atm.go` |
-| ✅ | Medium | Add tests for `atm` | 591 lines in `atm_test.go` |
+| ✅ | High | Implement `gh x atm` | Full impl in `src/atm.go` |
+| ✅ | Medium | Add tests for `atm` | 591 lines in `src/atm_test.go` |
 | ✅ | Medium | CRAP score analysis | All functions < 30 CRAP |
 | ✅ | Medium | Mutation testing baseline | Gremlins configured in CI |
 | ✅ | Low | Markdown lint cleanup | Config + fixes applied |
