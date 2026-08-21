@@ -149,6 +149,9 @@ jobs:
 
       - name: Verify coverage artifact
         run: |
+          pwd
+          ls -la
+          find "$GITHUB_WORKSPACE" -maxdepth 3 -name 'coverage.out' || true
           if [ ! -f coverage.out ]; then
             echo "::error::coverage.out not found — artifact download may have failed"
             exit 1
