@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 )
 
 // version and buildDate are injected at build time via ldflags.
