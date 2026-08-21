@@ -137,11 +137,57 @@ func runPr(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 	// Numeric first arg is shorthand for "view <number>"
 	if looksLikeNumber(args[0]) {
+		if watchRequested("view", args[1:]) {
+			return errors.New("--watch and --monitor are only supported for gh x pr list")
+		}
 		cmd := resolvePrCommand("view")
 		return cmd.handler(args, stdout, stderr)
 	}
+	if args[0] != "list" && watchRequested(args[0], args[1:]) {
+		return errors.New("--watch and --monitor are only supported for gh x pr list")
+	}
 	cmd := resolvePrCommand(args[0])
 	return cmd.handler(args[1:], stdout, stderr)
+}
+
+func watchRequested(command string, args []string) bool {
+	for index := 0; index < len(args); index++ {
+		if args[index] == "--" {
+			return false
+		}
+		if prFlagTakesValue(command, args[index]) {
+			index++
+			continue
+		}
+		arg := args[index]
+		if arg == "--watch" || arg == "--monitor" {
+			return true
+		}
+	}
+	return false
+}
+
+func prFlagTakesValue(command, arg string) bool {
+	valueFlags := map[string]map[string]struct{}{
+		"view": {"--repo": {}, "-R": {}},
+		"review": {
+			"--repo": {}, "-R": {}, "--agent": {}, "-a": {}, "--command": {},
+			"--model": {}, "-m": {}, "--effort": {}, "--mode": {}, "--preset": {},
+			"--base": {}, "-B": {}, "--instructions": {}, "-i": {},
+			"--instructions-file": {}, "--reviewer": {},
+		},
+		"atm":       {"--org": {}, "-o": {}, "--limit": {}, "-L": {}},
+		"me":        {"--org": {}, "-o": {}, "--limit": {}, "-L": {}},
+		"changelog": {"--version": {}, "--limit": {}, "-L": {}},
+		"list": {
+			"--repo": {}, "-R": {}, "--limit": {}, "-L": {}, "--state": {}, "-s": {},
+			"--author": {}, "-A": {}, "--assignee": {}, "-a": {}, "--app": {},
+			"--base": {}, "-B": {}, "--head": {}, "-H": {}, "--search": {}, "-S": {},
+			"--label": {}, "-l": {}, "--interval": {},
+		},
+	}
+	_, ok := valueFlags[command][arg]
+	return ok
 }
 
 func resolveRunCommand(name string) subcommand {
@@ -338,6 +384,9 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) error {
 		options.author = resolved
 	}
 
+	if options.watch {
+		return runWatch(options, stdout, stderr)
+	}
 	return executeListFunc(options, stdout)
 }
 
@@ -375,6 +424,9 @@ func parseListOptions(args []string, stderr io.Writer) (listOptions, error) {
 	flags.BoolVar(&options.web, "web", false, "Open the matching pull requests in the browser")
 	flags.BoolVar(&options.web, "w", false, "Open the matching pull requests in the browser")
 	flags.BoolVar(&options.json, "json", false, "Output enriched JSON instead of a table")
+	flags.BoolVar(&options.watch, "watch", false, "Refresh the pull request table until Esc or Ctrl+C")
+	flags.BoolVar(&options.watch, "monitor", false, "Alias for --watch")
+	flags.DurationVar(&options.interval, "interval", defaultWatchInterval, "Refresh interval for --watch (default 30s)")
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -388,15 +440,50 @@ func parseListOptions(args []string, stderr io.Writer) (listOptions, error) {
 		return options, fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), ", "))
 	}
 
+	return options, validateListOptions(options, flags)
+}
+
+func validateListOptions(options listOptions, flags *flag.FlagSet) error {
 	if options.limit < 1 {
-		return options, errors.New("limit must be greater than zero")
+		return errors.New("limit must be greater than zero")
 	}
+	if err := validateWatchOptions(options, flags); err != nil {
+		return err
+	}
+	return validateOutputOptions(options)
+}
 
+func validateWatchOptions(options listOptions, flags *flag.FlagSet) error {
+	if !options.watch && flagWasProvided(flags, "interval") {
+		return errors.New("--interval requires --watch or --monitor")
+	}
+	if options.watch && options.interval < minimumWatchInterval {
+		return fmt.Errorf("--interval must be at least %s", minimumWatchInterval)
+	}
+	if options.watch && options.web {
+		return errors.New("--watch and --web cannot be used together")
+	}
+	if options.watch && options.json {
+		return errors.New("--watch and --json cannot be used together")
+	}
+	return nil
+}
+
+func validateOutputOptions(options listOptions) error {
 	if options.web && options.json {
-		return options, errors.New("--web and --json cannot be used together")
+		return errors.New("--web and --json cannot be used together")
 	}
+	return nil
+}
 
-	return options, nil
+func flagWasProvided(flags *flag.FlagSet, name string) bool {
+	provided := false
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == name {
+			provided = true
+		}
+	})
+	return provided
 }
 
 func runVersion(w io.Writer) error {
@@ -659,4 +746,7 @@ Flags:
   -d, --draft             Filter by draft state
   -w, --web               Open the matching pull requests in the browser
       --json              Output enriched JSON instead of a table
+      --watch             Refresh the table until Esc or Ctrl+C
+      --monitor           Alias for --watch
+      --interval duration Refresh interval for --watch (default 30s)
 `

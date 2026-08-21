@@ -88,6 +88,9 @@ Compared to `gh pr list`, this command keeps all existing filters but renders a 
 | `-d, --draft` | Show only draft PRs |
 | `-w, --web` | Open in browser |
 | `--json` | Output as JSON |
+| `--watch` | Refresh the table until `Esc` or `Ctrl+C` |
+| `--monitor` | Alias for `--watch` |
+| `--interval DUR` | Refresh interval for watch mode (default: `30s`) |
 
 ### Examples
 
@@ -98,7 +101,14 @@ gh x pr list --repo owner/repo --limit 10
 gh x pr list --label bug --label urgent
 gh x pr list --search "review:required status:success"
 gh x pr list --json
+gh x pr list --watch
+gh x pr list --monitor --interval 45s
 ```
+
+Watch mode is an interactive, read-only view. It reruns the same query, keeps
+the table visible during transient refresh failures, and reports concise state
+changes below the table. It requires a terminal and cannot be combined with
+`--json` or `--web`.
 
 ## What `gh x pr me` adds
 

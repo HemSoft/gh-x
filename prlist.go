@@ -26,6 +26,9 @@ var ghExecFunc = gh.Exec
 // fetchPRSupplementalBatchFunc is swapped in tests to avoid real API calls.
 var fetchPRSupplementalBatchFunc = fetchPRSupplementalBatch
 
+// fetchPullRequestListFunc is swapped in watch tests to avoid real API calls.
+var fetchPullRequestListFunc = fetchPullRequestList
+
 type listOptions struct {
 	repo      string
 	limit     int
@@ -39,6 +42,8 @@ type listOptions struct {
 	draftOnly bool
 	web       bool
 	json      bool
+	watch     bool
+	interval  time.Duration
 	labels    stringSliceFlag
 }
 
@@ -110,12 +115,17 @@ type displayPullRequest struct {
 	URL       string `json:"url"`
 	Repo      string `json:"repo,omitempty"`
 
-	updatedAt time.Time // unexported; used for sorting
+	checksDowngraded bool      // unexported; required-check rules downgraded a pass
+	updatedAt        time.Time // unexported; used for sorting
 }
 
 type pullRequestListResult struct {
-	Entries  []pullRequest
-	Rendered []displayPullRequest
+	Entries                []pullRequest
+	Rendered               []displayPullRequest
+	SupplementalFailed     bool
+	RequiredChecksFailed   bool
+	FailedRequiredCheckPRs map[int]bool
+	AuxiliaryErr           error
 }
 
 func (s tableStyler) numberCell(number int, url string) tableCell {
@@ -262,9 +272,23 @@ func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListRe
 		return pullRequestListResult{}, fmt.Errorf("decode gh pr list output: %w", err)
 	}
 	supplemental, supplementalFailed, repoOwner, repoName := fetchSupplementalData(options.repo, pullRequests)
-	requiredByBranch := fetchRequiredChecks(repoOwner, repoName, pullRequests)
+	requiredByBranch, failedRequiredBranches := fetchRequiredChecks(repoOwner, repoName, pullRequests)
+	failedRequiredPRs := make(map[int]bool)
+	for _, pr := range pullRequests {
+		if failedRequiredBranches[pr.BaseRefName] {
+			failedRequiredPRs[pr.Number] = true
+		}
+	}
+	requiredChecksFailed := len(failedRequiredBranches) > 0
 	rendered := enrichPullRequests(pullRequests, supplemental, supplementalFailed, requiredByBranch, now)
-	return pullRequestListResult{Entries: pullRequests, Rendered: rendered}, nil
+	return pullRequestListResult{
+		Entries:                pullRequests,
+		Rendered:               rendered,
+		SupplementalFailed:     supplementalFailed,
+		RequiredChecksFailed:   requiredChecksFailed,
+		FailedRequiredCheckPRs: failedRequiredPRs,
+		AuxiliaryErr:           auxiliaryRefreshError(supplementalFailed, requiredChecksFailed),
+	}, nil
 }
 
 func wrapExecError(err error, stderr string) error {
@@ -328,7 +352,7 @@ func runView(args []string, stdout io.Writer, _ io.Writer) error {
 
 	prs := []pullRequest{pr}
 	supplemental, supplementalFailed, repoOwner, repoName := fetchSupplementalData(repo, prs)
-	requiredByBranch := fetchRequiredChecks(repoOwner, repoName, prs)
+	requiredByBranch, _ := fetchRequiredChecks(repoOwner, repoName, prs)
 	rendered := enrichPullRequests(prs, supplemental, supplementalFailed, requiredByBranch, time.Now().UTC())
 
 	// Render as a single-row table with no limit footer
@@ -356,17 +380,37 @@ func fetchSupplementalData(repo string, prs []pullRequest) (map[int]prSupplement
 }
 
 // fetchRequiredChecks retrieves required check contexts per base branch (best-effort).
-func fetchRequiredChecks(owner, name string, prs []pullRequest) map[string]map[string]bool {
+func fetchRequiredChecks(owner, name string, prs []pullRequest) (map[string]map[string]bool, map[string]bool) {
 	result := make(map[string]map[string]bool)
+	failed := make(map[string]bool)
 	if owner == "" {
-		return result
+		for _, base := range uniqueBaseBranches(prs) {
+			failed[base] = true
+		}
+		return result, failed
 	}
 	for _, base := range uniqueBaseBranches(prs) {
-		if ctx := fetchRequiredCheckContexts(owner, name, base); ctx != nil {
+		if ctx, ok := fetchRequiredCheckContexts(owner, name, base); ok && len(ctx) > 0 {
 			result[base] = ctx
+		} else if !ok {
+			failed[base] = true
 		}
 	}
-	return result
+	return result, failed
+}
+
+func auxiliaryRefreshError(supplementalFailed, requiredChecksFailed bool) error {
+	failed := make([]string, 0, 2)
+	if supplementalFailed {
+		failed = append(failed, "supplemental pull request data")
+	}
+	if requiredChecksFailed {
+		failed = append(failed, "required check rules")
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+	return fmt.Errorf("partial refresh: %s unavailable", strings.Join(failed, " and "))
 }
 
 func uniqueBaseBranches(prs []pullRequest) []string {
@@ -429,6 +473,7 @@ func downgradeChecksIfMissing(dp *displayPullRequest, requiredByBranch map[strin
 	for ctx := range required {
 		if !reported[ctx] {
 			dp.Checks = "pending"
+			dp.checksDowngraded = true
 			return
 		}
 	}
@@ -1070,16 +1115,41 @@ func extractReportedContexts(items []checkItem) map[string]bool {
 // fetchRequiredCheckContexts returns the set of required status check context
 // names for a branch, derived from repository rulesets. Best-effort: returns
 // nil on error so callers fall back to per-item normalization only.
-func fetchRequiredCheckContexts(owner, name, branch string) map[string]bool {
+func fetchRequiredCheckContexts(owner, name, branch string) (map[string]bool, bool) {
 	endpoint := fmt.Sprintf("repos/%s/%s/rules/branches/%s", owner, name, url.PathEscape(branch))
 	stdout, _, err := gh.Exec("api", endpoint)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	return parseRequiredCheckRules(stdout.Bytes())
+	return parseRequiredCheckRulesResult(stdout.Bytes())
+}
+
+func parseRequiredCheckRulesResult(data []byte) (map[string]bool, bool) {
+	var rawRules []json.RawMessage
+	if err := json.Unmarshal(data, &rawRules); err != nil {
+		return nil, false
+	}
+	if rawRules == nil {
+		return nil, false
+	}
+	for _, rawRule := range rawRules {
+		var rule map[string]json.RawMessage
+		if err := json.Unmarshal(rawRule, &rule); err != nil || rule == nil {
+			return nil, false
+		}
+	}
+	if _, err := decodeRequiredCheckRules(data); err != nil {
+		return nil, false
+	}
+	return parseRequiredCheckRules(data), true
 }
 
 func parseRequiredCheckRules(data []byte) map[string]bool {
+	contexts, _ := decodeRequiredCheckRules(data)
+	return contexts
+}
+
+func decodeRequiredCheckRules(data []byte) (map[string]bool, error) {
 	var rules []struct {
 		Type       string `json:"type"`
 		Parameters struct {
@@ -1089,7 +1159,7 @@ func parseRequiredCheckRules(data []byte) map[string]bool {
 		} `json:"parameters"`
 	}
 	if err := json.Unmarshal(data, &rules); err != nil {
-		return nil
+		return nil, err
 	}
 	contexts := make(map[string]bool)
 	for _, rule := range rules {
@@ -1102,9 +1172,9 @@ func parseRequiredCheckRules(data []byte) map[string]bool {
 		}
 	}
 	if len(contexts) == 0 {
-		return nil
+		return nil, nil
 	}
-	return contexts
+	return contexts, nil
 }
 
 func resolveRepo(repoOverride string) (string, string, error) {
