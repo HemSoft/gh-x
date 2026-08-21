@@ -1,18 +1,15 @@
 # gh-x
 
-[![SFL Upstream](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FHemSoft%2Fgh-x%2Fmain%2Fsfl.json&query=%24.version&prefix=v&label=SFL%20Upstream&color=FFD700&style=flat&logo=githubactions&logoColor=white)](https://github.com/HemSoft/set-it-free-loop)
-<!-- SFL_BADGE: auto-updated by deploy-workflow.ps1 -->
-
 A GitHub CLI extension that supercharges `gh pr list` with a richer,
 color-coded table view — approvals, AI reviewer status, check details,
 comment resolution, and clickable PR links.
 Also includes `gh x pr atm` for org-wide PR visibility.
 
 ```text
-#   Title                                             Author State Rev SFL AI   Appv Checks  Cmts  Branch                Upd
-#12 PLAT-18678: Migrate user-groups to .NET 10        jdoe   open  ✓   ✓   pass 2    pending 19/19 feature/PLAT-18678    23h
-#10 .net 10 upgradation                               asmith open  •   -   -    0    fail    -     feature/PLAT-8516     17d
-#5  feat(user-groups): Add golden-path IaC structure  bclark open  •   ✗   fail 0    pass    2/4   golden-path-alignment 4mo
+#   Title                                             Author State Rev AI   Appv Checks  Cmts  Branch                Upd
+#12 PLAT-18678: Migrate user-groups to .NET 10        jdoe   open  ✓   pass 2    pending 19/19 feature/PLAT-18678    23h
+#10 .net 10 upgradation                               asmith open  •   -    0    fail    -     feature/PLAT-8516     17d
+#5  feat(user-groups): Add golden-path IaC structure  bclark open  •   fail 0    pass    2/4   golden-path-alignment 4mo
 ```
 
 ## Installation
@@ -63,9 +60,8 @@ Compared to `gh pr list`, this command keeps all existing filters but renders a 
 | **Author**| PR author login |
 | **State**| `open`, `draft`, `closed`, or `merged` |
 | **Rev**  | Overall review decision: `✓` approved, `✗` changes requested, or `•` review required |
-| **SFL**  | Latest SFL Reviewer decision: `✓` approved, `✗` changes requested, `•` commented, or `-` absent |
 | **AI**   | AI reviewer status: `pass` (approved/no issues), `fail` (issues found), or `-` (no AI review). Detects CodeRabbit, Copilot PR reviewer, and other `[bot]` reviewers |
-| **Appv** | Count of unique formal approvals, including SFL and other bot reviewers |
+| **Appv** | Count of unique formal approvals, including bot reviewers |
 | **Checks**| CI status: `pass`, `fail`, `pending`, `merge`, or `-`. `merge` (red) indicates merge conflicts with the base branch. Includes required checks from repo rulesets that haven't reported yet |
 | **Cmts** | Review thread resolution: `resolved/total` (e.g., `3/5`). `-` if no threads |
 | **Branch**| Head branch name |
@@ -115,9 +111,9 @@ changes below the table. It requires a terminal and cannot be combined with
 All your open PRs — authored or assigned — across every repo in the org.
 
 ```text
-#   Title                                      Repo   Author State Rev SFL AI   Appv Checks Cmts Upd
-#42 feat: add repo governance (CI lint, Cop... my-app jdoe   open  •   ✗   fail 0    fail   0/1  2d
-#15 fix: update auth token refresh logic       api    bsmith open  •   -   -    0    pass   3/3  5d
+#   Title                                      Repo   Author State Rev AI   Appv Checks Cmts Upd
+#42 feat: add repo governance (CI lint, Cop... my-app jdoe   open  •   fail 0    fail   0/1  2d
+#15 fix: update auth token refresh logic       api    bsmith open  •   -    0    pass   3/3  5d
 ```
 
 Works with both organizations and personal accounts.
@@ -144,9 +140,9 @@ gh x pr me --json                    # machine-readable output
 An org-wide view of PRs that need your attention — no more checking each repo individually.
 
 ```text
-#   Title                                      Repo   Author State Rev SFL AI   Appv Checks Cmts  Upd
-#42 feat: add repo governance (CI lint, Cop... my-app jdoe   open  •   ✗   fail 0    fail   0/1   2d
-#41 feat: add contract-testing for PactNet...  my-app jdoe   open  •   ✓   pass 0    pass   12/12 2d
+#   Title                                      Repo   Author State Rev AI   Appv Checks Cmts  Upd
+#42 feat: add repo governance (CI lint, Cop... my-app jdoe   open  •   fail 0    fail   0/1   2d
+#41 feat: add contract-testing for PactNet...  my-app jdoe   open  •   pass 0    pass   12/12 2d
 ```
 
 By default, shows open PRs you authored across the org.

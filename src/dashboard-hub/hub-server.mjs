@@ -88,7 +88,7 @@ export async function createDashboardHub({
         `${mobileTableCss}${codexMobileCss}`,
     );
     const copilotHtml = injectMobileCss(
-        copilotHtmlTemplate.replace("__SFLD_API_URL__", "api/usage"),
+        copilotHtmlTemplate.replace("__DASHBOARD_API_URL__", "api/usage"),
         `${mobileTableCss}${copilotMobileCss}`,
     );
 

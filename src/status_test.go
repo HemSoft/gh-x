@@ -455,7 +455,7 @@ func sampleStatusDashboard() statusDashboard {
 			{Path: "C:/repo.worktrees/old", Branch: "old", CleanupCandidate: true, CleanupReason: "clean, merged branch with no open PR"},
 		},
 		Issues:       []displayIssue{{Number: 7, Title: "Status dashboard", Author: "alice", State: "open", Updated: "1m", URL: "https://github.com/owner/repo/issues/7"}},
-		PullRequests: []displayPullRequest{{Number: 2, Title: "Open PR", Author: "bob", State: "open", Review: "required", SFLReview: "-", AIReview: "-", Checks: "pending", Comments: "-", Branch: "feature", Updated: "2m", URL: "https://github.com/owner/repo/pull/2"}},
+		PullRequests: []displayPullRequest{{Number: 2, Title: "Open PR", Author: "bob", State: "open", Review: "required", AIReview: "-", Checks: "pending", Comments: "-", Branch: "feature", Updated: "2m", URL: "https://github.com/owner/repo/pull/2"}},
 	}
 }
 

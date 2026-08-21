@@ -139,19 +139,17 @@ func TestPreserveWatchAuxiliaryFieldsOnPartialRefresh(t *testing.T) {
 		Comments:         "2/4",
 		AIReview:         "pass",
 		AIClean:          &clean,
-		SFLReview:        "approved",
 		Approvals:        3,
 	}}
 	current := []displayPullRequest{{
-		Number:    1,
-		Checks:    "pass",
-		Comments:  "?",
-		AIReview:  "?",
-		SFLReview: "?",
+		Number:   1,
+		Checks:   "pass",
+		Comments: "?",
+		AIReview: "?",
 	}}
 
 	got := preserveWatchAuxiliaryFields(previous, current, true, map[int]bool{1: true})
-	if got[0].Checks != "pending" || got[0].Comments != "2/4" || got[0].AIReview != "pass" || got[0].SFLReview != "approved" || got[0].Approvals != 3 || got[0].AIClean == nil || !*got[0].AIClean {
+	if got[0].Checks != "pending" || got[0].Comments != "2/4" || got[0].AIReview != "pass" || got[0].Approvals != 3 || got[0].AIClean == nil || !*got[0].AIClean {
 		t.Fatalf("expected prior auxiliary values to survive partial refresh, got %#v", got[0])
 	}
 }
@@ -311,7 +309,7 @@ func TestWatchSignalExitCode(t *testing.T) {
 func TestRenderWatchScreenIncludesFixedFooter(t *testing.T) {
 	var output bytes.Buffer
 	lastRefresh := time.Date(2026, 8, 17, 15, 4, 5, 0, time.UTC)
-	rows := []displayPullRequest{{Number: 7, Title: "Watch me", Author: "user", State: "open", Review: "review", SFLReview: "-", AIReview: "-", Checks: "pending", Comments: "-", Branch: "feature/watch", Updated: "1m"}}
+	rows := []displayPullRequest{{Number: 7, Title: "Watch me", Author: "user", State: "open", Review: "review", AIReview: "-", Checks: "pending", Comments: "-", Branch: "feature/watch", Updated: "1m"}}
 	err := renderWatchScreen(&output, listOptions{limit: 30}, "HemSoft/gh-x", rows, lastRefresh, 30*time.Second, []watchChange{{number: 7, text: "#7 Checks pending -> pass"}}, errors.New("temporary API failure"), false)
 	if err != nil {
 		t.Fatal(err)

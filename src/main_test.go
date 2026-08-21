@@ -50,57 +50,6 @@ func TestBuildListArgsIncludesFilters(t *testing.T) {
 	}
 }
 
-func TestDetectSFLReview(t *testing.T) {
-	tests := []struct {
-		name       string
-		reviews    []aiReviewNode
-		headRefOID string
-		want       string
-	}{
-		{name: "absent", want: "-"},
-		{name: "approved", reviews: []aiReviewNode{
-			{State: "APPROVED", AuthorLogin: "set-it-free-loop"},
-		}, want: "approved"},
-		{name: "rest bot login", reviews: []aiReviewNode{
-			{State: "CHANGES_REQUESTED", AuthorLogin: "set-it-free-loop[bot]"},
-		}, want: "changes"},
-		{name: "sfl app bot login", reviews: []aiReviewNode{
-			{State: "APPROVED", AuthorLogin: "sfl-app[bot]"},
-		}, want: "approved"},
-		{name: "stale sfl app review ignored", reviews: []aiReviewNode{
-			{State: "APPROVED", AuthorLogin: "sfl-app[bot]", CommitOID: "old-head"},
-		}, headRefOID: "current-head", want: "-"},
-		{name: "current-head sfl app review accepted", reviews: []aiReviewNode{
-			{State: "APPROVED", AuthorLogin: "sfl-app[bot]", CommitOID: "current-head"},
-		}, headRefOID: "current-head", want: "approved"},
-		{name: "sfl review without commit metadata ignored", reviews: []aiReviewNode{
-			{State: "APPROVED", AuthorLogin: "sfl-app[bot]"},
-		}, headRefOID: "current-head", want: "-"},
-		{name: "commented", reviews: []aiReviewNode{
-			{State: "COMMENTED", AuthorLogin: "set-it-free-loop"},
-		}, want: "commented"},
-		{name: "latest decision wins", reviews: []aiReviewNode{
-			{State: "COMMENTED", AuthorLogin: "set-it-free-loop"},
-			{State: "APPROVED", AuthorLogin: "set-it-free-loop"},
-		}, want: "approved"},
-		{name: "dismissed clears decision", reviews: []aiReviewNode{
-			{State: "APPROVED", AuthorLogin: "set-it-free-loop"},
-			{State: "DISMISSED", AuthorLogin: "set-it-free-loop"},
-		}, want: "-"},
-		{name: "other bot ignored", reviews: []aiReviewNode{
-			{State: "APPROVED", AuthorLogin: "copilot-pull-request-reviewer"},
-		}, want: "-"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := detectSFLReview(tc.reviews, tc.headRefOID); got != tc.want {
-				t.Fatalf("detectSFLReview() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestBuildDisplayPullRequestNormalizesFields(t *testing.T) {
 	now := time.Date(2026, 5, 10, 1, 45, 0, 0, time.UTC)
 	pullRequest := pullRequest{
@@ -191,7 +140,7 @@ func TestFormatRelativeTime(t *testing.T) {
 func TestRenderTableNoColor(t *testing.T) {
 	var buf bytes.Buffer
 	prs := []displayPullRequest{
-		{Number: 42, Title: "My PR", Author: "user", State: "open", Review: "approved", SFLReview: "approved", AIReview: "fail", Approvals: 0, Checks: "pass", Comments: "3/5", Branch: "feat", Updated: "2h"},
+		{Number: 42, Title: "My PR", Author: "user", State: "open", Review: "approved", AIReview: "fail", Approvals: 0, Checks: "pass", Comments: "3/5", Branch: "feat", Updated: "2h"},
 	}
 	err := renderTableWithStyle(&buf, listOptions{}, prs, false)
 	if err != nil {
@@ -210,7 +159,7 @@ func TestRenderTableNoColor(t *testing.T) {
 	if !strings.Contains(output, "✓") {
 		t.Fatal("expected compact approval symbols in output")
 	}
-	if !strings.Contains(output, "Rev") || !strings.Contains(output, "SFL") || !strings.Contains(output, "Upd") {
+	if !strings.Contains(output, "Rev") || !strings.Contains(output, "Upd") {
 		t.Fatalf("expected compact PR headers, got %q", output)
 	}
 }
@@ -393,8 +342,7 @@ func TestIsAIReviewer(t *testing.T) {
 		{"coderabbitai[bot]", true},
 		{"copilot[bot]", true},
 		{"copilot-pull-request-reviewer", true},
-		{"set-it-free-loop", true},
-		{"set-it-free-loop[bot]", true},
+		{"chatgpt-codex-connector", false},
 		{"human-reviewer", false},
 		{"dependabot[bot]", true},
 		{"", false},
@@ -1457,7 +1405,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			"reviews": {
 				"nodes": [
 					{"state": "APPROVED", "author": {"login": "copilot[bot]", "__typename": "Bot"}, "comments": {"totalCount": 0}},
-					{"state": "APPROVED", "author": {"login": "set-it-free-loop", "__typename": "Bot"}, "comments": {"totalCount": 0}}
+					{"state": "APPROVED", "author": {"login": "carol", "__typename": "User"}, "comments": {"totalCount": 0}}
 				]
 			},
 			"approvedReviews": {
@@ -1465,7 +1413,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 					{"author": {"login": "alice", "__typename": "User"}},
 					{"author": {"login": "Alice", "__typename": "User"}},
 					{"author": {"login": "bob", "__typename": "User"}},
-					{"author": {"login": "set-it-free-loop", "__typename": "Bot"}}
+					{"author": {"login": "carol", "__typename": "User"}}
 				]
 			}
 		}`)
@@ -1484,9 +1432,6 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 		if info.Approvals != 3 {
 			t.Fatalf("expected 3 unique approvers, got %d", info.Approvals)
-		}
-		if info.SFLReview != "approved" {
-			t.Fatalf("expected SFL approved, got %q", info.SFLReview)
 		}
 		if !info.AIClean {
 			t.Fatalf("expected AIClean=true for bot APPROVED with 0 comments")
@@ -1700,7 +1645,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 				"nodes": [{
 					"state": "APPROVED",
 					"commit": {"oid": "current-head"},
-					"author": {"login": "sfl-app", "__typename": "Bot"},
+					"author": {"login": "coderabbitai[bot]", "__typename": "Bot"},
 					"comments": {"totalCount": 0}
 				}]
 			},
@@ -1711,8 +1656,8 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		if !ok {
 			t.Fatal("expected valid supplemental node")
 		}
-		if info.AIReview != "?" || info.SFLReview != "?" || info.AIClean {
-			t.Fatalf("expected truncated data to fail closed, got AI=%q SFL=%q clean=%v", info.AIReview, info.SFLReview, info.AIClean)
+		if info.AIReview != "?" || info.AIClean {
+			t.Fatalf("expected truncated data to fail closed, got AI=%q clean=%v", info.AIReview, info.AIClean)
 		}
 	})
 
@@ -1862,39 +1807,39 @@ func TestNormalizeCheckStateUsesLatestNamedCheckRun(t *testing.T) {
 		{
 			name: "new success replaces old failure",
 			items: []checkItem{
-				checkRun("SFL Review", "FAILURE", "COMPLETED", oldRun),
-				checkRun("SFL Review", "SUCCESS", "COMPLETED", newRun),
+				checkRun("CI Review", "FAILURE", "COMPLETED", oldRun),
+				checkRun("CI Review", "SUCCESS", "COMPLETED", newRun),
 			},
 			want: "pass",
 		},
 		{
 			name: "api order does not matter",
 			items: []checkItem{
-				checkRun("SFL Review", "SUCCESS", "COMPLETED", newRun),
-				checkRun("SFL Review", "FAILURE", "COMPLETED", oldRun),
+				checkRun("CI Review", "SUCCESS", "COMPLETED", newRun),
+				checkRun("CI Review", "FAILURE", "COMPLETED", oldRun),
 			},
 			want: "pass",
 		},
 		{
 			name: "new failure replaces old success",
 			items: []checkItem{
-				checkRun("SFL Review", "SUCCESS", "COMPLETED", oldRun),
-				checkRun("SFL Review", "FAILURE", "COMPLETED", newRun),
+				checkRun("CI Review", "SUCCESS", "COMPLETED", oldRun),
+				checkRun("CI Review", "FAILURE", "COMPLETED", newRun),
 			},
 			want: "fail",
 		},
 		{
 			name: "new pending replaces old success",
 			items: []checkItem{
-				checkRun("SFL Review", "SUCCESS", "COMPLETED", oldRun),
-				checkRun("SFL Review", "", "IN_PROGRESS", newRun),
+				checkRun("CI Review", "SUCCESS", "COMPLETED", oldRun),
+				checkRun("CI Review", "", "IN_PROGRESS", newRun),
 			},
 			want: "pending",
 		},
 		{
 			name: "same job name in different workflows remains distinct",
 			items: []checkItem{
-				checkRun("SFL Review", "SUCCESS", "COMPLETED", newRun),
+				checkRun("CI Review", "SUCCESS", "COMPLETED", newRun),
 				checkRun("Other Workflow", "FAILURE", "COMPLETED", oldRun),
 			},
 			want: "fail",
@@ -2298,26 +2243,6 @@ func TestReviewCellAllDecisions(t *testing.T) {
 		cell := styler.reviewCell(tc.review)
 		if cell.text != tc.want {
 			t.Fatalf("reviewCell(%q).text = %q, want %q", tc.review, cell.text, tc.want)
-		}
-	}
-}
-
-func TestSFLReviewCellAllDecisions(t *testing.T) {
-	var buf bytes.Buffer
-	styler := newTableStyler(&buf, false)
-	tests := []struct {
-		review string
-		want   string
-	}{
-		{review: "approved", want: "✓"},
-		{review: "changes", want: "✗"},
-		{review: "commented", want: "•"},
-		{review: "-", want: "-"},
-	}
-	for _, tc := range tests {
-		cell := styler.sflReviewCell(tc.review)
-		if cell.text != tc.want {
-			t.Fatalf("sflReviewCell(%q).text = %q, want %q", tc.review, cell.text, tc.want)
 		}
 	}
 }

@@ -475,12 +475,11 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 	aiThreads := extractAtmReviewThreads(node)
 	reviewsTruncated := node.Reviews.TotalCount > len(node.Reviews.Nodes)
 	threadsTruncated := node.ReviewThreads.TotalCount > len(node.ReviewThreads.Nodes)
-	aiReview, sflReview, aiClean := summarizeSupplementalReviews(
+	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
 		aiThreads,
 		node.HeadRefOID,
 		anyConnectionTruncated(reviewsTruncated, threadsTruncated),
-		reviewsTruncated,
 	)
 	var aiCleanValue *bool
 	if aiClean {
@@ -503,7 +502,6 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 		Author:    authorName,
 		State:     normalizeState(node.State, node.IsDraft),
 		Review:    normalizeReviewDecision(node.ReviewDecision),
-		SFLReview: sflReview,
 		Approvals: countUniqueApprovers(approverLogins),
 		Checks:    normalizeCheckState(checkItems),
 		Comments:  formatComments(threads),
@@ -588,7 +586,7 @@ func renderAtmTable(stdout io.Writer, org, login string, options atmOptions, pul
 func renderAtmTableWithStyle(stdout io.Writer, pullRequests []displayPullRequest, colorEnabled bool) error {
 	styler := newTableStyler(stdout, colorEnabled)
 
-	headerLabels := []string{"#", "Title", "Repo", "Author", "State", "Rev", "SFL", "AI", "Appv", "Checks", "Cmts", "Upd"}
+	headerLabels := []string{"#", "Title", "Repo", "Author", "State", "Rev", "AI", "Appv", "Checks", "Cmts", "Upd"}
 	headers := make([]tableCell, len(headerLabels))
 	for i, label := range headerLabels {
 		headers[i] = styler.dim(label)
@@ -603,7 +601,6 @@ func renderAtmTableWithStyle(stdout io.Writer, pullRequests []displayPullRequest
 			styler.plain(pr.Author),
 			styler.stateCell(pr.State),
 			styler.reviewCell(pr.Review),
-			styler.sflReviewCell(pr.SFLReview),
 			styler.aiReviewCell(pr.AIReview),
 			styler.approvalCell(pr.Approvals),
 			styler.checksCell(pr.Checks),

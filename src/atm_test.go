@@ -322,20 +322,20 @@ func TestMapAtmNode(t *testing.T) {
 	}
 }
 
-func TestMapAtmNodeSFLApprovalWithOutstandingComments(t *testing.T) {
+func TestMapAtmNodeBotApprovalWithOutstandingComments(t *testing.T) {
 	data := []byte(`{
 		"data": {
 			"search": {
 				"nodes": [{
 					"number": 15,
-					"title": "SFL review",
+					"title": "Bot review",
 					"state": "OPEN",
 					"reviewDecision": "APPROVED",
 					"updatedAt": "2026-07-31T03:00:00Z",
-					"repository": {"nameWithOwner": "relias-engineering/set-it-free-loop"},
+					"repository": {"nameWithOwner": "relias-engineering/some-service"},
 					"reviews": {"nodes": [{
 						"state": "APPROVED",
-						"author": {"login": "set-it-free-loop", "__typename": "Bot"},
+						"author": {"login": "review-bot[bot]", "__typename": "Bot"},
 						"comments": {"totalCount": 3}
 					}]},
 					"reviewThreads": {
@@ -343,22 +343,22 @@ func TestMapAtmNodeSFLApprovalWithOutstandingComments(t *testing.T) {
 						"nodes": [{
 							"isResolved": false,
 							"comments": {"nodes": [{
-								"author": {"login": "set-it-free-loop", "__typename": "Bot"}
+								"author": {"login": "review-bot[bot]", "__typename": "Bot"}
 							}]}
 						}, {
 							"isResolved": false,
 							"comments": {"nodes": [{
-								"author": {"login": "set-it-free-loop", "__typename": "Bot"}
+								"author": {"login": "review-bot[bot]", "__typename": "Bot"}
 							}]}
 						}, {
 							"isResolved": false,
 							"comments": {"nodes": [{
-								"author": {"login": "set-it-free-loop", "__typename": "Bot"}
+								"author": {"login": "review-bot[bot]", "__typename": "Bot"}
 							}]}
 						}]
 					},
 					"approvedReviews": {"nodes": [{
-						"author": {"login": "set-it-free-loop", "__typename": "Bot"}
+						"author": {"login": "review-bot[bot]", "__typename": "Bot"}
 					}]}
 				}]
 			}
@@ -374,14 +374,11 @@ func TestMapAtmNodeSFLApprovalWithOutstandingComments(t *testing.T) {
 	if dp.Review != "approved" {
 		t.Fatalf("Review = %q, want approved", dp.Review)
 	}
-	if dp.SFLReview != "approved" {
-		t.Fatalf("SFLReview = %q, want approved", dp.SFLReview)
-	}
 	if dp.AIReview != "fail" {
 		t.Fatalf("AIReview = %q, want fail", dp.AIReview)
 	}
 	if dp.Approvals != 1 {
-		t.Fatalf("Approvals = %d, want 1 SFL approval", dp.Approvals)
+		t.Fatalf("Approvals = %d, want 1 bot approval", dp.Approvals)
 	}
 	if dp.Comments != "0/3" {
 		t.Fatalf("Comments = %q, want 0/3", dp.Comments)
@@ -407,25 +404,6 @@ func TestMapAtmNodeNoChecks(t *testing.T) {
 	}
 	if dp.Author != "-" {
 		t.Fatalf("expected author '-', got %q", dp.Author)
-	}
-}
-
-func TestMapAtmNodeFiltersStaleSFLReviews(t *testing.T) {
-	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	node := atmPullRequestNode{
-		Number:     7,
-		Title:      "Current SFL state",
-		State:      "OPEN",
-		UpdatedAt:  now,
-		HeadRefOID: "current-head",
-	}
-	node.Reviews.Nodes = []atmReviewNode{
-		makeAtmReview("APPROVED", "sfl-app[bot]", 0, "old-head"),
-		makeAtmReview("CHANGES_REQUESTED", "sfl-app[bot]", 1, "current-head"),
-	}
-
-	if got := mapAtmNode(node, now).SFLReview; got != "changes" {
-		t.Fatalf("SFLReview = %q, want changes from current head", got)
 	}
 }
 
@@ -468,8 +446,8 @@ func TestMapAtmNodeFailsClosedWhenReviewsTruncated(t *testing.T) {
 	}
 
 	dp := mapAtmNode(node, now)
-	if dp.AIReview != "?" || dp.SFLReview != "?" {
-		t.Fatalf("expected incomplete reviews to produce unknown status, got AI=%q SFL=%q", dp.AIReview, dp.SFLReview)
+	if dp.AIReview != "?" {
+		t.Fatalf("expected incomplete reviews to produce unknown status, got AI=%q", dp.AIReview)
 	}
 	if dp.AIClean != nil {
 		t.Fatalf("expected incomplete reviews to suppress AIClean, got %v", *dp.AIClean)
@@ -494,9 +472,6 @@ func TestMapAtmNodeFailsClosedWhenThreadsTruncated(t *testing.T) {
 	dp := mapAtmNode(node, now)
 	if dp.AIReview != "?" {
 		t.Fatalf("expected incomplete threads to produce unknown AI status, got %q", dp.AIReview)
-	}
-	if dp.SFLReview != "-" {
-		t.Fatalf("thread truncation should not obscure complete SFL reviews, got %q", dp.SFLReview)
 	}
 	if dp.AIClean != nil {
 		t.Fatalf("expected incomplete threads to suppress AIClean, got %v", *dp.AIClean)

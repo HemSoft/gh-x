@@ -9,7 +9,7 @@ import { createDashboardHub } from "./hub-server.mjs";
 test("serves both dashboards through local and Tailscale-mounted paths", async (context) => {
     const fixture = await mkdtemp(path.join(os.tmpdir(), "dashboard-hub-"));
     await Promise.all([
-        writeFile(path.join(fixture, "dashboard.html"), "<html><head><meta name=api content=\"__SFLD_API_URL__\"></head><body><table><tr><td>x</td></tr></table></body></html>"),
+        writeFile(path.join(fixture, "dashboard.html"), "<html><head><meta name=api content=\"__DASHBOARD_API_URL__\"></head><body><table><tr><td>x</td></tr></table></body></html>"),
         writeFile(path.join(fixture, "dashboard-ui.mjs"), "export const ready = true;"),
     ]);
     context.after(() => rm(fixture, { recursive: true, force: true }));
@@ -53,7 +53,7 @@ test("serves both dashboards through local and Tailscale-mounted paths", async (
 test("rejects invalid dashboard filters", async (context) => {
     const fixture = await mkdtemp(path.join(os.tmpdir(), "dashboard-hub-filter-"));
     await Promise.all([
-        writeFile(path.join(fixture, "dashboard.html"), "<html><head></head><body>__SFLD_API_URL__</body></html>"),
+        writeFile(path.join(fixture, "dashboard.html"), "<html><head></head><body>__DASHBOARD_API_URL__</body></html>"),
         writeFile(path.join(fixture, "dashboard-ui.mjs"), ""),
     ]);
     context.after(() => rm(fixture, { recursive: true, force: true }));

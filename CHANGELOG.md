@@ -28,6 +28,14 @@ and this project uses semantic versioning.
 - Condensed pull request tables with one-space column gaps, compact review
   decision symbols, and `Rev` and `Upd` headers.
 
+### Removed
+
+- Removed the SFL review automation from the repository (`sfl-pr-review`
+  workflows, `sfl.json`, the `sfl-review` label, and gh-aw support files) and
+  dropped the `SFL` column from `gh x pr list`, `gh x pr atm`, `gh x pr me`,
+  and watch mode. AI PR reviews for this repository now come from cubic and
+  Codex reviews only.
+
 ### Fixed
 
 - Recognized current-head Codex Cloud review summaries posted as pull-request

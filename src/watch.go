@@ -316,7 +316,6 @@ func preserveWatchRowAuxiliaryFields(current *displayPullRequest, before display
 		current.Comments = before.Comments
 		current.AIReview = before.AIReview
 		current.AIClean = before.AIClean
-		current.SFLReview = before.SFLReview
 		current.Approvals = before.Approvals
 	}
 	if requiredChecksFailed && before.checksDowngraded && current.Checks != "fail" && current.Checks != "merge" {
@@ -404,7 +403,6 @@ func watchFieldChanges(before, after displayPullRequest) []watchFieldChange {
 	}
 	appendChange("State", before.State, after.State, 2)
 	appendChange("Review", before.Review, after.Review, 3)
-	appendChange("SFL", before.SFLReview, after.SFLReview, 4)
 	appendChange("AI", before.AIReview, after.AIReview, 5)
 	appendChange("AI clean", formatWatchClean(before.AIClean), formatWatchClean(after.AIClean), 5)
 	appendChange("Approvals", fmt.Sprintf("%d", before.Approvals), fmt.Sprintf("%d", after.Approvals), 6)
