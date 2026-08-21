@@ -590,11 +590,13 @@ func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, 
 }
 
 // resolveOrgHint returns the owner half of an explicit repo override, or the
-// current repo's owner when no override is given. Empty on failure.
+// current repo's owner when no override is given. Empty on failure. Handles
+// the optional [HOST/] prefix by taking the penultimate path segment.
 func resolveOrgHint(repoOverride string) string {
 	if repoOverride != "" {
-		if parts := strings.SplitN(repoOverride, "/", 2); len(parts) == 2 {
-			return parts[0]
+		parts := strings.Split(strings.Trim(repoOverride, "/"), "/")
+		if len(parts) >= 2 {
+			return parts[len(parts)-2]
 		}
 		return ""
 	}

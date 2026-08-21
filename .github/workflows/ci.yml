@@ -143,6 +143,18 @@ jobs:
           go install github.com/uudashr/gocognit/cmd/gocognit@latest
 
       - name: Download coverage
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: coverage
+
+      - name: Settle before retry
+        if: steps.download.outcome != 'success'
+        run: sleep 30
+
+      - name: Retry coverage download
+        if: steps.download.outcome != 'success'
         uses: actions/download-artifact@v7
         with:
           name: coverage

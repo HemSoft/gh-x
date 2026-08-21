@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -208,17 +209,42 @@ func expandMeReference(value string) (string, error) {
 	return login, nil
 }
 
-// expandListIdentityFilters expands @me author and assignee filter values.
-func expandListIdentityFilters(author, assignee string) (string, string, error) {
+// meReferencePattern matches @me tokens in --search queries, including a
+// single leading separator so qualifiers like review-requested:@me resolve.
+var meReferencePattern = regexp.MustCompile(`(?i)(^|[\s(])@me\b`)
+
+// expandSearchReferences rewrites @me tokens inside a --search query so a
+// later multi-account retry cannot reinterpret the identity.
+func expandSearchReferences(search string) (string, error) {
+	if !meReferencePattern.MatchString(search) {
+		return search, nil
+	}
+	login, err := resolveCurrentUser()
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve @me: %w", err)
+	}
+	return meReferencePattern.ReplaceAllStringFunc(search, func(match string) string {
+		prefix := match[:len(match)-len("@me")]
+		return prefix + login
+	}), nil
+}
+
+// expandListIdentityFilters expands @me author/assignee filters and @me
+// references inside --search queries.
+func expandListIdentityFilters(author, assignee, search string) (string, string, string, error) {
 	expandedAuthor, err := expandMeReference(author)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	expandedAssignee, err := expandMeReference(assignee)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	return expandedAuthor, expandedAssignee, nil
+	expandedSearch, err := expandSearchReferences(search)
+	if err != nil {
+		return "", "", "", err
+	}
+	return expandedAuthor, expandedAssignee, expandedSearch, nil
 }
 
 func buildAtmSearchQuery(org, login string, reviewRequired bool) string {

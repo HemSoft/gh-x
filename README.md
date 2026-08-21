@@ -57,8 +57,11 @@ shared between runs.
 Two flows are pinned to the active account and never fall back: identity-scoped
 queries (`gh x pr me`, `gh x pr atm`, `gh x codespace list` — they resolve
 "me" or list the authenticated user's resources, so retrying under a different
-identity could answer with someone else's data); and pull request review
-submission, which is both identity-bound and non-idempotent.
+identity could answer with someone else's data), and the entire
+`gh x pr review` operation (fetch, agent, and submission are identity-bound,
+and posting a review is non-idempotent). `@me` in author, assignee, and
+`--search` filters resolves to the active account's login up front for the
+same reason.
 
 ## What `gh x status` adds
 

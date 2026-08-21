@@ -366,7 +366,7 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 
-	options.author, options.assignee, err = expandListIdentityFilters(options.author, options.assignee)
+	options.author, options.assignee, options.search, err = expandListIdentityFilters(options.author, options.assignee, options.search)
 	if err != nil {
 		return err
 	}

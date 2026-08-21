@@ -163,12 +163,13 @@ func fetchIssues(options issueListOptions) ([]issueEntry, error) {
 }
 
 func executeIssueList(options issueListOptions, stdout io.Writer, now time.Time) error {
-	expandedAuthor, expandedAssignee, err := expandListIdentityFilters(options.author, options.assignee)
+	expandedAuthor, expandedAssignee, expandedSearch, err := expandListIdentityFilters(options.author, options.assignee, options.search)
 	if err != nil {
 		return err
 	}
 	options.author = expandedAuthor
 	options.assignee = expandedAssignee
+	options.search = expandedSearch
 
 	if options.author != "" {
 		resolved, err := resolveAuthorLoginFunc(options.author, resolveOrgHint(options.repo))

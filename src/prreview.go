@@ -297,7 +297,9 @@ func fetchReviewPullRequest(options prReviewOptions) (reviewPullRequest, error) 
 		ghArgs = append(ghArgs, "--repo", options.repo)
 	}
 
-	stdoutBuf, stderrBuf, err := ghExecFunc(ghArgs...)
+	// The whole review operation (fetch, agent, submission) runs as the
+	// active account so its identity stays coherent; see submitPullRequestReview.
+	stdoutBuf, stderrBuf, err := execGHActive(ghArgs...)
 	if err != nil {
 		return reviewPullRequest{}, wrapExecError(fmt.Errorf("gh pr view: %w", err), stderrBuf.String())
 	}

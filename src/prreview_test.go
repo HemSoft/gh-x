@@ -85,12 +85,15 @@ func TestParseReviewOptionsAllowsFlagsBeforeTarget(t *testing.T) {
 }
 
 func TestFetchReviewPullRequestUsesGhPrView(t *testing.T) {
-	saved := ghExecFunc
-	defer func() { ghExecFunc = saved }()
+	saved := ghTransportFunc
+	defer func() { ghTransportFunc = saved }()
 
 	var gotArgs []string
-	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
-		gotArgs = append([]string(nil), args...)
+	ghTransportFunc = func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		gotArgs = append([]string(nil), inv.Args...)
+		if len(inv.ExtraEnv) != 0 {
+			t.Fatal("review fetch must run as the active account")
+		}
 		var stdout bytes.Buffer
 		stdout.WriteString(`{"number":42,"title":"Add review","body":"Body","baseRefName":"main","headRefName":"feature/review","url":"https://github.com/owner/repo/pull/42","author":{"login":"octocat","name":"Octo Cat"}}`)
 		return stdout, bytes.Buffer{}, nil
