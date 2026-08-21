@@ -589,8 +589,23 @@ func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, 
 	return nil
 }
 
-func resolveRepoLabel(repoOverride string) string {
+// resolveOrgHint returns the owner half of an explicit repo override, or the
+// current repo's owner when no override is given. Empty on failure.
+func resolveOrgHint(repoOverride string) string {
 	if repoOverride != "" {
+		if parts := strings.SplitN(repoOverride, "/", 2); len(parts) == 2 {
+			return parts[0]
+		}
+		return ""
+	}
+	owner, _, err := resolveRepo("")
+	if err != nil {
+		return ""
+	}
+	return owner
+}
+
+func resolveRepoLabel(repoOverride string) string {	if repoOverride != "" {
 		return repoOverride
 	}
 

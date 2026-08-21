@@ -366,31 +366,13 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 
-	if options.author != "" {
-		expanded, err := expandMeReference(options.author)
-		if err != nil {
-			return err
-		}
-		options.author = expanded
-	}
-	if options.assignee != "" {
-		expanded, err := expandMeReference(options.assignee)
-		if err != nil {
-			return err
-		}
-		options.assignee = expanded
+	options.author, options.assignee, err = expandListIdentityFilters(options.author, options.assignee)
+	if err != nil {
+		return err
 	}
 
 	if options.author != "" {
-		org := ""
-		if options.repo != "" {
-			if parts := strings.SplitN(options.repo, "/", 2); len(parts) == 2 {
-				org = parts[0]
-			}
-		} else if o, _, err := resolveRepo(""); err == nil {
-			org = o
-		}
-		resolved, err := resolveAuthorLoginFunc(options.author, org)
+		resolved, err := resolveAuthorLoginFunc(options.author, resolveOrgHint(options.repo))
 		if err != nil {
 			return err
 		}

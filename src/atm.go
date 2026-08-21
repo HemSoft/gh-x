@@ -208,6 +208,19 @@ func expandMeReference(value string) (string, error) {
 	return login, nil
 }
 
+// expandListIdentityFilters expands @me author and assignee filter values.
+func expandListIdentityFilters(author, assignee string) (string, string, error) {
+	expandedAuthor, err := expandMeReference(author)
+	if err != nil {
+		return "", "", err
+	}
+	expandedAssignee, err := expandMeReference(assignee)
+	if err != nil {
+		return "", "", err
+	}
+	return expandedAuthor, expandedAssignee, nil
+}
+
 func buildAtmSearchQuery(org, login string, reviewRequired bool) string {
 	if reviewRequired {
 		return fmt.Sprintf("is:pr is:open review-requested:%s org:%s", login, org)
