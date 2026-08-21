@@ -149,6 +149,13 @@ jobs:
 
       - name: Verify coverage artifact
         run: |
+          # Artifact downloads can complete ahead of blob visibility; allow
+          # brief propagation lag before declaring the artifact lost.
+          for attempt in 1 2 3 4 5 6; do
+            if [ -f coverage.out ]; then break; fi
+            echo "coverage.out not present yet (attempt $attempt/6)"
+            sleep 10
+          done
           if [ ! -f coverage.out ]; then
             echo "::error::coverage.out not found — artifact download may have failed"
             exit 1
