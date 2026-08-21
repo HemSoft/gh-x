@@ -16,6 +16,9 @@ func resetAccountCache() {
 
 func withFallbackStubs(t *testing.T, transport func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error), accounts []ghAccount, tokens map[string]string) *bytes.Buffer {
 	t.Helper()
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_ENTERPRISE_TOKEN", "")
 	savedTransport := ghTransportFunc
 	savedList := listAccountsFunc
 	savedToken := accountTokenFunc
@@ -120,12 +123,12 @@ func TestExecGHSkipsAuthCommands(t *testing.T) {
 }
 
 func TestExecGHSkipsFallbackWhenTokenEnvOverrideSet(t *testing.T) {
-	t.Setenv("GH_TOKEN", "explicit")
 	calls := 0
 	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		calls++
 		return bytes.Buffer{}, *bytes.NewBufferString("Not Found"), errors.New("exit status 1")
 	}, []ghAccount{{Login: "a", Active: true}, {Login: "b", Active: false}}, map[string]string{"b": "tok"})
+	t.Setenv("GH_TOKEN", "explicit")
 
 	_, _, _ = execGH("api", "repos/owner/private")
 	if calls != 1 {
@@ -146,24 +149,19 @@ func TestExecGHNoRetryForNonAccessErrors(t *testing.T) {
 	}
 }
 
-func TestExecGHWithInputFallsBackOnPost(t *testing.T) {
+func TestExecGHActiveNeverFallsBack(t *testing.T) {
 	calls := 0
 	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		calls++
-		if calls == 2 && string(inv.Stdin) != "payload" {
-			t.Fatalf("retry must replay stdin, got %q", string(inv.Stdin))
-		}
-		if calls == 1 {
-			return bytes.Buffer{}, *bytes.NewBufferString("Resource not accessible by integration"), errors.New("exit status 1")
-		}
-		return bytes.Buffer{}, bytes.Buffer{}, nil
-	},
-		[]ghAccount{{Login: "a", Active: true}, {Login: "b", Active: false}},
-		map[string]string{"b": "tok"},
-	)
+		return bytes.Buffer{}, *bytes.NewBufferString("Not Found"), errors.New("exit status 1")
+	}, []ghAccount{{Login: "a", Active: true}, {Login: "b", Active: false}}, map[string]string{"b": "tok"})
 
-	if _, _, err := execGHWithInput([]string{"api", "repos/o/n/pulls/1/reviews"}, []byte("payload")); err != nil {
-		t.Fatalf("expected POST fallback success, got %v", err)
+	_, _, err := execGHActive("api", "user")
+	if err == nil {
+		t.Fatal("expected the active-account error to surface")
+	}
+	if calls != 1 {
+		t.Fatalf("identity-pinned execution must not retry, got %d calls", calls)
 	}
 }
 

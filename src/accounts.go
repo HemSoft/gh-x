@@ -27,11 +27,14 @@ var ghTransportFunc = runGHCmd
 var accountWarningWriter io.Writer = os.Stderr
 
 // runGHCmd executes the gh binary with inherited environment plus any extra
-// environment entries.
+// environment entries. GH_PATH takes precedence, matching gh's own resolution.
 func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
-	path, err := exec.LookPath("gh")
-	if err != nil {
-		return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("gh CLI not found in PATH")
+	path := os.Getenv("GH_PATH")
+	if path == "" {
+		var lookErr error
+		if path, lookErr = exec.LookPath("gh"); lookErr != nil {
+			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("gh CLI not found in PATH")
+		}
 	}
 	cmd := exec.Command(path, inv.Args...)
 	if len(inv.Stdin) > 0 {
@@ -52,13 +55,7 @@ func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 // execGH runs a gh command and retries with another logged-in account's token
 // when the active account cannot access the target repository.
 func execGH(args ...string) (bytes.Buffer, bytes.Buffer, error) {
-	return execGHWithInput(args, nil)
-}
-
-// execGHWithInput is execGH with stdin data, e.g. API POST payloads.
-func execGHWithInput(args []string, stdin []byte) (bytes.Buffer, bytes.Buffer, error) {
-	inv := ghInvocation{Args: args, Stdin: stdin}
-	stdout, stderr, err := ghTransportFunc(inv)
+	stdout, stderr, err := ghTransportFunc(ghInvocation{Args: args})
 	if err == nil || !fallbackEligible(args, stderr.String()) {
 		return stdout, stderr, err
 	}
@@ -70,7 +67,6 @@ func execGHWithInput(args []string, stdin []byte) (bytes.Buffer, bytes.Buffer, e
 		}
 		retry := ghInvocation{
 			Args:     args,
-			Stdin:    stdin,
 			ExtraEnv: []string{"GH_TOKEN=" + token},
 		}
 		retryOut, retryErrs, retryErr := ghTransportFunc(retry)
@@ -80,6 +76,13 @@ func execGHWithInput(args []string, stdin []byte) (bytes.Buffer, bytes.Buffer, e
 		}
 	}
 	return stdout, stderr, err
+}
+
+// execGHActive runs a gh command as the active account with no fallback.
+// Identity-scoped flows use it so a retry can never switch the account that a
+// query's embedded login refers to.
+func execGHActive(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	return ghTransportFunc(ghInvocation{Args: args})
 }
 
 // fallbackEligible reports whether a failure should trigger an alternate
@@ -201,7 +204,7 @@ func defaultAccountToken(login string) (string, bool) {
 	if token, ok := cachedTokens[login]; ok {
 		return token, true
 	}
-	stdout, _, err := ghTransportFunc(ghInvocation{Args: []string{"auth", "token", "--user", login}})
+	stdout, _, err := ghTransportFunc(ghInvocation{Args: []string{"auth", "token", "--user", login, "--hostname", "github.com"}})
 	if err != nil {
 		return "", false
 	}

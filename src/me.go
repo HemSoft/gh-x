@@ -123,7 +123,7 @@ func executeMe(options meOptions, stdout io.Writer) error {
 func fetchMeNodes(org, login string, limit int) ([]atmPullRequestNode, error) {
 	queries := buildMeQueries(org, login)
 	query := buildAtmMultiSearchQuery(queries, limit)
-	stdoutBuf, stderrBuf, execErr := ghExecFunc("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
+	stdoutBuf, stderrBuf, execErr := execGHActive("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
 	if execErr != nil {
 		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", execErr), stderrBuf.String())
 	}

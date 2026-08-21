@@ -141,7 +141,7 @@ func fetchAtmNodes(options atmOptions, org, login string) ([]atmPullRequestNode,
 func fetchAtmSingleSearch(org, login string, options atmOptions) ([]atmPullRequestNode, error) {
 	searchQuery := buildAtmSearchQuery(org, login, options.reviewRequired)
 	query := buildAtmGraphQLQuery(searchQuery, options.limit)
-	stdoutBuf, stderrBuf, err := ghExecFunc("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
+	stdoutBuf, stderrBuf, err := execGHActive("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", err), stderrBuf.String())
 	}
@@ -151,7 +151,7 @@ func fetchAtmSingleSearch(org, login string, options atmOptions) ([]atmPullReque
 func fetchAtmMultiSearch(org, login string, options atmOptions) ([]atmPullRequestNode, error) {
 	queries := buildAtmNeedsReviewQueries(org, login)
 	query := buildAtmMultiSearchQuery(queries, options.limit)
-	stdoutBuf, stderrBuf, err := ghExecFunc("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
+	stdoutBuf, stderrBuf, err := execGHActive("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", err), stderrBuf.String())
 	}
@@ -184,7 +184,7 @@ func resolveAtmOrg(orgOverride string) (string, error) {
 }
 
 func resolveCurrentUser() (string, error) {
-	stdout, _, err := ghExecFunc("api", "user", "--jq", ".login")
+	stdout, _, err := execGHActive("api", "user", "--jq", ".login")
 	if err != nil {
 		return "", err
 	}

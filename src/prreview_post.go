@@ -522,7 +522,12 @@ func submitPullRequestReview(options prReviewOptions, pr reviewPullRequest, requ
 	}
 
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, name, pr.Number)
-	_, stderrBuf, err := execGHWithInput([]string{"api", endpoint, "--method", "POST", "--input", "-"}, data)
+	// Review submission is identity-bound and non-idempotent, so it never
+	// falls back to another account.
+	_, stderrBuf, err := ghTransportFunc(ghInvocation{
+		Args:  []string{"api", endpoint, "--method", "POST", "--input", "-"},
+		Stdin: data,
+	})
 	if err != nil {
 		return wrapExecError(fmt.Errorf("gh api create pull request review: %w", err), stderrBuf.String())
 	}

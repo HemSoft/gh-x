@@ -39,8 +39,9 @@ gh x version            # show version and check for updates (also: --version, -
 
 If you switch between personal and work accounts, `gh x` adapts automatically.
 When the active account cannot access the target repository, commands retry
-once with another logged-in account's token (`gh auth status --json hosts`
-supplies candidates) and print a one-line notice on stderr, for example:
+with each other logged-in account until one succeeds (`gh auth status --json
+hosts` supplies candidates) and print a one-line notice on stderr, for
+example:
 
 ```text
 [gh-x] note: retried as fhemmerrelias after an access failure
@@ -50,7 +51,13 @@ The global active account is never modified — the retry token lives only
 inside the retried subprocess. Explicit `GH_TOKEN` or `GITHUB_TOKEN` overrides
 are respected as-is (no fallback), auth commands never fall back, and public
 repositories never trigger a retry because either token can read them. Tokens
-resolve per invocation and are not cached between runs.
+resolve lazily and are cached for the current process; they are not stored or
+shared between runs.
+
+Two flows are pinned to the active account and never fall back: user-scoped
+commands (`gh x pr me`, `gh x pr atm`) resolve "me" once, so retrying under a
+different identity could answer with someone else's pull requests; and pull
+request review submission is both identity-bound and non-idempotent.
 
 ## What `gh x status` adds
 
