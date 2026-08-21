@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/term"
 	"github.com/muesli/termenv"
 )
@@ -139,7 +138,7 @@ func buildRunListArgs(options runListOptions) []string {
 
 func executeRunList(options runListOptions, stdout io.Writer, now time.Time) error {
 	ghArgs := buildRunListArgs(options)
-	stdoutBuf, stderrBuf, err := gh.Exec(ghArgs...)
+	stdoutBuf, stderrBuf, err := ghExecFunc(ghArgs...)
 	if err != nil {
 		return fmt.Errorf("gh run list: %s: %w", stderrBuf.String(), err)
 	}

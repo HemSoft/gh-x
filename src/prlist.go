@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"github.com/cli/go-gh/v2/pkg/term"
 	"github.com/muesli/termenv"
@@ -20,8 +19,9 @@ const jsonFields = "number,title,author,state,isDraft,reviewDecision,statusCheck
 // executeListFunc is swapped in tests to avoid real API calls.
 var executeListFunc = executeList
 
-// ghExecFunc wraps gh.Exec for testability in author resolution functions.
-var ghExecFunc = gh.Exec
+// ghExecFunc is the single choke point for gh subprocess execution; it adds
+// multi-account fallback and can be swapped in tests.
+var ghExecFunc = execGH
 
 // fetchPRSupplementalBatchFunc is swapped in tests to avoid real API calls.
 var fetchPRSupplementalBatchFunc = fetchPRSupplementalBatch
@@ -326,7 +326,7 @@ func runView(args []string, stdout io.Writer, _ io.Writer) error {
 	if repo != "" {
 		ghArgs = append(ghArgs, "--repo", repo)
 	}
-	commandOutput, commandError, err := gh.Exec(ghArgs...)
+	commandOutput, commandError, err := ghExecFunc(ghArgs...)
 	if err != nil {
 		return wrapExecError(err, commandError.String())
 	}
@@ -1062,7 +1062,7 @@ func extractReportedContexts(items []checkItem) map[string]bool {
 // nil on error so callers fall back to per-item normalization only.
 func fetchRequiredCheckContexts(owner, name, branch string) (map[string]bool, bool) {
 	endpoint := fmt.Sprintf("repos/%s/%s/rules/branches/%s", owner, name, url.PathEscape(branch))
-	stdout, _, err := gh.Exec("api", endpoint)
+	stdout, _, err := ghExecFunc("api", endpoint)
 	if err != nil {
 		return nil, false
 	}
@@ -1137,7 +1137,7 @@ func resolveRepo(repoOverride string) (string, string, error) {
 	}
 
 	// Fall back to gh repo view for SSH aliases and non-standard remotes
-	stdout, _, execErr := gh.Exec("repo", "view", "--json", "owner,name")
+	stdout, _, execErr := ghExecFunc("repo", "view", "--json", "owner,name")
 	if execErr != nil {
 		return "", "", fmt.Errorf("repo resolution failed: %w; fallback: %v", err, execErr)
 	}
@@ -1259,7 +1259,7 @@ func fetchPRSupplementalBatch(owner, name string, prNumbers []int) (map[int]prSu
 		owner, name, strings.Join(queryParts, " "),
 	)
 
-	stdout, _, err := gh.Exec("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
+	stdout, _, err := ghExecFunc("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
 	if err != nil {
 		return nil, err
 	}

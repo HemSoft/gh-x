@@ -35,6 +35,23 @@ gh x run list [flags]   # workflow runs with clickable IDs
 gh x version            # show version and check for updates (also: --version, -v)
 ```
 
+### Multi-account fallback
+
+If you switch between personal and work accounts, `gh x` adapts automatically.
+When the active account cannot access the target repository, commands retry
+once with another logged-in account's token (`gh auth status --json hosts`
+supplies candidates) and print a one-line notice on stderr, for example:
+
+```text
+[gh-x] note: retried as fhemmerrelias after an access failure
+```
+
+The global active account is never modified — the retry token lives only
+inside the retried subprocess. Explicit `GH_TOKEN` or `GITHUB_TOKEN` overrides
+are respected as-is (no fallback), auth commands never fall back, and public
+repositories never trigger a retry because either token can read them. Tokens
+resolve per invocation and are not cached between runs.
+
 ## What `gh x status` adds
 
 `gh x status` starts with a repository health header for the resolved default

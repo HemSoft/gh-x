@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/term"
 	"github.com/muesli/termenv"
 )
@@ -85,7 +84,7 @@ func parseCodespaceListOptions(args []string, stderr io.Writer) (codespaceListOp
 var fetchCodespacesFunc = fetchCodespaces
 
 func fetchCodespaces() ([]codespaceEntry, error) {
-	stdoutBuf, stderrBuf, err := gh.Exec("api", "/user/codespaces", "--paginate", "--jq", ".codespaces[]")
+	stdoutBuf, stderrBuf, err := ghExecFunc("api", "/user/codespaces", "--paginate", "--jq", ".codespaces[]")
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("gh api codespaces: %w", err), stderrBuf.String())
 	}

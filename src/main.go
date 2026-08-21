@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/cli/go-gh/v2"
 )
 
 // version and buildDate are injected at build time via ldflags.
@@ -522,7 +521,7 @@ func parseSemanticVersion(value string) ([3]int, bool) {
 }
 
 func fetchLatestRelease(owner, repo string) (string, error) {
-	stdoutBuf, stderrBuf, err := gh.Exec(
+	stdoutBuf, stderrBuf, err := ghExecFunc(
 		"api", fmt.Sprintf("repos/%s/%s/releases/latest", owner, repo),
 		"--jq", ".tag_name",
 	)

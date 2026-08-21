@@ -522,13 +522,9 @@ func submitPullRequestReview(options prReviewOptions, pr reviewPullRequest, requ
 	}
 
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, name, pr.Number)
-	cmd := exec.Command("gh", "api", endpoint, "--method", "POST", "--input", "-")
-	cmd.Stdin = bytes.NewReader(data)
-	cmd.Stdout = io.Discard
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return wrapExecError(fmt.Errorf("gh api create pull request review: %w", err), stderr.String())
+	_, stderrBuf, err := execGHWithInput([]string{"api", endpoint, "--method", "POST", "--input", "-"}, data)
+	if err != nil {
+		return wrapExecError(fmt.Errorf("gh api create pull request review: %w", err), stderrBuf.String())
 	}
 	return nil
 }

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/term"
 )
 
@@ -91,7 +90,7 @@ func buildMeQueriesWithQualifier(qualifier, login string) []string {
 // resolveOwnerQualifier returns "org:<owner>" for organizations
 // or "user:<owner>" for personal accounts.
 func resolveOwnerQualifier(owner string) string {
-	stdout, _, err := gh.Exec("api", fmt.Sprintf("users/%s", owner), "--jq", ".type")
+	stdout, _, err := ghExecFunc("api", fmt.Sprintf("users/%s", owner), "--jq", ".type")
 	if err != nil {
 		return fmt.Sprintf("org:%s", owner)
 	}
@@ -124,7 +123,7 @@ func executeMe(options meOptions, stdout io.Writer) error {
 func fetchMeNodes(org, login string, limit int) ([]atmPullRequestNode, error) {
 	queries := buildMeQueries(org, login)
 	query := buildAtmMultiSearchQuery(queries, limit)
-	stdoutBuf, stderrBuf, execErr := gh.Exec("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
+	stdoutBuf, stderrBuf, execErr := ghExecFunc("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
 	if execErr != nil {
 		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", execErr), stderrBuf.String())
 	}

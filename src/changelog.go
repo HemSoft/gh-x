@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/cli/go-gh/v2"
 )
 
 type changelogOptions struct {
@@ -78,7 +77,7 @@ type releaseEntry struct {
 var fetchReleasesFunc = fetchReleases
 
 func fetchReleases(limit int) ([]releaseEntry, error) {
-	stdoutBuf, stderrBuf, err := gh.Exec(
+	stdoutBuf, stderrBuf, err := ghExecFunc(
 		"api", fmt.Sprintf("repos/%s/%s/releases?per_page=%d", repoOwner, repoName, limit),
 	)
 	if err != nil {
@@ -95,7 +94,7 @@ func fetchReleases(limit int) ([]releaseEntry, error) {
 var fetchReleaseByTagFunc = fetchReleaseByTag
 
 func fetchReleaseByTag(tag string) (*releaseEntry, error) {
-	stdoutBuf, stderrBuf, err := gh.Exec(
+	stdoutBuf, stderrBuf, err := ghExecFunc(
 		"api", fmt.Sprintf("repos/%s/%s/releases/tags/%s", repoOwner, repoName, tag),
 	)
 	if err != nil {

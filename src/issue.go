@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/term"
 	"github.com/muesli/termenv"
 )
@@ -150,7 +149,7 @@ func buildIssueListArgs(options issueListOptions) []string {
 
 func fetchIssues(options issueListOptions) ([]issueEntry, error) {
 	ghArgs := buildIssueListArgs(options)
-	stdoutBuf, stderrBuf, err := gh.Exec(ghArgs...)
+	stdoutBuf, stderrBuf, err := ghExecFunc(ghArgs...)
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("gh issue list: %w", err), stderrBuf.String())
 	}
@@ -182,7 +181,7 @@ func executeIssueList(options issueListOptions, stdout io.Writer, now time.Time)
 
 	if options.web {
 		ghArgs := buildIssueListArgs(options)
-		_, stderrBuf, err := gh.Exec(ghArgs...)
+		_, stderrBuf, err := ghExecFunc(ghArgs...)
 		if err != nil {
 			return wrapExecError(fmt.Errorf("gh issue list: %w", err), stderrBuf.String())
 		}
