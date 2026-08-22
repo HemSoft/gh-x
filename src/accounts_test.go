@@ -432,6 +432,8 @@ func TestHostFromRemoteURL(t *testing.T) {
 		"git@ghe.example.com:acme/widgets.git":     "ghe.example.com",
 		"ghe.example.com:acme/widgets":             "ghe.example.com",
 		"github.com:o/r":                           "github.com",
+		"git@ghe.example.com.:acme/widgets.git":    "ghe.example.com",
+		"https://GHE.Example.COM./acme/widgets":    "ghe.example.com",
 		"ghe.example.com/acme/widgets":             "ghe.example.com",
 		"http://GHE.Example.COM/acme/widgets":      "ghe.example.com",
 		"https://github.com/o/r":                   "github.com",

@@ -159,9 +159,13 @@ var (
 // have no dotted hostname, so a local alias is never treated as a GitHub
 // hostname during remote-based inference.
 func plausibleRemoteHost(host string) bool {
-	return strings.Contains(host, ".") &&
-		!strings.HasPrefix(host, ".") &&
-		!strings.HasSuffix(host, ".")
+	return strings.Contains(host, ".") && !strings.HasPrefix(host, ".")
+}
+
+// normalizeRemoteHost lowercases and strips the DNS root dot from absolute
+// names like "ghe.example.com.".
+func normalizeRemoteHost(host string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), "."))
 }
 
 // hostFromRepoValue extracts the host from HOST/OWNER/REPO values. Plain
@@ -187,7 +191,7 @@ func hostFromRemoteURL(raw string) string {
 		if len(matches) != 2 || matches[1] == "" {
 			continue
 		}
-		host := strings.ToLower(matches[1])
+		host := normalizeRemoteHost(matches[1])
 		if plausibleRemoteHost(host) {
 			return host
 		}
