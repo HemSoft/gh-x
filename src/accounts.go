@@ -159,11 +159,14 @@ var (
 // have no dotted hostname, so a local alias is never treated as a GitHub
 // hostname during remote-based inference.
 func plausibleRemoteHost(host string) bool {
-	return strings.Contains(host, ".") && !strings.HasPrefix(host, ".")
+	return strings.Contains(host, ".") &&
+		!strings.HasPrefix(host, ".") &&
+		!strings.HasSuffix(host, ".")
 }
 
 // normalizeRemoteHost lowercases and strips the DNS root dot from absolute
-// names like "ghe.example.com.".
+// names like "ghe.example.com.". Malformed names that still end in a dot
+// afterwards stay invalid on purpose.
 func normalizeRemoteHost(host string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), "."))
 }
