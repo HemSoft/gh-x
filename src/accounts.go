@@ -139,14 +139,6 @@ func cachedRemoteURL() string {
 	return cachedRemote
 }
 
-// resetRemoteCache clears the memoized git remote probe (test seam).
-func resetRemoteCache() {
-	remoteMu.Lock()
-	defer remoteMu.Unlock()
-	cachedRemote = ""
-	remoteResolved = false
-}
-
 // defaultGitRemoteURL reads the origin remote of the current repository.
 func defaultGitRemoteURL() string {
 	cmd := exec.Command("git", "config", "--get", "remote.origin.url")

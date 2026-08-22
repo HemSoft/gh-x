@@ -14,6 +14,14 @@ func resetAccountCache() {
 	cachedTokens = map[string]string{}
 }
 
+// resetRemoteCache clears the memoized git remote probe between scenarios.
+func resetRemoteCache() {
+	remoteMu.Lock()
+	defer remoteMu.Unlock()
+	cachedRemote = ""
+	remoteResolved = false
+}
+
 func withFallbackStubs(t *testing.T, transport func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error), accounts []ghAccount, tokens map[string]string) *bytes.Buffer {
 	t.Helper()
 	t.Setenv("GH_TOKEN", "")
