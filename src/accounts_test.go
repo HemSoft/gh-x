@@ -28,24 +28,31 @@ func withFallbackStubs(t *testing.T, transport func(inv ghInvocation) (bytes.Buf
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_ENTERPRISE_TOKEN", "")
 	t.Setenv("GITHUB_ENTERPRISE_TOKEN", "")
+	t.Setenv("GH_REPO", "")
+	t.Setenv("GH_HOST", "")
 	savedTransport := ghTransportFunc
 	savedList := listAccountsFunc
 	savedToken := accountTokenFunc
 	savedWriter := accountWarningWriter
+	savedRemote := gitRemoteURLFunc
 	t.Cleanup(func() {
 		ghTransportFunc = savedTransport
 		listAccountsFunc = savedList
 		accountTokenFunc = savedToken
 		accountWarningWriter = savedWriter
+		gitRemoteURLFunc = savedRemote
 		resetAccountCache()
+		resetRemoteCache()
 	})
 	resetAccountCache()
+	resetRemoteCache()
 	ghTransportFunc = transport
 	listAccountsFunc = func(string) []ghAccount { return accounts }
 	accountTokenFunc = func(login, _ string) (string, bool) {
 		token, ok := tokens[login]
 		return token, ok
 	}
+	gitRemoteURLFunc = func() string { return "" }
 	notices := &bytes.Buffer{}
 	accountWarningWriter = notices
 	return notices
@@ -423,9 +430,12 @@ func TestHostFromRemoteURL(t *testing.T) {
 		"https://ghe.example.com/acme/widgets.git": "ghe.example.com",
 		"ssh://git@ghe.example.com/acme/widgets":   "ghe.example.com",
 		"git@ghe.example.com:acme/widgets.git":     "ghe.example.com",
+		"ghe.example.com:acme/widgets":             "ghe.example.com",
+		"github.com:o/r":                           "github.com",
 		"ghe.example.com/acme/widgets":             "ghe.example.com",
 		"http://GHE.Example.COM/acme/widgets":      "ghe.example.com",
 		"https://github.com/o/r":                   "github.com",
+		"workserver:acme/widgets.git":              "",
 		"":                                         "",
 		"/just/a/path":                             "",
 	}

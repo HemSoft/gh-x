@@ -151,9 +151,18 @@ func defaultGitRemoteURL() string {
 
 var (
 	remoteSchemeHost = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/]+@)?([^/:?#]+)`)
-	remoteScpHost    = regexp.MustCompile(`^[^/@]+@([^:/]+):`)
+	remoteScpHost    = regexp.MustCompile(`^(?:[^/@]+@)?([^:/]+):`)
 	remotePlainHost  = regexp.MustCompile(`^([^/:@]+\.[^/:@]+)/`)
 )
+
+// plausibleRemoteHost rejects SSH host aliases such as "workserver", which
+// have no dotted hostname, so a local alias is never treated as a GitHub
+// hostname during remote-based inference.
+func plausibleRemoteHost(host string) bool {
+	return strings.Contains(host, ".") &&
+		!strings.HasPrefix(host, ".") &&
+		!strings.HasSuffix(host, ".")
+}
 
 // hostFromRepoValue extracts the host from HOST/OWNER/REPO values. Plain
 // OWNER/REPO values return "" because their host comes from elsewhere.
@@ -165,16 +174,22 @@ func hostFromRepoValue(value string) string {
 	return strings.ToLower(parts[0])
 }
 
-// hostFromRemoteURL extracts a hostname from https, ssh, scp-style, or bare
-// host/path git remote URLs; anything unrecognizable returns "".
+// hostFromRemoteURL extracts a hostname from https, ssh, scp-style (with or
+// without an ssh user), or bare host/path git remote URLs. SSH aliases and
+// anything unrecognizable return "" so inference degrades to the next signal.
 func hostFromRemoteURL(raw string) string {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return ""
 	}
 	for _, pattern := range []*regexp.Regexp{remoteSchemeHost, remoteScpHost, remotePlainHost} {
-		if matches := pattern.FindStringSubmatch(value); len(matches) == 2 && matches[1] != "" {
-			return strings.ToLower(matches[1])
+		matches := pattern.FindStringSubmatch(value)
+		if len(matches) != 2 || matches[1] == "" {
+			continue
+		}
+		host := strings.ToLower(matches[1])
+		if plausibleRemoteHost(host) {
+			return host
 		}
 	}
 	return ""
