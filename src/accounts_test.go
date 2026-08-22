@@ -10,7 +10,7 @@ import (
 func resetAccountCache() {
 	accountsMu.Lock()
 	defer accountsMu.Unlock()
-	cachedAccounts = nil
+	cachedAccounts = map[string][]ghAccount{}
 	cachedTokens = map[string]string{}
 }
 
@@ -19,6 +19,7 @@ func withFallbackStubs(t *testing.T, transport func(inv ghInvocation) (bytes.Buf
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 	t.Setenv("GH_ENTERPRISE_TOKEN", "")
+	t.Setenv("GITHUB_ENTERPRISE_TOKEN", "")
 	savedTransport := ghTransportFunc
 	savedList := listAccountsFunc
 	savedToken := accountTokenFunc
@@ -32,8 +33,8 @@ func withFallbackStubs(t *testing.T, transport func(inv ghInvocation) (bytes.Buf
 	})
 	resetAccountCache()
 	ghTransportFunc = transport
-	listAccountsFunc = func() []ghAccount { return accounts }
-	accountTokenFunc = func(login string) (string, bool) {
+	listAccountsFunc = func(string) []ghAccount { return accounts }
+	accountTokenFunc = func(login, _ string) (string, bool) {
 		token, ok := tokens[login]
 		return token, ok
 	}
@@ -90,6 +91,53 @@ func TestExecGHPreservesOriginalErrorWhenFallbackFails(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "404") {
 		t.Fatalf("expected original stderr preserved, got %q", stderr.String())
+	}
+}
+
+func TestExecGHFallsBackOnEnterpriseHostWithEnterpriseCredential(t *testing.T) {
+	calls := 0
+	notices := withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		calls++
+		if calls == 1 {
+			return bytes.Buffer{}, *bytes.NewBufferString("HTTP 404: Not Found"), errors.New("exit status 1")
+		}
+		want := []string{
+			"GH_ENTERPRISE_TOKEN=ent-token",
+			"GITHUB_ENTERPRISE_TOKEN=ent-token",
+		}
+		if strings.Join(inv.ExtraEnv, "|") != strings.Join(want, "|") {
+			t.Fatalf("expected enterprise credentials on retry, got %v", inv.ExtraEnv)
+		}
+		if got := targetHost(inv.Args); got != "ghe.example.com" {
+			t.Fatalf("retry should keep the enterprise host, got %q", got)
+		}
+		return *bytes.NewBufferString("[]"), bytes.Buffer{}, nil
+	}, nil, nil)
+	listAccountsFunc = func(host string) []ghAccount {
+		if host == "ghe.example.com" {
+			return []ghAccount{{Login: "corp-lead", Active: true}, {Login: "corp-dev", Active: false}}
+		}
+		return []ghAccount{{Login: "personal", Active: true}, {Login: "other-personal", Active: false}}
+	}
+	accountTokenFunc = func(login, host string) (string, bool) {
+		if login == "corp-dev" && host == "ghe.example.com" {
+			return "ent-token", true
+		}
+		return "", false
+	}
+
+	out, _, err := execGH("pr", "list", "--repo", "GHE.Example.com/acme/widgets")
+	if err != nil {
+		t.Fatalf("expected enterprise fallback success, got %v", err)
+	}
+	if out.String() != "[]" {
+		t.Fatalf("expected retry output, got %q", out.String())
+	}
+	if calls != 2 {
+		t.Fatalf("github.com accounts must not be tried for an enterprise host, got %d calls", calls)
+	}
+	if !strings.Contains(notices.String(), "corp-dev (ghe.example.com)") {
+		t.Fatalf("notice should name account and host, got %q", notices.String())
 	}
 }
 
@@ -259,20 +307,118 @@ func TestParseAuthStatusJSON(t *testing.T) {
 	}`)
 
 	accounts := parseAuthStatusJSON(data)
-	if len(accounts) != 2 {
+	if len(accounts["github.com"]) != 2 {
 		t.Fatalf("expected 2 github.com accounts, got %#v", accounts)
 	}
-	if accounts[0].Login != "HemSoft" || !accounts[0].Active {
-		t.Fatalf("unexpected first account %#v", accounts[0])
+	if accounts["github.com"][0].Login != "HemSoft" || !accounts["github.com"][0].Active {
+		t.Fatalf("unexpected first account %#v", accounts["github.com"][0])
 	}
-	if accounts[1].Login != "fhemmerrelias" || accounts[1].Active {
-		t.Fatalf("unexpected second account %#v", accounts[1])
+	if accounts["github.com"][1].Login != "fhemmerrelias" || accounts["github.com"][1].Active {
+		t.Fatalf("unexpected second account %#v", accounts["github.com"][1])
+	}
+	if len(accounts["ghe.example.com"]) != 1 || accounts["ghe.example.com"][0].Login != "enterprise-only" {
+		t.Fatalf("enterprise host entries must survive parsing, got %#v", accounts["ghe.example.com"])
 	}
 }
 
 func TestParseAuthStatusJSONInvalidPayload(t *testing.T) {
 	if accounts := parseAuthStatusJSON([]byte("not json")); len(accounts) != 0 {
 		t.Fatalf("expected no accounts for invalid JSON, got %#v", accounts)
+	}
+}
+
+func TestTargetHost(t *testing.T) {
+	t.Setenv("GH_HOST", "")
+	cases := []struct {
+		name string
+		args []string
+		env  string
+		want string
+	}{
+		{"no repo flag", []string{"pr", "list"}, "", defaultGitHubHost},
+		{"plain owner/repo stays public", []string{"pr", "list", "--repo", "o/r"}, "", defaultGitHubHost},
+		{"host-prefixed -R wins", []string{"pr", "view", "42", "-R", "ghe.corp.io/o/r"}, "", "ghe.corp.io"},
+		{"host-prefixed --repo wins over GH_HOST", []string{"api", "repos/o/p", "--repo", "A.B.C/x/y"}, "other.host", "a.b.c"},
+		{"GH_HOST used without repo flag", []string{"issue", "list"}, "ghe.mycorp.net", "ghe.mycorp.net"},
+		{"dangling repo flag ignored", []string{"repo", "--repo"}, "", defaultGitHubHost},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GH_HOST", tc.env)
+			if got := targetHost(tc.args); got != tc.want {
+				t.Fatalf("targetHost(%v) with GH_HOST=%q = %q, want %q", tc.args, tc.env, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCredentialEnvFor(t *testing.T) {
+	if got := credentialEnvFor(defaultGitHubHost, "tok"); strings.Join(got, "|") != "GH_TOKEN=tok" {
+		t.Fatalf("github.com credential wrong: %v", got)
+	}
+	got := credentialEnvFor("ghe.example.com", "tok")
+	want := "GH_ENTERPRISE_TOKEN=tok|GITHUB_ENTERPRISE_TOKEN=tok"
+	if strings.Join(got, "|") != want {
+		t.Fatalf("enterprise credential wrong: %v", got)
+	}
+}
+
+func TestFallbackEligibleRespectsHostOverrides(t *testing.T) {
+	args := []string{"pr", "list", "--repo", "ghe.example.com/o/r"}
+	if !fallbackEligible(args, "Not Found (HTTP 404)") {
+		t.Fatal("clean environment should allow enterprise fallback")
+	}
+	t.Setenv("GH_ENTERPRISE_TOKEN", "explicit")
+	if fallbackEligible(args, "Not Found (HTTP 404)") {
+		t.Fatal("GH_ENTERPRISE_TOKEN must disable enterprise fallback")
+	}
+	publicArgs := []string{"pr", "list", "--repo", "o/r"}
+	if !fallbackEligible(publicArgs, "Not Found (HTTP 404)") {
+		t.Fatal("enterprise token must not block github.com fallback")
+	}
+}
+
+func TestAccountsAreCachedPerHost(t *testing.T) {
+	authStatusCalls := 0
+	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		authStatusCalls++
+		payload := `{"hosts":{
+			"github.com":[{"login":"pub","active":true,"state":"success"}],
+			"ghe.example.com":[{"login":"ent","active":true,"state":"success"}]
+		}}`
+		return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
+	}, nil, nil)
+	listAccountsFunc = listAccounts
+
+	first := listAccounts("ghe.example.com")
+	second := listAccounts("github.com")
+	listAccounts("ghe.example.com")
+
+	if authStatusCalls != 1 {
+		t.Fatalf("one auth status probe should serve every host, got %d", authStatusCalls)
+	}
+	if len(first) != 1 || first[0].Login != "ent" || len(second) != 1 || second[0].Login != "pub" {
+		t.Fatalf("per-host results mixed: ghe=%#v github=%#v", first, second)
+	}
+}
+
+func TestDefaultAccountTokenTargetsHost(t *testing.T) {
+	var seenHostname []string
+	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		for i, arg := range inv.Args {
+			if arg == "--hostname" && i+1 < len(inv.Args) {
+				seenHostname = append(seenHostname, inv.Args[i+1])
+			}
+		}
+		return *bytes.NewBufferString("tok\n"), bytes.Buffer{}, nil
+	}, nil, nil)
+	accountTokenFunc = defaultAccountToken
+
+	if token, ok := accountTokenFunc("corp-dev", "ghe.example.com"); !ok || token != "tok" {
+		t.Fatalf("token lookup failed: %q %v", token, ok)
+	}
+	if len(seenHostname) != 1 || seenHostname[0] != "ghe.example.com" {
+		t.Fatalf("token request must target the resolved host, saw %v", seenHostname)
 	}
 }
 

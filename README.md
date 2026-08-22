@@ -47,14 +47,23 @@ example:
 [gh-x] note: retried as fhemmerrelias after an access failure
 ```
 
+The target host is resolved from an explicit `HOST/OWNER/REPO` value on
+`--repo`/`-R`, then `GH_HOST`, then `github.com`. Fallback candidates come
+from that same host in `gh auth status --json hosts`, and Enterprise Server
+retries inject `GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` instead of
+`GH_TOKEN`, so personal and corporate hosts never exchange credentials.
+
 The global active account is never modified — the retry token lives only
 inside the retried subprocess. Explicit `GH_TOKEN` or `GITHUB_TOKEN` overrides
-are respected as-is (no fallback), auth commands never fall back, and public
-repositories never trigger a retry because either token can read them. Tokens
-resolve lazily and are cached for the current process; they are not stored or
-shared between runs.
+are respected for github.com targets, `GH_ENTERPRISE_TOKEN` or
+`GITHUB_ENTERPRISE_TOKEN` for Enterprise Server targets (no fallback), auth
+commands never fall back, and public repositories never trigger a retry
+because either token can read them. Tokens resolve lazily and are cached per
+account and host for the current process; they are not stored or shared
+between runs.
 
-Two flows are pinned to the active account and never fall back: identity-scoped
+Two flows are pinned to the active account and never fall back on any host:
+identity-scoped
 queries (`gh x pr me`, `gh x pr atm`, `gh x codespace list` — they resolve
 "me" or list the authenticated user's resources, so retrying under a different
 identity could answer with someone else's data), and the entire
