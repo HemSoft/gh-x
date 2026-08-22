@@ -210,23 +210,23 @@ func expandMeReference(value string) (string, error) {
 	return login, nil
 }
 
-// meReferencePattern matches @me tokens in --search queries, including any
-// qualifier separator such as review-requested:@me.
-var meReferencePattern = regexp.MustCompile(`(?i)(^|[\s(:])@me\b`)
+// identityQualifierPattern matches account-relative search qualifiers whose
+// @me value must track the active account. Other @me occurrences in --search
+// are arbitrary query text and stay untouched.
+var identityQualifierPattern = regexp.MustCompile(`(?i)\b(author|assignee|mentions|commenter|involves|review-requested|reviewed-by):@me\b`)
 
-// expandSearchReferences rewrites @me tokens inside a --search query so a
-// later multi-account retry cannot reinterpret the identity.
+// expandSearchReferences rewrites @me values of identity qualifiers inside a
+// --search query so a later multi-account retry cannot reinterpret them.
 func expandSearchReferences(search string) (string, error) {
-	if !meReferencePattern.MatchString(search) {
+	if !identityQualifierPattern.MatchString(search) {
 		return search, nil
 	}
 	login, err := resolveCurrentUser()
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve @me: %w", err)
 	}
-	return meReferencePattern.ReplaceAllStringFunc(search, func(match string) string {
-		prefix := match[:len(match)-len("@me")]
-		return prefix + login
+	return identityQualifierPattern.ReplaceAllStringFunc(search, func(match string) string {
+		return strings.TrimSuffix(match, "@me") + login
 	}), nil
 }
 

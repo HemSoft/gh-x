@@ -59,9 +59,10 @@ queries (`gh x pr me`, `gh x pr atm`, `gh x codespace list` — they resolve
 "me" or list the authenticated user's resources, so retrying under a different
 identity could answer with someone else's data), and the entire
 `gh x pr review` operation (fetch, agent, and submission are identity-bound,
-and posting a review is non-idempotent). `@me` in author, assignee, and
-`--search` filters resolves to the active account's login up front for the
-same reason.
+and posting a review is non-idempotent). `@me` in author and assignee filters resolves to the active account's login up
+front for the same reason; in `--search`, only identity qualifiers (`author:`,
+`assignee:`, `mentions:`, `commenter:`, `involves:`, `review-requested:`,
+`reviewed-by:`) are expanded, leaving other query text untouched.
 
 ## What `gh x status` adds
 
