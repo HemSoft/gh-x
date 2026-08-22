@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	gh "github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/term"
 	"github.com/muesli/termenv"
 )
@@ -150,7 +149,7 @@ func buildIssueListArgs(options issueListOptions) []string {
 
 func fetchIssues(options issueListOptions) ([]issueEntry, error) {
 	ghArgs := buildIssueListArgs(options)
-	stdoutBuf, stderrBuf, err := gh.Exec(ghArgs...)
+	stdoutBuf, stderrBuf, err := ghExecFunc(ghArgs...)
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("gh issue list: %w", err), stderrBuf.String())
 	}
@@ -164,16 +163,16 @@ func fetchIssues(options issueListOptions) ([]issueEntry, error) {
 }
 
 func executeIssueList(options issueListOptions, stdout io.Writer, now time.Time) error {
+	expandedAuthor, expandedAssignee, expandedSearch, err := expandListIdentityFilters(options.author, options.assignee, options.search)
+	if err != nil {
+		return err
+	}
+	options.author = expandedAuthor
+	options.assignee = expandedAssignee
+	options.search = expandedSearch
+
 	if options.author != "" {
-		org := ""
-		if options.repo != "" {
-			if parts := strings.SplitN(options.repo, "/", 2); len(parts) == 2 {
-				org = parts[0]
-			}
-		} else if o, _, err := resolveRepo(""); err == nil {
-			org = o
-		}
-		resolved, err := resolveAuthorLoginFunc(options.author, org)
+		resolved, err := resolveAuthorLoginFunc(options.author, resolveOrgHint(options.repo))
 		if err != nil {
 			return err
 		}
@@ -182,7 +181,7 @@ func executeIssueList(options issueListOptions, stdout io.Writer, now time.Time)
 
 	if options.web {
 		ghArgs := buildIssueListArgs(options)
-		_, stderrBuf, err := gh.Exec(ghArgs...)
+		_, stderrBuf, err := ghExecFunc(ghArgs...)
 		if err != nil {
 			return wrapExecError(fmt.Errorf("gh issue list: %w", err), stderrBuf.String())
 		}

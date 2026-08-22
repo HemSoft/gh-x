@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	gh "github.com/cli/go-gh/v2"
 )
 
 // version and buildDate are injected at build time via ldflags.
@@ -368,16 +366,13 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 
+	options.author, options.assignee, options.search, err = expandListIdentityFilters(options.author, options.assignee, options.search)
+	if err != nil {
+		return err
+	}
+
 	if options.author != "" {
-		org := ""
-		if options.repo != "" {
-			if parts := strings.SplitN(options.repo, "/", 2); len(parts) == 2 {
-				org = parts[0]
-			}
-		} else if o, _, err := resolveRepo(""); err == nil {
-			org = o
-		}
-		resolved, err := resolveAuthorLoginFunc(options.author, org)
+		resolved, err := resolveAuthorLoginFunc(options.author, resolveOrgHint(options.repo))
 		if err != nil {
 			return err
 		}
@@ -522,7 +517,7 @@ func parseSemanticVersion(value string) ([3]int, bool) {
 }
 
 func fetchLatestRelease(owner, repo string) (string, error) {
-	stdoutBuf, stderrBuf, err := gh.Exec(
+	stdoutBuf, stderrBuf, err := ghExecFunc(
 		"api", fmt.Sprintf("repos/%s/%s/releases/latest", owner, repo),
 		"--jq", ".tag_name",
 	)

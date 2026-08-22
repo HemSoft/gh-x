@@ -35,6 +35,35 @@ gh x run list [flags]   # workflow runs with clickable IDs
 gh x version            # show version and check for updates (also: --version, -v)
 ```
 
+### Multi-account fallback
+
+If you switch between personal and work accounts, `gh x` adapts automatically.
+When the active account cannot access the target repository, commands retry
+with each other logged-in account until one succeeds (`gh auth status --json
+hosts` supplies candidates) and print a one-line notice on stderr, for
+example:
+
+```text
+[gh-x] note: retried as fhemmerrelias after an access failure
+```
+
+The global active account is never modified — the retry token lives only
+inside the retried subprocess. Explicit `GH_TOKEN` or `GITHUB_TOKEN` overrides
+are respected as-is (no fallback), auth commands never fall back, and public
+repositories never trigger a retry because either token can read them. Tokens
+resolve lazily and are cached for the current process; they are not stored or
+shared between runs.
+
+Two flows are pinned to the active account and never fall back: identity-scoped
+queries (`gh x pr me`, `gh x pr atm`, `gh x codespace list` — they resolve
+"me" or list the authenticated user's resources, so retrying under a different
+identity could answer with someone else's data), and the entire
+`gh x pr review` operation (fetch, agent, and submission are identity-bound,
+and posting a review is non-idempotent). `@me` in author and assignee filters resolves to the active account's login up
+front for the same reason; in `--search`, only identity qualifiers (`author:`,
+`assignee:`, `mentions:`, `commenter:`, `involves:`, `review-requested:`,
+`reviewed-by:`) are expanded, leaving other query text untouched.
+
 ## What `gh x status` adds
 
 `gh x status` starts with a repository health header for the resolved default

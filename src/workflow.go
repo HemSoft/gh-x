@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 
-	gh "github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/term"
 	"github.com/muesli/termenv"
 	"gopkg.in/yaml.v3"
@@ -89,7 +88,7 @@ func resolveRepoURL(repoOverride string) (string, error) {
 	if repoOverride != "" {
 		args = append(args, "--repo", repoOverride)
 	}
-	stdoutBuf, stderrBuf, err := gh.Exec(args...)
+	stdoutBuf, stderrBuf, err := ghExecFunc(args...)
 	if err != nil {
 		return "", wrapExecError(fmt.Errorf("resolve repo URL: %w", err), stderrBuf.String())
 	}
@@ -110,7 +109,7 @@ var isColorEnabledFunc = func() bool { return term.FromEnv().IsColorEnabled() }
 
 func fetchWorkflows(options workflowListOptions) ([]workflowEntry, error) {
 	ghArgs := buildWorkflowListArgs(options)
-	stdoutBuf, stderrBuf, err := gh.Exec(ghArgs...)
+	stdoutBuf, stderrBuf, err := ghExecFunc(ghArgs...)
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("gh workflow list: %w", err), stderrBuf.String())
 	}
@@ -179,7 +178,7 @@ func readWorkflowContent(options workflowListOptions, wf workflowEntry) ([]byte,
 	}
 
 	apiPath := fmt.Sprintf("repos/%s/%s/contents/%s", owner, repo, escapeWorkflowPath(wf.Path))
-	stdoutBuf, stderrBuf, err := gh.Exec("api", apiPath, "--jq", ".content")
+	stdoutBuf, stderrBuf, err := ghExecFunc("api", apiPath, "--jq", ".content")
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("gh api workflow content: %w", err), stderrBuf.String())
 	}

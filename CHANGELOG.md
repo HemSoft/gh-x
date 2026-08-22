@@ -9,6 +9,12 @@ and this project uses semantic versioning.
 
 ### Added
 
+- Added automatic multi-account fallback: when the active GitHub account
+  cannot access the target repository, commands retry with another logged-in
+  account's token via `GH_TOKEN` on the retried subprocess only, print a
+  one-line notice, and never modify the global active account. User-scoped
+  commands (`pr me`, `pr atm`) and review submission always run as the active
+  account.
 - Added interactive, read-only `gh x pr list --watch` monitoring with a
   `--monitor` alias, configurable refresh intervals, stable rows, and concise
   refresh status and change summaries.

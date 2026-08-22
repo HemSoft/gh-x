@@ -28,7 +28,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Build
-        run: go build ./...
+        run: go build -o "$RUNNER_TEMP/bin/" ./...
 
       - name: Vet
         run: go vet ./...
@@ -143,12 +143,31 @@ jobs:
           go install github.com/uudashr/gocognit/cmd/gocognit@latest
 
       - name: Download coverage
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v7
+        with:
+          name: coverage
+
+      - name: Settle before retry
+        if: steps.download.outcome != 'success'
+        run: sleep 30
+
+      - name: Retry coverage download
+        if: steps.download.outcome != 'success'
         uses: actions/download-artifact@v7
         with:
           name: coverage
 
       - name: Verify coverage artifact
         run: |
+          # Artifact downloads can complete ahead of blob visibility; allow
+          # brief propagation lag before declaring the artifact lost.
+          for attempt in 1 2 3 4 5 6; do
+            if [ -f coverage.out ]; then break; fi
+            echo "coverage.out not present yet (attempt $attempt/6)"
+            sleep 10
+          done
           if [ ! -f coverage.out ]; then
             echo "::error::coverage.out not found — artifact download may have failed"
             exit 1
@@ -228,7 +247,7 @@ jobs:
                   func_name = func_name.split(').', 1)[1]
               elif '.' in func_name:
                   func_name = func_name.split('.', 1)[1]
-              file_name = parts[3].split(':')[0]
+              file_name = parts[3].split(':')[0].split('/')[-1]
               complexity[(file_name, func_name)] = comp
 
           # Get per-function coverage

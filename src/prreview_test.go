@@ -85,12 +85,15 @@ func TestParseReviewOptionsAllowsFlagsBeforeTarget(t *testing.T) {
 }
 
 func TestFetchReviewPullRequestUsesGhPrView(t *testing.T) {
-	saved := ghExecFunc
-	defer func() { ghExecFunc = saved }()
+	saved := ghTransportFunc
+	defer func() { ghTransportFunc = saved }()
 
 	var gotArgs []string
-	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
-		gotArgs = append([]string(nil), args...)
+	ghTransportFunc = func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		gotArgs = append([]string(nil), inv.Args...)
+		if len(inv.ExtraEnv) != 0 {
+			t.Fatal("review fetch must run as the active account")
+		}
 		var stdout bytes.Buffer
 		stdout.WriteString(`{"number":42,"title":"Add review","body":"Body","baseRefName":"main","headRefName":"feature/review","url":"https://github.com/owner/repo/pull/42","author":{"login":"octocat","name":"Octo Cat"}}`)
 		return stdout, bytes.Buffer{}, nil
@@ -365,13 +368,13 @@ func TestCommentableLinesForPatchIncludesRightSideDiffLines(t *testing.T) {
 }
 
 func TestFetchReviewCommentableLinesUsesPaginatedFiles(t *testing.T) {
-	saved := ghExecFunc
-	defer func() { ghExecFunc = saved }()
+	saved := ghTransportFunc
+	defer func() { ghTransportFunc = saved }()
 
-	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	ghTransportFunc = func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		want := []string{"api", "repos/owner/repo/pulls/42/files?per_page=100", "--paginate", "--slurp"}
-		if !reflect.DeepEqual(args, want) {
-			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("unexpected gh args: %#v", args)
+		if !reflect.DeepEqual(inv.Args, want) {
+			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("unexpected gh args: %#v", inv.Args)
 		}
 		var stdout bytes.Buffer
 		stdout.WriteString(`[[{"filename":"src/app.go","patch":"@@ -1 +1,2 @@\n package main\n+var enabled = true"},{"filename":"README.md","patch":""}]]`)

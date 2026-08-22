@@ -6,10 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
-	gh "github.com/cli/go-gh/v2"
 	"github.com/cli/go-gh/v2/pkg/term"
 	"github.com/muesli/termenv"
 )
@@ -142,7 +142,7 @@ func fetchAtmNodes(options atmOptions, org, login string) ([]atmPullRequestNode,
 func fetchAtmSingleSearch(org, login string, options atmOptions) ([]atmPullRequestNode, error) {
 	searchQuery := buildAtmSearchQuery(org, login, options.reviewRequired)
 	query := buildAtmGraphQLQuery(searchQuery, options.limit)
-	stdoutBuf, stderrBuf, err := gh.Exec("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
+	stdoutBuf, stderrBuf, err := execGHActive("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", err), stderrBuf.String())
 	}
@@ -152,7 +152,7 @@ func fetchAtmSingleSearch(org, login string, options atmOptions) ([]atmPullReque
 func fetchAtmMultiSearch(org, login string, options atmOptions) ([]atmPullRequestNode, error) {
 	queries := buildAtmNeedsReviewQueries(org, login)
 	query := buildAtmMultiSearchQuery(queries, options.limit)
-	stdoutBuf, stderrBuf, err := gh.Exec("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
+	stdoutBuf, stderrBuf, err := execGHActive("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", err), stderrBuf.String())
 	}
@@ -185,7 +185,7 @@ func resolveAtmOrg(orgOverride string) (string, error) {
 }
 
 func resolveCurrentUser() (string, error) {
-	stdout, _, err := gh.Exec("api", "user", "--jq", ".login")
+	stdout, _, err := execGHActive("api", "user", "--jq", ".login")
 	if err != nil {
 		return "", err
 	}
@@ -194,6 +194,59 @@ func resolveCurrentUser() (string, error) {
 		return "", fmt.Errorf("empty login returned")
 	}
 	return login, nil
+}
+
+// expandMeReference replaces the "@me" filter value with the active account's
+// login so a later multi-account retry cannot reinterpret the identity. The
+// "@" prefix is required: a bare "me" is a literal login and passes through.
+func expandMeReference(value string) (string, error) {
+	if !strings.HasPrefix(value, "@") || !strings.EqualFold(strings.TrimPrefix(value, "@"), "me") {
+		return value, nil
+	}
+	login, err := resolveCurrentUser()
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve @me: %w", err)
+	}
+	return login, nil
+}
+
+// identityQualifierPattern matches account-relative search qualifiers whose
+// @me value must track the active account. Other @me occurrences in --search
+// are arbitrary query text and stay untouched.
+var identityQualifierPattern = regexp.MustCompile(`(?i)\b(author|assignee|mentions|commenter|involves|review-requested|reviewed-by):@me\b`)
+
+// expandSearchReferences rewrites @me values of identity qualifiers inside a
+// --search query so a later multi-account retry cannot reinterpret them.
+func expandSearchReferences(search string) (string, error) {
+	if !identityQualifierPattern.MatchString(search) {
+		return search, nil
+	}
+	login, err := resolveCurrentUser()
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve @me: %w", err)
+	}
+	return identityQualifierPattern.ReplaceAllStringFunc(search, func(match string) string {
+		// Trim by length: the matched spelling may be any case (@me, @ME).
+		return match[:len(match)-len("@me")] + login
+	}), nil
+}
+
+// expandListIdentityFilters expands @me author/assignee filters and @me
+// references inside --search queries.
+func expandListIdentityFilters(author, assignee, search string) (string, string, string, error) {
+	expandedAuthor, err := expandMeReference(author)
+	if err != nil {
+		return "", "", "", err
+	}
+	expandedAssignee, err := expandMeReference(assignee)
+	if err != nil {
+		return "", "", "", err
+	}
+	expandedSearch, err := expandSearchReferences(search)
+	if err != nil {
+		return "", "", "", err
+	}
+	return expandedAuthor, expandedAssignee, expandedSearch, nil
 }
 
 func buildAtmSearchQuery(org, login string, reviewRequired bool) string {

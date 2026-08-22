@@ -414,7 +414,8 @@ func fetchReviewCommentableLines(options prReviewOptions, pr reviewPullRequest) 
 	}
 
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/files?per_page=100", owner, name, pr.Number)
-	stdout, stderr, err := ghExecFunc("api", endpoint, "--paginate", "--slurp")
+	// Part of the review operation, which stays on the active account.
+	stdout, stderr, err := execGHActive("api", endpoint, "--paginate", "--slurp")
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("gh api pull request files: %w", err), stderr.String())
 	}
@@ -522,13 +523,14 @@ func submitPullRequestReview(options prReviewOptions, pr reviewPullRequest, requ
 	}
 
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, name, pr.Number)
-	cmd := exec.Command("gh", "api", endpoint, "--method", "POST", "--input", "-")
-	cmd.Stdin = bytes.NewReader(data)
-	cmd.Stdout = io.Discard
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return wrapExecError(fmt.Errorf("gh api create pull request review: %w", err), stderr.String())
+	// Review submission is identity-bound and non-idempotent, so it never
+	// falls back to another account.
+	_, stderrBuf, err := ghTransportFunc(ghInvocation{
+		Args:  []string{"api", endpoint, "--method", "POST", "--input", "-"},
+		Stdin: data,
+	})
+	if err != nil {
+		return wrapExecError(fmt.Errorf("gh api create pull request review: %w", err), stderrBuf.String())
 	}
 	return nil
 }
