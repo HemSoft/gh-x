@@ -47,9 +47,12 @@ example:
 [gh-x] note: retried as fhemmerrelias after an access failure
 ```
 
-The target host is resolved from an explicit `HOST/OWNER/REPO` value on
-`--repo`/`-R`, then `GH_HOST`, then `github.com`. Fallback candidates come
-from that same host in `gh auth status --json hosts`, and Enterprise Server
+The target host is resolved following gh's own precedence: an explicit
+`HOST/OWNER/REPO` value on `--repo`/`-R`, then the `GH_REPO` environment
+variable, then the current repository's git remote (so commands run inside an
+Enterprise Server checkout just work), then `GH_HOST`, then `github.com`.
+Fallback candidates come from that same host in `gh auth status --json hosts`,
+and Enterprise Server
 retries inject `GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` instead of
 `GH_TOKEN`, so personal and corporate hosts never exchange credentials.
 

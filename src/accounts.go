@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -91,8 +92,10 @@ func execGHActive(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 	return ghTransportFunc(ghInvocation{Args: args})
 }
 
-// targetHost resolves which GitHub host a command targets: an explicit
-// HOST/OWNER/REPO value on --repo/-R wins, then GH_HOST, then github.com.
+// targetHost resolves which GitHub host a command targets, following gh's own
+// precedence: an explicit HOST/OWNER/REPO value on --repo/-R, then the
+// GH_REPO environment variable, then the current repository's git remote,
+// then GH_HOST, then github.com.
 func targetHost(args []string) string {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] != "--repo" && args[i] != "-R" {
@@ -102,20 +105,87 @@ func targetHost(args []string) string {
 			return host
 		}
 	}
+	if host := hostFromRepoValue(os.Getenv("GH_REPO")); host != "" {
+		return host
+	}
+	if host := hostFromRemoteURL(cachedRemoteURL()); host != "" {
+		return host
+	}
 	if host := strings.TrimSpace(os.Getenv("GH_HOST")); host != "" {
 		return strings.ToLower(host)
 	}
 	return defaultGitHubHost
 }
 
+// gitRemoteURLFunc reads the current repository's origin URL so commands run
+// inside an Enterprise Server checkout target that host by default; tests
+// replace it.
+var gitRemoteURLFunc = defaultGitRemoteURL
+
+var (
+	remoteMu       sync.Mutex
+	cachedRemote   string
+	remoteResolved bool
+)
+
+// cachedRemoteURL memoizes the git remote probe for this process.
+func cachedRemoteURL() string {
+	remoteMu.Lock()
+	defer remoteMu.Unlock()
+	if !remoteResolved {
+		cachedRemote = gitRemoteURLFunc()
+		remoteResolved = true
+	}
+	return cachedRemote
+}
+
+// resetRemoteCache clears the memoized git remote probe (test seam).
+func resetRemoteCache() {
+	remoteMu.Lock()
+	defer remoteMu.Unlock()
+	cachedRemote = ""
+	remoteResolved = false
+}
+
+// defaultGitRemoteURL reads the origin remote of the current repository.
+func defaultGitRemoteURL() string {
+	cmd := exec.Command("git", "config", "--get", "remote.origin.url")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+var (
+	remoteSchemeHost = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/]+@)?([^/:?#]+)`)
+	remoteScpHost    = regexp.MustCompile(`^[^/@]+@([^:/]+):`)
+	remotePlainHost  = regexp.MustCompile(`^([^/:@]+\.[^/:@]+)/`)
+)
+
 // hostFromRepoValue extracts the host from HOST/OWNER/REPO values. Plain
-// OWNER/REPO values return "" because they always mean github.com.
+// OWNER/REPO values return "" because their host comes from elsewhere.
 func hostFromRepoValue(value string) string {
 	parts := strings.Split(strings.Trim(strings.TrimSpace(value), "/"), "/")
 	if len(parts) < 3 || parts[0] == "" {
 		return ""
 	}
 	return strings.ToLower(parts[0])
+}
+
+// hostFromRemoteURL extracts a hostname from https, ssh, scp-style, or bare
+// host/path git remote URLs; anything unrecognizable returns "".
+func hostFromRemoteURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	for _, pattern := range []*regexp.Regexp{remoteSchemeHost, remoteScpHost, remotePlainHost} {
+		if matches := pattern.FindStringSubmatch(value); len(matches) == 2 && matches[1] != "" {
+			return strings.ToLower(matches[1])
+		}
+	}
+	return ""
 }
 
 // credentialEnvFor returns the environment entries that authenticate one gh

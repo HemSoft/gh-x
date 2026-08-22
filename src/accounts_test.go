@@ -329,6 +329,11 @@ func TestParseAuthStatusJSONInvalidPayload(t *testing.T) {
 
 func TestTargetHost(t *testing.T) {
 	t.Setenv("GH_HOST", "")
+	resetRemoteCache()
+	savedRemote := gitRemoteURLFunc
+	t.Cleanup(func() { gitRemoteURLFunc = savedRemote; resetRemoteCache() })
+	gitRemoteURLFunc = func() string { return "" }
+
 	cases := []struct {
 		name string
 		args []string
@@ -345,10 +350,81 @@ func TestTargetHost(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GH_HOST", tc.env)
+			t.Setenv("GH_REPO", "")
 			if got := targetHost(tc.args); got != tc.want {
 				t.Fatalf("targetHost(%v) with GH_HOST=%q = %q, want %q", tc.args, tc.env, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestTargetHostUsesRepoEnvAndGitRemote(t *testing.T) {
+	t.Setenv("GH_HOST", "")
+	resetRemoteCache()
+	savedRemote := gitRemoteURLFunc
+	t.Cleanup(func() { gitRemoteURLFunc = savedRemote; resetRemoteCache() })
+
+	t.Run("GH_REPO with host prefix", func(t *testing.T) {
+		t.Setenv("GH_REPO", "ghe.example.com/o/r")
+		gitRemoteURLFunc = func() string { return "https://github.com/o/r.git" }
+		resetRemoteCache()
+		if got := targetHost([]string{"pr", "list"}); got != "ghe.example.com" {
+			t.Fatalf("GH_REPO should win over the local remote: %q", got)
+		}
+	})
+
+	t.Run("git remote infers enterprise host", func(t *testing.T) {
+		t.Setenv("GH_REPO", "")
+		gitRemoteURLFunc = func() string { return "git@ghe.internal.acme.io:acme/widgets.git" }
+		resetRemoteCache()
+		if got := targetHost([]string{"pr", "list"}); got != "ghe.internal.acme.io" {
+			t.Fatalf("remote host inference failed: %q", got)
+		}
+	})
+
+	t.Run("github.com remote beats GH_HOST", func(t *testing.T) {
+		gitRemoteURLFunc = func() string { return "https://github.com/o/r.git" }
+		resetRemoteCache()
+		t.Setenv("GH_HOST", "fallback.host")
+		if got := targetHost([]string{"pr", "list"}); got != defaultGitHubHost {
+			t.Fatalf("a resolved github.com remote must not defer to GH_HOST, got %q", got)
+		}
+	})
+
+	t.Run("unresolvable remote falls through to GH_HOST", func(t *testing.T) {
+		gitRemoteURLFunc = func() string { return "/dev/null/not/a/remote" }
+		resetRemoteCache()
+		t.Setenv("GH_HOST", "fallback.host")
+		if got := targetHost([]string{"pr", "list"}); got != "fallback.host" {
+			t.Fatalf("expected GH_HOST fallback, got %q", got)
+		}
+	})
+
+	t.Run("no signals anywhere lands on github.com", func(t *testing.T) {
+		t.Setenv("GH_HOST", "")
+		gitRemoteURLFunc = func() string { return "" }
+		resetRemoteCache()
+		if got := targetHost(nil); got != defaultGitHubHost {
+			t.Fatalf("default wrong: %q", got)
+		}
+	})
+}
+
+func TestHostFromRemoteURL(t *testing.T) {
+	cases := map[string]string{
+		"https://ghe.example.com/acme/widgets.git": "ghe.example.com",
+		"ssh://git@ghe.example.com/acme/widgets":   "ghe.example.com",
+		"git@ghe.example.com:acme/widgets.git":     "ghe.example.com",
+		"ghe.example.com/acme/widgets":             "ghe.example.com",
+		"http://GHE.Example.COM/acme/widgets":      "ghe.example.com",
+		"https://github.com/o/r":                   "github.com",
+		"":                                         "",
+		"/just/a/path":                             "",
+	}
+	for input, want := range cases {
+		if got := hostFromRemoteURL(input); got != want {
+			t.Errorf("hostFromRemoteURL(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
