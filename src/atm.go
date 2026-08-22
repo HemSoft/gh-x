@@ -226,7 +226,8 @@ func expandSearchReferences(search string) (string, error) {
 		return "", fmt.Errorf("cannot resolve @me: %w", err)
 	}
 	return identityQualifierPattern.ReplaceAllStringFunc(search, func(match string) string {
-		return strings.TrimSuffix(match, "@me") + login
+		// Trim by length: the matched spelling may be any case (@me, @ME).
+		return match[:len(match)-len("@me")] + login
 	}), nil
 }
 

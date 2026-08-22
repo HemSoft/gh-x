@@ -206,8 +206,9 @@ func TestExpandSearchReferences(t *testing.T) {
 
 	cases := []struct{ in, want string }{
 		{"is:pr review-requested:@me", "is:pr review-requested:active-login"},
+		{"author:@ME assignee:@Me", "author:active-login assignee:active-login"},
 		{"author:@me assignee:@me", "author:active-login assignee:active-login"},
-		{"mentions:@me OR involves:@me", "mentions:active-login OR involves:active-login"},
+		{"mentions:@ME OR involves:@me", "mentions:active-login OR involves:active-login"},
 		{"commented-by:x reviewed-by:@me", "commented-by:x reviewed-by:active-login"},
 		{"label:@me", "label:@me"},
 		{"notify @me", "notify @me"},
