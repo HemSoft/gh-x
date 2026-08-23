@@ -1,0 +1,18 @@
+repos:
+    - owner/new
+    - owner/other
+defaults:
+    limit: 45
+    interval: 15m0s
+prSections:
+    - title: Mine
+      filters: is:open author:@me
+    - title: Review requests
+      filters: is:open review-requested:@me
+    - title: All open
+      filters: is:open
+issueSections:
+    - title: Assigned to me
+      filters: is:open assignee:@me
+    - title: All open
+      filters: is:open

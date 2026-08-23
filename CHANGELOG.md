@@ -9,6 +9,17 @@ and this project uses semantic versioning.
 
 ### Added
 
+- Added `gh x monitor`, a Bubble Tea dashboard across configured repositories
+  with PR and issue sections, saved layout state, and per-section filters
+  defined in `src/cfg.yml`. Replaces `gh x pr list --watch`.
+
+### Changed
+
+- Removed the `pr list` watch flags (`--watch`, `--monitor`, `--interval`);
+  use `gh x monitor` instead.
+
+### Fixed
+
 - Added automatic multi-account fallback: when the active GitHub account
   cannot access the target repository, commands retry with another logged-in
   account's token via `GH_TOKEN` on the retried subprocess only, print a

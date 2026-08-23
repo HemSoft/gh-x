@@ -232,6 +232,13 @@ func TestExecGHNoRetryForNonAccessErrors(t *testing.T) {
 	}
 }
 
+// resetFallbackNotes clears the per-process notice dedupe between cases.
+func resetFallbackNotes() {
+	notifiedMu.Lock()
+	defer notifiedMu.Unlock()
+	notifiedLogins = map[string]bool{}
+}
+
 func TestExpandMeReference(t *testing.T) {
 	saved := ghTransportFunc
 	t.Cleanup(func() { ghTransportFunc = saved })
@@ -541,6 +548,7 @@ func TestIsAccessError(t *testing.T) {
 }
 
 func TestDiscoveryAndTokenResolveOncePerProcess(t *testing.T) {
+	resetFallbackNotes()
 	authStatusCalls, tokenCalls, listCalls := 0, 0, 0
 	notices := withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		switch {

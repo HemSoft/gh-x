@@ -57,6 +57,23 @@ func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 	return stdout, stderr, nil
 }
 
+var (
+	notifiedMu     sync.Mutex
+	notifiedLogins = map[string]bool{}
+)
+
+// noteFallback prints the alternate-account notice once per login per process
+// so multi-call commands do not repeat it.
+func noteFallback(login, host string) {
+	notifiedMu.Lock()
+	defer notifiedMu.Unlock()
+	if notifiedLogins[login] {
+		return
+	}
+	notifiedLogins[login] = true
+	fmt.Fprintf(accountWarningWriter, "[gh-x] note: retried as %s (%s) after an access failure\n", login, host)
+}
+
 // execGH runs a gh command and retries with another logged-in account's token
 // when the active account cannot access the target repository. The retry
 // authenticates against the same host the original command targeted.
@@ -78,7 +95,7 @@ func execGH(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 		}
 		retryOut, retryErrs, retryErr := ghTransportFunc(retry)
 		if retryErr == nil {
-			fmt.Fprintf(accountWarningWriter, "[gh-x] note: retried as %s (%s) after an access failure\n", login, host)
+			noteFallback(login, host)
 			return retryOut, retryErrs, nil
 		}
 	}
