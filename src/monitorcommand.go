@@ -87,10 +87,12 @@ func printMonitorQuery(stdout io.Writer) error {
 		return err
 	}
 	for i, query := range queries {
+		printedQuery := query.Query
 		if len(queries) > 1 {
 			fmt.Fprintf(stdout, "# %s\n", query.Host)
+			printedQuery = fmt.Sprintf("query Monitor%d %s", i+1, query.Query)
 		}
-		fmt.Fprintln(stdout, query.Query)
+		fmt.Fprintln(stdout, printedQuery)
 		if i < len(queries)-1 {
 			fmt.Fprintln(stdout)
 		}
@@ -129,12 +131,7 @@ func bootstrapMonitorModel() (monitorModel, error) {
 
 var monitorResolveRepoFunc = resolveRepo
 
-var monitorRepoHostFunc = func() string {
-	if host := hostFromRemoteURL(cachedRemoteURL()); host != "" {
-		return host
-	}
-	return targetHost(nil)
-}
+var monitorRepoHostFunc = func() string { return targetHost(nil) }
 
 // monitorSeedRepo returns [host/]owner/repo of the current directory when
 // available. github.com keeps the compact owner/repo form; Enterprise Server

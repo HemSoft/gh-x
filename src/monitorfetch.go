@@ -205,9 +205,9 @@ func writeMonitorSearchAlias(sb *strings.Builder, alias string, kind monitorRowK
 // monitorGHExecFunc is the gh choke point for monitor; swapped in tests.
 var monitorGHExecFunc = execGHActive
 
-// executeMonitorFetch runs the batched query via gh as the active account.
-// Partial failures (an inaccessible repository probe) still yield usable
-// data; only responses without any data are treated as errors.
+// executeMonitorFetch runs one batched query per GitHub host. A host failure
+// becomes a warning when another host succeeds, so a transient Enterprise
+// outage does not hide otherwise usable monitor data.
 func executeMonitorFetch(cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
 	queries, err := buildMonitorHostQueries(cfg)
 	if err != nil {
@@ -215,24 +215,41 @@ func executeMonitorFetch(cfg *monitorConfig, now time.Time) (*monitorFetchResult
 	}
 
 	combined := newMonitorFetchResult(cfg, now)
-	for i, request := range queries {
-		args := []string{"api"}
-		if request.Host != defaultGitHubHost {
-			args = append(args, "--hostname", request.Host)
+	failedHosts := make([]string, 0)
+	successfulHosts := 0
+	for _, request := range queries {
+		partial, fetchErr := fetchMonitorHost(request, cfg, now)
+		if fetchErr != nil {
+			failedHosts = append(failedHosts, fmt.Sprintf("%s: %v", request.Host, fetchErr))
+			continue
 		}
-		args = append(args, "graphql", "-f", fmt.Sprintf("query=%s", request.Query))
-		stdoutBuf, stderrBuf, execErr := monitorGHExecFunc(args...)
-		if execErr != nil && !hasUsableGraphQLData(stdoutBuf.Bytes()) {
-			return nil, wrapExecError(fmt.Errorf("GraphQL search failed for %s: %w", request.Host, execErr), stderrBuf.String())
-		}
-		partial, parseErr := parseMonitorHostResponse(stdoutBuf.Bytes(), cfg, request.Repositories, now)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse GraphQL response from %s: %w", request.Host, parseErr)
-		}
-		mergeMonitorFetchResult(combined, partial, i == 0, len(queries) > 1, request.Host)
+		mergeMonitorFetchResult(combined, partial, len(queries) > 1, request.Host)
+		successfulHosts++
 	}
+	if successfulHosts == 0 {
+		return nil, fmt.Errorf("monitor refresh failed for all configured hosts: %s", strings.Join(failedHosts, "; "))
+	}
+	combined.Warnings = append(combined.Warnings, failedHosts...)
 	sortAllMonitorSections(combined)
+	limitMonitorSectionRows(combined, cfg)
 	return combined, nil
+}
+
+func fetchMonitorHost(request monitorHostQuery, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
+	args := []string{"api"}
+	if request.Host != defaultGitHubHost {
+		args = append(args, "--hostname", request.Host)
+	}
+	args = append(args, "graphql", "-f", fmt.Sprintf("query=%s", request.Query))
+	stdoutBuf, stderrBuf, execErr := monitorGHExecFunc(args...)
+	if execErr != nil && !hasUsableGraphQLData(stdoutBuf.Bytes()) {
+		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", execErr), stderrBuf.String())
+	}
+	result, err := parseMonitorHostResponse(stdoutBuf.Bytes(), cfg, request.Repositories, now)
+	if err != nil {
+		return nil, fmt.Errorf("parse GraphQL response: %w", err)
+	}
+	return result, nil
 }
 
 func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResult {
@@ -251,8 +268,8 @@ func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResul
 	return result
 }
 
-func mergeMonitorFetchResult(dst, src *monitorFetchResult, first, qualifyWarnings bool, host string) {
-	if first || src.RateRemaining < dst.RateRemaining {
+func mergeMonitorFetchResult(dst, src *monitorFetchResult, qualifyWarnings bool, host string) {
+	if !src.RateResetAt.IsZero() && (dst.RateResetAt.IsZero() || src.RateRemaining < dst.RateRemaining) {
 		dst.RateRemaining = src.RateRemaining
 		dst.RateResetAt = src.RateResetAt
 	}
@@ -456,6 +473,21 @@ func sortAllMonitorSections(result *monitorFetchResult) {
 	}
 	for i := range result.IssueSections {
 		sortMonitorRowsByUpdated(result.IssueSections[i].Rows)
+	}
+}
+
+func limitMonitorSectionRows(result *monitorFetchResult, cfg *monitorConfig) {
+	for i := range result.PRSections {
+		limit := monitorSectionLimit(cfg.PRSections[i], cfg.Defaults.Limit)
+		if len(result.PRSections[i].Rows) > limit {
+			result.PRSections[i].Rows = result.PRSections[i].Rows[:limit]
+		}
+	}
+	for i := range result.IssueSections {
+		limit := monitorSectionLimit(cfg.IssueSections[i], cfg.Defaults.Limit)
+		if len(result.IssueSections[i].Rows) > limit {
+			result.IssueSections[i].Rows = result.IssueSections[i].Rows[:limit]
+		}
 	}
 }
 

@@ -70,6 +70,29 @@ func TestMonitorSeedRepoPreservesEnterpriseHost(t *testing.T) {
 	}
 }
 
+func TestMonitorSeedRepoHonorsGHRepoHostOverCheckoutRemote(t *testing.T) {
+	savedResolve := monitorResolveRepoFunc
+	savedHost := monitorRepoHostFunc
+	savedRemote := gitRemoteURLFunc
+	defer func() {
+		monitorResolveRepoFunc = savedResolve
+		monitorRepoHostFunc = savedHost
+		gitRemoteURLFunc = savedRemote
+		resetRemoteCache()
+	}()
+	t.Setenv("GH_REPO", "ghe.example.com/Acme/Widgets")
+	gitRemoteURLFunc = func() string { return "https://github.com/HemSoft/gh-x.git" }
+	resetRemoteCache()
+	monitorResolveRepoFunc = func(string) (string, string, error) {
+		return "Acme", "Widgets", nil
+	}
+	monitorRepoHostFunc = func() string { return targetHost(nil) }
+
+	if got := monitorSeedRepo(); got != "ghe.example.com/Acme/Widgets" {
+		t.Fatalf("monitorSeedRepo() = %q, want GH_REPO host to win", got)
+	}
+}
+
 func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T) {
 	isolateMonitorHome(t)
 	configPath, err := monitorConfigPath()
@@ -101,6 +124,8 @@ func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T)
 	for _, want := range []string{
 		"# github.com\n",
 		"# ghe.example.com\n",
+		"query Monitor1 {",
+		"query Monitor2 {",
 		"repo:HemSoft/gh-x",
 		"repo:Acme/Widgets",
 	} {

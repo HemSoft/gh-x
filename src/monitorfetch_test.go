@@ -48,6 +48,7 @@ func TestExecuteMonitorFetchRoutesAndMergesHostGroups(t *testing.T) {
 
 	cfg := defaultMonitorConfig("owner/public")
 	cfg.Repos = append(cfg.Repos, "ghe.example.com/corp/private")
+	cfg.PRSections[0].Limit = 1
 	normalizeMonitorConfig(cfg)
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 
@@ -56,9 +57,11 @@ func TestExecuteMonitorFetchRoutesAndMergesHostGroups(t *testing.T) {
 		calls = append(calls, append([]string(nil), args...))
 		host := defaultGitHubHost
 		nameWithOwner := "owner/public"
+		updatedAt := "2026-08-23T11:00:00Z"
 		if len(args) >= 3 && args[1] == "--hostname" {
 			host = args[2]
 			nameWithOwner = "corp/private"
+			updatedAt = "2026-08-23T11:30:00Z"
 		}
 		query := strings.Join(args, " ")
 		if strings.Contains(query, "repo:ghe.example.com/") {
@@ -70,8 +73,9 @@ func TestExecuteMonitorFetchRoutesAndMergesHostGroups(t *testing.T) {
 		payload := `{"data":{"rateLimit":{"remaining":99,"resetAt":"2026-08-23T13:00:00Z"},` +
 			`"acc0":{"nameWithOwner":"` + nameWithOwner + `"},` +
 			`"pr0":{"issueCount":1,"nodes":[{"number":3,"title":"t","state":"OPEN",` +
-			`"updatedAt":"2026-08-23T11:00:00Z","repository":{"nameWithOwner":"` + nameWithOwner + `"}}]},` +
-			`"is0":{"issueCount":0,"nodes":[]}}}`
+			`"updatedAt":"` + updatedAt + `","repository":{"nameWithOwner":"` + nameWithOwner + `"}}]},` +
+			`"is0":{"issueCount":1,"nodes":[{"number":4,"title":"i","state":"OPEN",` +
+			`"updatedAt":"2026-08-23T10:00:00Z","repository":{"nameWithOwner":"` + nameWithOwner + `"}}]}}}`
 		return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
 	}
 
@@ -88,15 +92,75 @@ func TestExecuteMonitorFetchRoutesAndMergesHostGroups(t *testing.T) {
 	if got := strings.Join(calls[1], " "); !strings.Contains(got, "api --hostname ghe.example.com graphql") {
 		t.Fatalf("enterprise call missing hostname routing: %v", calls[1])
 	}
-	if len(result.PRSections[0].Rows) != 2 || result.PRSections[0].Total != 2 {
+	if len(result.PRSections[0].Rows) != 1 || result.PRSections[0].Total != 2 {
 		t.Fatalf("host results were not merged: %+v", result.PRSections[0])
 	}
-	if result.PRSections[0].Rows[0].Repo != "owner/public" ||
-		result.PRSections[0].Rows[1].Repo != "ghe.example.com/corp/private" {
-		t.Fatalf("row host identities were not preserved: %+v", result.PRSections[0].Rows)
+	if result.PRSections[0].Rows[0].Repo != "ghe.example.com/corp/private" {
+		t.Fatalf("configured cap did not retain the newest merged row: %+v", result.PRSections[0].Rows)
+	}
+	if len(result.IssueSections[0].Rows) != 2 || result.IssueSections[0].Total != 2 {
+		t.Fatalf("issue host results were not merged: %+v", result.IssueSections[0])
+	}
+	if result.IssueSections[0].Rows[0].Repo != "owner/public" ||
+		result.IssueSections[0].Rows[1].Repo != "ghe.example.com/corp/private" {
+		t.Fatalf("issue row host identities were not preserved: %+v", result.IssueSections[0].Rows)
 	}
 	if !result.Accessible["owner/public"] || !result.Accessible["ghe.example.com/corp/private"] {
 		t.Fatalf("access probes were not merged: %+v", result.Accessible)
+	}
+}
+
+func TestExecuteMonitorFetchKeepsSuccessfulHostsWhenAnotherFails(t *testing.T) {
+	saved := monitorGHExecFunc
+	defer func() { monitorGHExecFunc = saved }()
+
+	cfg := defaultMonitorConfig("owner/public")
+	cfg.Repos = append(cfg.Repos, "ghe.example.com/corp/private")
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		if len(args) >= 3 && args[1] == "--hostname" {
+			return bytes.Buffer{}, *bytes.NewBufferString("connection refused"), errBoom()
+		}
+		payload := `{"data":{"pr0":{"issueCount":1,"nodes":[{"number":3,"title":"t","state":"OPEN",` +
+			`"updatedAt":"2026-08-23T11:00:00Z","repository":{"nameWithOwner":"owner/public"}}]}}}`
+		return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
+	}
+
+	result, err := executeMonitorFetch(cfg, now)
+	if err != nil {
+		t.Fatalf("successful host should keep refresh usable: %v", err)
+	}
+	if len(result.PRSections[0].Rows) != 1 || result.PRSections[0].Rows[0].Repo != "owner/public" {
+		t.Fatalf("successful host data was lost: %+v", result.PRSections[0])
+	}
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "ghe.example.com") ||
+		!strings.Contains(result.Warnings[0], "connection refused") {
+		t.Fatalf("failed host warning missing context: %v", result.Warnings)
+	}
+}
+
+func TestExecuteMonitorFetchUsesRateLimitFromHostThatReturnsIt(t *testing.T) {
+	saved := monitorGHExecFunc
+	defer func() { monitorGHExecFunc = saved }()
+
+	cfg := defaultMonitorConfig("owner/public")
+	cfg.Repos = append(cfg.Repos, "ghe.example.com/corp/private")
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	wantReset := "2026-08-23T13:00:00Z"
+	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		if len(args) >= 3 && args[1] == "--hostname" {
+			payload := `{"data":{"rateLimit":{"remaining":42,"resetAt":"` + wantReset + `"}}}`
+			return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
+		}
+		return *bytes.NewBufferString(`{"data":{}}`), bytes.Buffer{}, nil
+	}
+
+	result, err := executeMonitorFetch(cfg, now)
+	if err != nil {
+		t.Fatalf("executeMonitorFetch: %v", err)
+	}
+	if result.RateRemaining != 42 || result.RateResetAt.Format(time.RFC3339) != wantReset {
+		t.Fatalf("valid later rate limit was ignored: remaining=%d reset=%v", result.RateRemaining, result.RateResetAt)
 	}
 }
 
