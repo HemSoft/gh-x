@@ -17,7 +17,15 @@ permissions:
   contents: write
 
 jobs:
+  # Calling the local reusable workflow validates the same commit that
+  # triggered this release. The release job cannot start unless it passes.
+  quality:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -144,7 +152,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ steps.version.outputs.tag }}"
-          bump="${{ steps.version.outputs.bump }}"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists — uploading assets with --clobber"
             gh release upload "$tag" dist/* --clobber

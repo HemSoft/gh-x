@@ -12,6 +12,7 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
+  workflow_call:
 
 permissions:
   contents: read
@@ -26,6 +27,9 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
 
       - name: Build
         run: go build -o "$RUNNER_TEMP/bin/" ./...
@@ -35,6 +39,9 @@ jobs:
 
       - name: Test (race detection enabled)
         run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Test Node dashboards
+        run: node --test src/codex-dashboard/*.test.mjs src/dashboard-hub/*.test.mjs
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7
@@ -311,7 +318,13 @@ jobs:
         run: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
 
       - name: "Enforce: mutation score ≥ 90%"
-        run: gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./...
+        run: |
+          results=$(mktemp)
+          gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src 2>&1 | tee "$results"
+          if grep -Fq "No results to report" "$results"; then
+            echo "::error::Mutation testing produced no results"
+            exit 1
+          fi
 
   # ── Final Gate ─────────────────────────────────────────────────
   # Single required status check for branch protection
