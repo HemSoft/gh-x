@@ -195,6 +195,30 @@ func TestLoadLegacyMonitorConfigPinsPublicHost(t *testing.T) {
 	}
 }
 
+func TestLoadLegacyMonitorConfigDoesNotPinHostBeforeValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	if err := os.WriteFile(path, []byte("repos: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com"); err == nil {
+		t.Fatal("expected invalid empty repository list")
+	}
+	if _, err := os.Stat(path + monitorMigrationSuffix); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid config persisted migration marker: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte("repos: [HemSoft/gh-x]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
+	if err != nil {
+		t.Fatalf("load repaired config: %v", err)
+	}
+	if loaded.Repos[0] != "HemSoft/gh-x" {
+		t.Fatalf("repaired repo = %q, want HemSoft/gh-x", loaded.Repos[0])
+	}
+}
+
 func TestParseMonitorMigrationRejectsInvalidData(t *testing.T) {
 	tests := []string{
 		"version: [broken",

@@ -224,16 +224,23 @@ func loadOrCreateMonitorConfig(path, seedRepo, legacyHost string) (*monitorConfi
 		return nil, false, fmt.Errorf("parse %s: %w", path, err)
 	}
 	legacyConfig := cfg.Version == 0
+	newMigration := false
+	migrationHost := ""
 	if legacyConfig {
-		persistedHost, err := loadOrCreateMonitorMigration(path, legacyHost)
+		migrationHost, newMigration, err = loadMonitorMigration(path, legacyHost)
 		if err != nil {
 			return nil, false, err
 		}
-		cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, persistedHost)
+		cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, migrationHost)
 	}
 	normalizeMonitorConfig(&cfg)
 	if err := validateMonitorConfig(&cfg); err != nil {
 		return nil, false, err
+	}
+	if newMigration {
+		if err := saveMonitorMigration(path, migrationHost); err != nil {
+			return nil, false, err
+		}
 	}
 	return &cfg, false, nil
 }
@@ -304,28 +311,33 @@ type monitorConfigMigration struct {
 	Host    string `yaml:"host"`
 }
 
-func loadOrCreateMonitorMigration(configPath, legacyHost string) (string, error) {
+func loadMonitorMigration(configPath, legacyHost string) (string, bool, error) {
 	migrationPath := configPath + monitorMigrationSuffix
 	data, err := os.ReadFile(migrationPath)
 	if err == nil {
-		return parseMonitorMigration(data)
+		host, parseErr := parseMonitorMigration(data)
+		return host, false, parseErr
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("read monitor migration: %w", err)
+		return "", false, fmt.Errorf("read monitor migration: %w", err)
 	}
 
 	host := normalizeRemoteHost(legacyHost)
 	if host == "" {
 		host = defaultGitHubHost
 	}
-	data, err = yaml.Marshal(monitorConfigMigration{Version: monitorConfigVersion, Host: host})
+	return host, true, nil
+}
+
+func saveMonitorMigration(configPath, host string) error {
+	data, err := yaml.Marshal(monitorConfigMigration{Version: monitorConfigVersion, Host: host})
 	if err != nil {
-		return "", fmt.Errorf("encode monitor migration: %w", err)
+		return fmt.Errorf("encode monitor migration: %w", err)
 	}
-	if err := writeMonitorConfigData(migrationPath, data); err != nil {
-		return "", fmt.Errorf("persist monitor migration: %w", err)
+	if err := writeMonitorConfigData(configPath+monitorMigrationSuffix, data); err != nil {
+		return fmt.Errorf("persist monitor migration: %w", err)
 	}
-	return host, nil
+	return nil
 }
 
 func parseMonitorMigration(data []byte) (string, error) {
