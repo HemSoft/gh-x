@@ -70,6 +70,49 @@ func TestMonitorSeedRepoPreservesEnterpriseHost(t *testing.T) {
 	}
 }
 
+func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T) {
+	isolateMonitorHome(t)
+	configPath, err := monitorConfigPath()
+	if err != nil {
+		t.Fatalf("monitorConfigPath: %v", err)
+	}
+	cfg := defaultMonitorConfig("")
+	cfg.Repos = []string{"HemSoft/gh-x", "ghe.example.com/Acme/Widgets"}
+	if err := saveMonitorConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveMonitorConfig: %v", err)
+	}
+
+	savedResolve := monitorResolveRepoFunc
+	savedHost := monitorRepoHostFunc
+	defer func() {
+		monitorResolveRepoFunc = savedResolve
+		monitorRepoHostFunc = savedHost
+	}()
+	monitorResolveRepoFunc = func(string) (string, string, error) {
+		return "ignored", "seed", nil
+	}
+	monitorRepoHostFunc = func() string { return defaultGitHubHost }
+
+	var stdout bytes.Buffer
+	if err := printMonitorQuery(&stdout); err != nil {
+		t.Fatalf("printMonitorQuery: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"# github.com\n",
+		"# ghe.example.com\n",
+		"repo:HemSoft/gh-x",
+		"repo:Acme/Widgets",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("printed queries missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "repo:ghe.example.com/Acme/Widgets") {
+		t.Fatalf("enterprise hostname leaked into repo qualifier:\n%s", output)
+	}
+}
+
 func isolateMonitorHome(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
