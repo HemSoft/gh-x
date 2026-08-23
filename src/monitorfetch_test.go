@@ -164,6 +164,17 @@ func TestExecuteMonitorFetchUsesRateLimitFromHostThatReturnsIt(t *testing.T) {
 	}
 }
 
+func TestHasUsableGraphQLDataRequiresPayloadField(t *testing.T) {
+	for _, data := range []string{"not json", `{"data":null}`, `{"data":{}}`} {
+		if hasUsableGraphQLData([]byte(data)) {
+			t.Fatalf("response without a payload field treated as usable: %s", data)
+		}
+	}
+	if !hasUsableGraphQLData([]byte(`{"data":{"rateLimit":null}}`)) {
+		t.Fatal("requested payload field should make partial GraphQL data usable")
+	}
+}
+
 func TestBuildMonitorSearchQueryInjectsKindAndRepos(t *testing.T) {
 	got := buildMonitorSearchQuery(monitorKindPR, "is:open author:@me", "repo:o/r")
 	want := "is:pr is:open author:@me repo:o/r"

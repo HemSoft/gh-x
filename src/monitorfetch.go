@@ -292,12 +292,12 @@ func mergeMonitorFetchResult(dst, src *monitorFetchResult, qualifyWarnings bool,
 // data object despite an overall failure.
 func hasUsableGraphQLData(data []byte) bool {
 	var envelope struct {
-		Data json.RawMessage `json:"data"`
+		Data map[string]json.RawMessage `json:"data"`
 	}
 	if json.Unmarshal(data, &envelope) != nil {
 		return false
 	}
-	return len(envelope.Data) > 0 && string(envelope.Data) != "null"
+	return len(envelope.Data) > 0
 }
 
 // parseMonitorResponse decodes aliases pr0..prN, is0..isN, and acc0..accN.
