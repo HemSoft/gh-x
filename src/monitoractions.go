@@ -78,7 +78,7 @@ func (m monitorModel) handleEditorDone(msg monitorEditorDoneMsg) (tea.Model, tea
 		m.refreshErr = "editor: " + msg.err.Error()
 		return m, nil
 	}
-	cfg, _, err := loadOrCreateMonitorConfig(m.configPath, "")
+	cfg, _, err := loadOrCreateMonitorConfig(m.configPath, monitorSeedRepo(), monitorRepoHostFunc())
 	if err != nil {
 		m.refreshErr = "reload config: " + err.Error()
 		return m, nil

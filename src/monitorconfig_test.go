@@ -26,7 +26,7 @@ func TestDefaultMonitorConfigSeedsRepoAndSections(t *testing.T) {
 
 func TestLoadOrCreateMonitorConfigCreatesStarterFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "subdir", "config.yml")
-	_, created, err := loadOrCreateMonitorConfig(path, "owner/repo")
+	_, created, err := loadOrCreateMonitorConfig(path, "owner/repo", defaultGitHubHost)
 	if err != nil {
 		t.Fatalf("loadOrCreateMonitorConfig: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestLoadOrCreateMonitorConfigCreatesStarterFile(t *testing.T) {
 	if string(data)[:1] != "#" {
 		t.Fatal("starter file should begin with a comment")
 	}
-	loaded, createdAgain, err := loadOrCreateMonitorConfig(path, "")
+	loaded, createdAgain, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
 	if err != nil || createdAgain {
 		t.Fatalf("reload should succeed without recreating: created=%v err=%v", createdAgain, err)
 	}
@@ -54,8 +54,45 @@ func TestLoadOrCreateMonitorConfigRejectsBadYAML(t *testing.T) {
 	if err := os.WriteFile(path, []byte("repos: [broken"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loadOrCreateMonitorConfig(path, ""); err == nil {
+	if _, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost); err == nil {
 		t.Fatal("expected YAML error")
+	}
+}
+
+func TestLoadMonitorConfigQualifiesLegacyEnterpriseRepositories(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	cfg := defaultMonitorConfig("")
+	cfg.Repos = []string{"Acme/Widgets", "Acme/Service"}
+	if err := saveMonitorConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+	if err != nil {
+		t.Fatalf("load legacy enterprise config: %v", err)
+	}
+	want := []string{"ghe.example.com/Acme/Widgets", "ghe.example.com/Acme/Service"}
+	for i := range want {
+		if loaded.Repos[i] != want[i] {
+			t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], want[i])
+		}
+	}
+}
+
+func TestLoadMonitorConfigDoesNotRewriteNewMixedHostRepositories(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	cfg := defaultMonitorConfig("")
+	cfg.Repos = []string{"HemSoft/gh-x", "ghe.example.com/Acme/Widgets"}
+	if err := saveMonitorConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+	if err != nil {
+		t.Fatalf("load mixed-host config: %v", err)
+	}
+	if loaded.Repos[0] != "HemSoft/gh-x" || loaded.Repos[1] != "ghe.example.com/Acme/Widgets" {
+		t.Fatalf("new mixed-host config was rewritten: %v", loaded.Repos)
 	}
 }
 
@@ -193,7 +230,7 @@ func TestSaveMonitorConfigRoundTrips(t *testing.T) {
 	if err := saveMonitorConfig(path, cfg); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	loaded, _, err := loadOrCreateMonitorConfig(path, "")
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}

@@ -78,7 +78,7 @@ func printMonitorQuery(stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo())
+	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo(), monitorRepoHostFunc())
 	if err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func bootstrapMonitorModel() (monitorModel, error) {
 	if err != nil {
 		return monitorModel{}, err
 	}
-	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo())
+	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo(), monitorRepoHostFunc())
 	if err != nil {
 		return monitorModel{}, err
 	}

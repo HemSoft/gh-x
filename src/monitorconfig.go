@@ -200,7 +200,7 @@ func writeStarterSection(sb *strings.Builder, section monitorSection) {
 // loadOrCreateMonitorConfig reads the config at path, creating a commented
 // starter file seeded with seedRepo when it does not exist yet. The second
 // return reports whether a new file was created.
-func loadOrCreateMonitorConfig(path, seedRepo string) (*monitorConfig, bool, error) {
+func loadOrCreateMonitorConfig(path, seedRepo, legacyHost string) (*monitorConfig, bool, error) {
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
@@ -218,11 +218,35 @@ func loadOrCreateMonitorConfig(path, seedRepo string) (*monitorConfig, bool, err
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, false, fmt.Errorf("parse %s: %w", path, err)
 	}
+	cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, legacyHost)
 	normalizeMonitorConfig(&cfg)
 	if err := validateMonitorConfig(&cfg); err != nil {
 		return nil, false, err
 	}
 	return &cfg, false, nil
+}
+
+// qualifyLegacyMonitorRepos preserves pre-host-routing configs. Before host
+// prefixes were supported, every OWNER/REPO entry inherited one endpoint. If
+// the current endpoint is Enterprise and the config contains no explicit host,
+// retain that behavior by qualifying every repository during load.
+func qualifyLegacyMonitorRepos(values []string, legacyHost string) []string {
+	host := normalizeRemoteHost(legacyHost)
+	if host == "" || host == defaultGitHubHost {
+		return values
+	}
+	for _, value := range values {
+		if len(strings.Split(strings.Trim(strings.TrimSpace(value), "/"), "/")) == 3 {
+			return values
+		}
+	}
+	qualified := append([]string(nil), values...)
+	for i, value := range qualified {
+		if len(strings.Split(strings.Trim(strings.TrimSpace(value), "/"), "/")) == 2 {
+			qualified[i] = host + "/" + strings.Trim(strings.TrimSpace(value), "/")
+		}
+	}
+	return qualified
 }
 
 // writeStarterMonitorConfig writes the hand-commented starter template.
