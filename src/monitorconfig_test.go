@@ -89,6 +89,62 @@ func TestValidateMonitorConfigErrors(t *testing.T) {
 	}
 }
 
+func TestParseMonitorRepositoryNormalizesHostOwnerAndName(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  monitorRepository
+		label string
+	}{
+		{
+			name:  "github.com default",
+			input: " HemSoft/gh-x ",
+			want:  monitorRepository{Host: defaultGitHubHost, Owner: "HemSoft", Name: "gh-x"},
+			label: "HemSoft/gh-x",
+		},
+		{
+			name:  "explicit github.com",
+			input: "GitHub.COM/HemSoft/gh-x",
+			want:  monitorRepository{Host: defaultGitHubHost, Owner: "HemSoft", Name: "gh-x"},
+			label: "HemSoft/gh-x",
+		},
+		{
+			name:  "enterprise host",
+			input: "GHE.Example.COM./Acme/Widgets",
+			want:  monitorRepository{Host: "ghe.example.com", Owner: "Acme", Name: "Widgets"},
+			label: "ghe.example.com/Acme/Widgets",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseMonitorRepository(tc.input)
+			if err != nil {
+				t.Fatalf("parseMonitorRepository(%q): %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseMonitorRepository(%q) = %+v, want %+v", tc.input, got, tc.want)
+			}
+			if got.configValue() != tc.label {
+				t.Fatalf("configValue() = %q, want %q", got.configValue(), tc.label)
+			}
+		})
+	}
+}
+
+func TestNormalizeMonitorConfigCanonicalizesRepositories(t *testing.T) {
+	cfg := defaultMonitorConfig("")
+	cfg.Repos = []string{"GitHub.COM/HemSoft/gh-x", "GHE.Example.COM./Acme/Widgets"}
+	normalizeMonitorConfig(cfg)
+
+	want := []string{"HemSoft/gh-x", "ghe.example.com/Acme/Widgets"}
+	for i := range want {
+		if cfg.Repos[i] != want[i] {
+			t.Fatalf("Repos[%d] = %q, want %q", i, cfg.Repos[i], want[i])
+		}
+	}
+}
+
 func TestParseMonitorIntervalBounds(t *testing.T) {
 	cases := []struct {
 		in      string

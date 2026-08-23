@@ -1,18 +1,102 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
 
+func singleMonitorQuery(t *testing.T, cfg *monitorConfig) string {
+	t.Helper()
+	queries, err := buildMonitorHostQueries(cfg)
+	if err != nil {
+		t.Fatalf("buildMonitorHostQueries: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("expected one host query, got %d", len(queries))
+	}
+	return queries[0].Query
+}
+
+func parseSingleMonitorResponse(t *testing.T, data []byte, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
+	t.Helper()
+	repositories, err := parseMonitorRepositories(cfg.Repos)
+	if err != nil {
+		t.Fatalf("parseMonitorRepositories: %v", err)
+	}
+	return parseMonitorHostResponse(data, cfg, repositories, now)
+}
+
 func TestBuildMonitorRepoQualifiers(t *testing.T) {
-	if got := buildMonitorRepoQualifiers([]string{"o/r1", "o/r2"}); got != "repo:o/r1 repo:o/r2" {
+	repos := []monitorRepository{
+		{Host: "ghe.example.com", Owner: "o", Name: "r1"},
+		{Host: "ghe.example.com", Owner: "o", Name: "r2"},
+	}
+	if got := buildMonitorRepoQualifiers(repos); got != "repo:o/r1 repo:o/r2" {
 		t.Fatalf("unexpected qualifiers: %q", got)
 	}
 	if got := buildMonitorRepoQualifiers(nil); got != "" {
 		t.Fatalf("empty repos should produce empty qualifiers: %q", got)
+	}
+}
+
+func TestExecuteMonitorFetchRoutesAndMergesHostGroups(t *testing.T) {
+	saved := monitorGHExecFunc
+	defer func() { monitorGHExecFunc = saved }()
+
+	cfg := defaultMonitorConfig("owner/public")
+	cfg.Repos = append(cfg.Repos, "ghe.example.com/corp/private")
+	normalizeMonitorConfig(cfg)
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+
+	var calls [][]string
+	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		calls = append(calls, append([]string(nil), args...))
+		host := defaultGitHubHost
+		nameWithOwner := "owner/public"
+		if len(args) >= 3 && args[1] == "--hostname" {
+			host = args[2]
+			nameWithOwner = "corp/private"
+		}
+		query := strings.Join(args, " ")
+		if strings.Contains(query, "repo:ghe.example.com/") {
+			t.Fatalf("GraphQL qualifier leaked host: %s", query)
+		}
+		if !strings.Contains(query, "repo:"+nameWithOwner) {
+			t.Fatalf("query for %s missing repo qualifier: %s", host, query)
+		}
+		payload := `{"data":{"rateLimit":{"remaining":99,"resetAt":"2026-08-23T13:00:00Z"},` +
+			`"acc0":{"nameWithOwner":"` + nameWithOwner + `"},` +
+			`"pr0":{"issueCount":1,"nodes":[{"number":3,"title":"t","state":"OPEN",` +
+			`"updatedAt":"2026-08-23T11:00:00Z","repository":{"nameWithOwner":"` + nameWithOwner + `"}}]},` +
+			`"is0":{"issueCount":0,"nodes":[]}}}`
+		return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
+	}
+
+	result, err := executeMonitorFetch(cfg, now)
+	if err != nil {
+		t.Fatalf("executeMonitorFetch: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected one call per host, got %d", len(calls))
+	}
+	if strings.Contains(strings.Join(calls[0], " "), "--hostname") {
+		t.Fatalf("github.com call should use the default endpoint: %v", calls[0])
+	}
+	if got := strings.Join(calls[1], " "); !strings.Contains(got, "api --hostname ghe.example.com graphql") {
+		t.Fatalf("enterprise call missing hostname routing: %v", calls[1])
+	}
+	if len(result.PRSections[0].Rows) != 2 || result.PRSections[0].Total != 2 {
+		t.Fatalf("host results were not merged: %+v", result.PRSections[0])
+	}
+	if result.PRSections[0].Rows[0].Repo != "owner/public" ||
+		result.PRSections[0].Rows[1].Repo != "ghe.example.com/corp/private" {
+		t.Fatalf("row host identities were not preserved: %+v", result.PRSections[0].Rows)
+	}
+	if !result.Accessible["owner/public"] || !result.Accessible["ghe.example.com/corp/private"] {
+		t.Fatalf("access probes were not merged: %+v", result.Accessible)
 	}
 }
 
@@ -30,10 +114,7 @@ func TestBuildMonitorSearchQueryInjectsKindAndRepos(t *testing.T) {
 func TestBuildMonitorGraphQLQueryShape(t *testing.T) {
 	cfg := defaultMonitorConfig("o/r1")
 	cfg.Repos = append(cfg.Repos, "o/r2")
-	query, err := buildMonitorGraphQLQuery(cfg)
-	if err != nil {
-		t.Fatalf("buildMonitorGraphQLQuery: %v", err)
-	}
+	query := singleMonitorQuery(t, cfg)
 	for _, want := range []string{
 		"rateLimit { remaining resetAt }",
 		`pr0: search(query: "is:pr is:open author:@me repo:o/r1 repo:o/r2"`,
@@ -50,7 +131,7 @@ func TestBuildMonitorGraphQLQueryShape(t *testing.T) {
 func TestBuildMonitorGraphQLQueryRequiresRepos(t *testing.T) {
 	cfg := defaultMonitorConfig("")
 	cfg.Repos = nil
-	if _, err := buildMonitorGraphQLQuery(cfg); err == nil {
+	if _, err := buildMonitorHostQueries(cfg); err == nil {
 		t.Fatal("expected error without repos")
 	}
 }
@@ -95,7 +176,7 @@ func TestParseMonitorResponseMapsPRAndIssueSections(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := parseMonitorResponse(raw, cfg, now)
+	result, err := parseSingleMonitorResponse(t, raw, cfg, now)
 	if err != nil {
 		t.Fatalf("parseMonitorResponse: %v", err)
 	}
@@ -131,11 +212,11 @@ func TestParseMonitorResponseMapsPRAndIssueSections(t *testing.T) {
 func TestParseMonitorResponseReportsGraphQLErrors(t *testing.T) {
 	cfg := defaultMonitorConfig("owner/repo")
 	raw := []byte(`{"errors":[{"message":"bad query"}],"data":null}`)
-	if _, err := parseMonitorResponse(raw, cfg, time.Now()); err == nil {
+	if _, err := parseSingleMonitorResponse(t, raw, cfg, time.Now()); err == nil {
 		t.Fatal("expected GraphQL error to surface")
 	}
 	raw = []byte(`not json`)
-	if _, err := parseMonitorResponse(raw, cfg, time.Now()); err == nil {
+	if _, err := parseSingleMonitorResponse(t, raw, cfg, time.Now()); err == nil {
 		t.Fatal("expected decode error for invalid JSON")
 	}
 }
@@ -143,7 +224,7 @@ func TestParseMonitorResponseReportsGraphQLErrors(t *testing.T) {
 func TestParseMonitorResponseToleratesMissingAliases(t *testing.T) {
 	cfg := defaultMonitorConfig("owner/repo")
 	raw := []byte(`{"data":{"rateLimit":{"remaining":10,"resetAt":"2026-01-01T00:00:00Z"}}}`)
-	result, err := parseMonitorResponse(raw, cfg, time.Now())
+	result, err := parseSingleMonitorResponse(t, raw, cfg, time.Now())
 	if err != nil {
 		t.Fatalf("missing aliases should not fail: %v", err)
 	}

@@ -53,6 +53,23 @@ func TestRunMonitorCmdBootstrapErrorSurfaces(t *testing.T) {
 	}
 }
 
+func TestMonitorSeedRepoPreservesEnterpriseHost(t *testing.T) {
+	savedResolve := monitorResolveRepoFunc
+	savedHost := monitorRepoHostFunc
+	defer func() {
+		monitorResolveRepoFunc = savedResolve
+		monitorRepoHostFunc = savedHost
+	}()
+	monitorResolveRepoFunc = func(string) (string, string, error) {
+		return "Acme", "Widgets", nil
+	}
+	monitorRepoHostFunc = func() string { return "GHE.Example.COM." }
+
+	if got := monitorSeedRepo(); got != "ghe.example.com/Acme/Widgets" {
+		t.Fatalf("monitorSeedRepo() = %q, want enterprise-qualified repo", got)
+	}
+}
+
 func isolateMonitorHome(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()

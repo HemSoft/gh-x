@@ -45,6 +45,75 @@ type monitorConfig struct {
 	IssueSections []monitorSection `yaml:"issueSections"`
 }
 
+// monitorRepository is the normalized identity of one configured repository.
+// Plain OWNER/REPO entries belong to github.com; Enterprise entries retain
+// their explicit host so requests and UI row keys cannot cross hosts.
+type monitorRepository struct {
+	Host  string
+	Owner string
+	Name  string
+}
+
+func parseMonitorRepository(value string) (monitorRepository, error) {
+	trimmed := strings.Trim(strings.TrimSpace(value), "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 2 || len(parts) > 3 {
+		return monitorRepository{}, fmt.Errorf("repo %q must be OWNER/REPO (or HOST/OWNER/REPO)", value)
+	}
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+		if parts[i] == "" {
+			return monitorRepository{}, fmt.Errorf("repo %q has an empty segment", value)
+		}
+	}
+
+	host := defaultGitHubHost
+	if len(parts) == 3 {
+		host = normalizeRemoteHost(parts[0])
+		if host == "" {
+			return monitorRepository{}, fmt.Errorf("repo %q has an empty host", value)
+		}
+	}
+	return monitorRepository{
+		Host:  host,
+		Owner: parts[len(parts)-2],
+		Name:  parts[len(parts)-1],
+	}, nil
+}
+
+func parseMonitorRepositories(values []string) ([]monitorRepository, error) {
+	repositories := make([]monitorRepository, 0, len(values))
+	for _, value := range values {
+		repository, err := parseMonitorRepository(value)
+		if err != nil {
+			return nil, err
+		}
+		repositories = append(repositories, repository)
+	}
+	return repositories, nil
+}
+
+func (r monitorRepository) nameWithOwner() string {
+	return r.Owner + "/" + r.Name
+}
+
+func (r monitorRepository) configValue() string {
+	if r.Host == defaultGitHubHost {
+		return r.nameWithOwner()
+	}
+	return r.Host + "/" + r.nameWithOwner()
+}
+
+func normalizeMonitorRepoValues(values []string) []string {
+	normalized := append([]string(nil), values...)
+	for i, value := range normalized {
+		if repository, err := parseMonitorRepository(value); err == nil {
+			normalized[i] = repository.configValue()
+		}
+	}
+	return normalized
+}
+
 // monitorConfigPath returns the platform-appropriate config file location:
 // %AppData%\gh-x\config.yml on Windows, ~/.config/gh-x/config.yml elsewhere.
 func monitorConfigPath() (string, error) {
@@ -104,7 +173,7 @@ func starterMonitorConfigYAML(cfg *monitorConfig) string {
 		fmt.Fprintf(&sb, "  - %s\n", repo)
 	}
 	if len(cfg.Repos) == 0 {
-		sb.WriteString("  [] # add owner/repo entries here\n")
+		sb.WriteString("  [] # add [host/]owner/repo entries here\n")
 	}
 	fmt.Fprintf(&sb, "\ndefaults:\n")
 	fmt.Fprintf(&sb, "  limit: %d      # rows fetched per section (max 100)\n", cfg.Defaults.Limit)
@@ -189,6 +258,7 @@ func saveMonitorConfig(path string, cfg *monitorConfig) error {
 
 // normalizeMonitorConfig fills unset defaults so callers never see zeros.
 func normalizeMonitorConfig(cfg *monitorConfig) {
+	cfg.Repos = normalizeMonitorRepoValues(cfg.Repos)
 	if len(cfg.PRSections) == 0 {
 		prs, _ := defaultMonitorSections()
 		cfg.PRSections = prs
@@ -233,16 +303,8 @@ func validateMonitorRepos(repos []string) error {
 
 // validateMonitorRepo accepts OWNER/REPO or HOST/OWNER/REPO entries.
 func validateMonitorRepo(repo string) error {
-	parts := strings.Split(strings.Trim(repo, "/"), "/")
-	if len(parts) < 2 || len(parts) > 3 {
-		return fmt.Errorf("repo %q must be OWNER/REPO (or HOST/OWNER/REPO)", repo)
-	}
-	for _, part := range parts {
-		if strings.TrimSpace(part) == "" {
-			return fmt.Errorf("repo %q has an empty segment", repo)
-		}
-	}
-	return nil
+	_, err := parseMonitorRepository(repo)
+	return err
 }
 
 func validateMonitorSections(sections []monitorSection) error {

@@ -69,11 +69,22 @@ type monitorIssueNode struct {
 	} `json:"milestone"`
 }
 
+type monitorRepositoryGroup struct {
+	Host         string
+	Repositories []monitorRepository
+}
+
+type monitorHostQuery struct {
+	Host         string
+	Repositories []monitorRepository
+	Query        string
+}
+
 // buildMonitorRepoQualifiers renders "repo:a/b repo:c/d" for server-side scoping.
-func buildMonitorRepoQualifiers(repos []string) string {
+func buildMonitorRepoQualifiers(repos []monitorRepository) string {
 	parts := make([]string, 0, len(repos))
 	for _, repo := range repos {
-		parts = append(parts, fmt.Sprintf("repo:%s", repo))
+		parts = append(parts, fmt.Sprintf("repo:%s", repo.nameWithOwner()))
 	}
 	return strings.Join(parts, " ")
 }
@@ -110,18 +121,51 @@ const monitorDetailFieldsFragment = `
         labels(first: 20) { nodes { name } }
         milestone { title }`
 
-// buildMonitorGraphQLQuery builds one aliased GraphQL document fetching every
-// PR and issue section plus rate limit info in a single round trip.
-func buildMonitorGraphQLQuery(cfg *monitorConfig) (string, error) {
-	if len(cfg.Repos) == 0 {
-		return "", fmt.Errorf("no repos configured")
+func buildMonitorHostQueries(cfg *monitorConfig) ([]monitorHostQuery, error) {
+	repositories, err := parseMonitorRepositories(cfg.Repos)
+	if err != nil {
+		return nil, err
 	}
-	repoQualifiers := buildMonitorRepoQualifiers(cfg.Repos)
+	if len(repositories) == 0 {
+		return nil, fmt.Errorf("no repos configured")
+	}
+
+	groups := groupMonitorRepositories(repositories)
+	queries := make([]monitorHostQuery, 0, len(groups))
+	for _, group := range groups {
+		queries = append(queries, monitorHostQuery{
+			Host:         group.Host,
+			Repositories: group.Repositories,
+			Query:        buildMonitorGraphQLQueryForRepos(cfg, group.Repositories),
+		})
+	}
+	return queries, nil
+}
+
+func groupMonitorRepositories(repositories []monitorRepository) []monitorRepositoryGroup {
+	groups := make([]monitorRepositoryGroup, 0)
+	indices := make(map[string]int)
+	for _, repository := range repositories {
+		index, ok := indices[repository.Host]
+		if !ok {
+			index = len(groups)
+			indices[repository.Host] = index
+			groups = append(groups, monitorRepositoryGroup{Host: repository.Host})
+		}
+		groups[index].Repositories = append(groups[index].Repositories, repository)
+	}
+	return groups
+}
+
+// buildMonitorGraphQLQueryForRepos builds one aliased GraphQL document for a
+// set of repositories that all belong to the same GitHub host.
+func buildMonitorGraphQLQueryForRepos(cfg *monitorConfig, repositories []monitorRepository) string {
+	repoQualifiers := buildMonitorRepoQualifiers(repositories)
 
 	var sb strings.Builder
 	sb.WriteString("{\n")
 	sb.WriteString("  rateLimit { remaining resetAt }\n")
-	writeMonitorAccessProbes(&sb, cfg.Repos)
+	writeMonitorAccessProbes(&sb, repositories)
 	for i, section := range cfg.PRSections {
 		writeMonitorSearchAlias(&sb, fmt.Sprintf("pr%d", i), monitorKindPR,
 			buildMonitorSearchQuery(monitorKindPR, section.Filters, repoQualifiers),
@@ -133,29 +177,16 @@ func buildMonitorGraphQLQuery(cfg *monitorConfig) (string, error) {
 			monitorSectionLimit(section, cfg.Defaults.Limit))
 	}
 	sb.WriteString("}")
-	return sb.String(), nil
+	return sb.String()
 }
 
 // writeMonitorAccessProbes emits one aliased repository lookup per configured
 // repo. Inaccessible repos come back null with a GraphQL error entry, which
 // the parser turns into an "invisible to this account" badge.
-func writeMonitorAccessProbes(sb *strings.Builder, repos []string) {
+func writeMonitorAccessProbes(sb *strings.Builder, repos []monitorRepository) {
 	for i, repo := range repos {
-		owner, name := splitMonitorRepo(repo)
-		if owner == "" || name == "" {
-			continue
-		}
-		fmt.Fprintf(sb, "  acc%d: repository(owner: %q, name: %q) { nameWithOwner }\n", i, owner, name)
+		fmt.Fprintf(sb, "  acc%d: repository(owner: %q, name: %q) { nameWithOwner }\n", i, repo.Owner, repo.Name)
 	}
-}
-
-// splitMonitorRepo splits OWNER/REPO or HOST/OWNER/REPO into its last two parts.
-func splitMonitorRepo(repo string) (owner, name string) {
-	parts := strings.Split(strings.Trim(repo, "/"), "/")
-	if len(parts) < 2 {
-		return "", ""
-	}
-	return parts[len(parts)-2], parts[len(parts)-1]
 }
 
 func writeMonitorSearchAlias(sb *strings.Builder, alias string, kind monitorRowKind, query string, limit int) {
@@ -178,15 +209,70 @@ var monitorGHExecFunc = execGHActive
 // Partial failures (an inaccessible repository probe) still yield usable
 // data; only responses without any data are treated as errors.
 func executeMonitorFetch(cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
-	query, err := buildMonitorGraphQLQuery(cfg)
+	queries, err := buildMonitorHostQueries(cfg)
 	if err != nil {
 		return nil, err
 	}
-	stdoutBuf, stderrBuf, err := monitorGHExecFunc("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
-	if err != nil && !hasUsableGraphQLData(stdoutBuf.Bytes()) {
-		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", err), stderrBuf.String())
+
+	combined := newMonitorFetchResult(cfg, now)
+	for i, request := range queries {
+		args := []string{"api"}
+		if request.Host != defaultGitHubHost {
+			args = append(args, "--hostname", request.Host)
+		}
+		args = append(args, "graphql", "-f", fmt.Sprintf("query=%s", request.Query))
+		stdoutBuf, stderrBuf, execErr := monitorGHExecFunc(args...)
+		if execErr != nil && !hasUsableGraphQLData(stdoutBuf.Bytes()) {
+			return nil, wrapExecError(fmt.Errorf("GraphQL search failed for %s: %w", request.Host, execErr), stderrBuf.String())
+		}
+		partial, parseErr := parseMonitorHostResponse(stdoutBuf.Bytes(), cfg, request.Repositories, now)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse GraphQL response from %s: %w", request.Host, parseErr)
+		}
+		mergeMonitorFetchResult(combined, partial, i == 0, len(queries) > 1, request.Host)
 	}
-	return parseMonitorResponse(stdoutBuf.Bytes(), cfg, now)
+	sortAllMonitorSections(combined)
+	return combined, nil
+}
+
+func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResult {
+	result := &monitorFetchResult{
+		FetchedAt:     now,
+		Accessible:    map[string]bool{},
+		PRSections:    make([]monitorSectionData, len(cfg.PRSections)),
+		IssueSections: make([]monitorSectionData, len(cfg.IssueSections)),
+	}
+	for i := range result.PRSections {
+		result.PRSections[i].Kind = monitorKindPR
+	}
+	for i := range result.IssueSections {
+		result.IssueSections[i].Kind = monitorKindIssue
+	}
+	return result
+}
+
+func mergeMonitorFetchResult(dst, src *monitorFetchResult, first, qualifyWarnings bool, host string) {
+	if first || src.RateRemaining < dst.RateRemaining {
+		dst.RateRemaining = src.RateRemaining
+		dst.RateResetAt = src.RateResetAt
+	}
+	for repo, accessible := range src.Accessible {
+		dst.Accessible[repo] = accessible
+	}
+	for i := range dst.PRSections {
+		dst.PRSections[i].Total += src.PRSections[i].Total
+		dst.PRSections[i].Rows = append(dst.PRSections[i].Rows, src.PRSections[i].Rows...)
+	}
+	for i := range dst.IssueSections {
+		dst.IssueSections[i].Total += src.IssueSections[i].Total
+		dst.IssueSections[i].Rows = append(dst.IssueSections[i].Rows, src.IssueSections[i].Rows...)
+	}
+	for _, warning := range src.Warnings {
+		if qualifyWarnings {
+			warning = host + ": " + warning
+		}
+		dst.Warnings = append(dst.Warnings, warning)
+	}
 }
 
 // hasUsableGraphQLData reports whether a response body carries a non-null
@@ -205,7 +291,7 @@ func hasUsableGraphQLData(data []byte) bool {
 // GraphQL partial errors (e.g. an inaccessible repository probe) become
 // warnings instead of failing the whole refresh; a response with no data at
 // all is still fatal.
-func parseMonitorResponse(data []byte, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
+func parseMonitorHostResponse(data []byte, cfg *monitorConfig, repositories []monitorRepository, now time.Time) (*monitorFetchResult, error) {
 	var envelope struct {
 		Data   json.RawMessage `json:"data"`
 		Errors []struct {
@@ -228,22 +314,36 @@ func parseMonitorResponse(data []byte, cfg *monitorConfig, now time.Time) (*moni
 		return nil, fmt.Errorf("decode GraphQL data: %w", err)
 	}
 
-	result := &monitorFetchResult{
-		FetchedAt:     now,
-		Accessible:    map[string]bool{},
-		Warnings:      monitorWarnings(envelope.Errors),
-		PRSections:    make([]monitorSectionData, len(cfg.PRSections)),
-		IssueSections: make([]monitorSectionData, len(cfg.IssueSections)),
-	}
-	result.Accessible = decodeAccessProbes(dataMap, cfg.Repos)
+	result := newMonitorFetchResult(cfg, now)
+	result.Warnings = monitorWarnings(envelope.Errors)
+	result.Accessible = decodeAccessProbes(dataMap, repositories)
 	if payload := decodeRateLimit(dataMap["rateLimit"]); payload != nil {
 		result.RateRemaining = payload.Remaining
 		result.RateResetAt = payload.ResetAt
 	}
 	decodePRSections(dataMap, result, now)
 	decodeIssueSections(dataMap, result, now)
+	if len(repositories) > 0 {
+		qualifyMonitorResultRows(result, repositories[0].Host)
+	}
 	sortAllMonitorSections(result)
 	return result, nil
+}
+
+func qualifyMonitorResultRows(result *monitorFetchResult, host string) {
+	if host == defaultGitHubHost {
+		return
+	}
+	for i := range result.PRSections {
+		for j := range result.PRSections[i].Rows {
+			result.PRSections[i].Rows[j].Repo = host + "/" + result.PRSections[i].Rows[j].Repo
+		}
+	}
+	for i := range result.IssueSections {
+		for j := range result.IssueSections[i].Rows {
+			result.IssueSections[i].Rows[j].Repo = host + "/" + result.IssueSections[i].Rows[j].Repo
+		}
+	}
 }
 
 // monitorWarnings condenses partial-error entries into short footer lines.
@@ -266,7 +366,7 @@ func monitorWarnings(errors []struct {
 }
 
 // decodeAccessProbes resolves which configured repos the active account sees.
-func decodeAccessProbes(dataMap map[string]json.RawMessage, repos []string) map[string]bool {
+func decodeAccessProbes(dataMap map[string]json.RawMessage, repos []monitorRepository) map[string]bool {
 	accessible := make(map[string]bool, len(repos))
 	for i, repo := range repos {
 		raw, ok := dataMap[fmt.Sprintf("acc%d", i)]
@@ -276,7 +376,7 @@ func decodeAccessProbes(dataMap map[string]json.RawMessage, repos []string) map[
 		var probe struct {
 			NameWithOwner string `json:"nameWithOwner"`
 		}
-		accessible[repo] = len(raw) > 0 && string(raw) != "null" && json.Unmarshal(raw, &probe) == nil && probe.NameWithOwner != ""
+		accessible[repo.configValue()] = len(raw) > 0 && string(raw) != "null" && json.Unmarshal(raw, &probe) == nil && probe.NameWithOwner != ""
 	}
 	return accessible
 }

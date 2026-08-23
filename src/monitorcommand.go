@@ -82,11 +82,19 @@ func printMonitorQuery(stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	query, err := buildMonitorGraphQLQuery(cfg)
+	queries, err := buildMonitorHostQueries(cfg)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, query)
+	for i, query := range queries {
+		if len(queries) > 1 {
+			fmt.Fprintf(stdout, "# %s\n", query.Host)
+		}
+		fmt.Fprintln(stdout, query.Query)
+		if i < len(queries)-1 {
+			fmt.Fprintln(stdout)
+		}
+	}
 	return nil
 }
 
@@ -119,12 +127,26 @@ func bootstrapMonitorModel() (monitorModel, error) {
 	return newMonitorModel(cfg, configPath, statePath, state), nil
 }
 
-// monitorSeedRepo returns owner/repo of the current directory when available;
-// failures are fine because the starter config documents where to add repos.
+var monitorResolveRepoFunc = resolveRepo
+
+var monitorRepoHostFunc = func() string {
+	if host := hostFromRemoteURL(cachedRemoteURL()); host != "" {
+		return host
+	}
+	return targetHost(nil)
+}
+
+// monitorSeedRepo returns [host/]owner/repo of the current directory when
+// available. github.com keeps the compact owner/repo form; Enterprise Server
+// repositories retain their host in the starter config.
 func monitorSeedRepo() string {
-	owner, name, err := resolveRepo("")
+	owner, name, err := monitorResolveRepoFunc("")
 	if err != nil {
 		return ""
 	}
-	return owner + "/" + name
+	host := normalizeRemoteHost(monitorRepoHostFunc())
+	if host == "" {
+		host = defaultGitHubHost
+	}
+	return (monitorRepository{Host: host, Owner: owner, Name: name}).configValue()
 }

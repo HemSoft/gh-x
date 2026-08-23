@@ -29,7 +29,7 @@ type monitorSettingsModel struct {
 
 func newMonitorSettingsModel() monitorSettingsModel {
 	repos := textarea.New()
-	repos.Placeholder = "owner/repo (one per line)"
+	repos.Placeholder = "[host/]owner/repo (one per line)"
 	repos.SetWidth(46)
 	repos.SetHeight(6)
 
@@ -129,7 +129,7 @@ func applySettings(settings *monitorSettingsModel, cfg *monitorConfig) error {
 		settings.errText = err.Error()
 		return err
 	}
-	cfg.Repos = repos
+	cfg.Repos = normalizeMonitorRepoValues(repos)
 
 	limit, err := strconv.Atoi(strings.TrimSpace(settings.limit.Value()))
 	if err != nil || limit < 1 || limit > maximumMonitorFetch {
