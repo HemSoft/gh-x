@@ -78,7 +78,7 @@ func printMonitorQuery(stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo(), monitorRepoHostFunc())
+	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo(), legacyMonitorHost())
 	if err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func bootstrapMonitorModel() (monitorModel, error) {
 	if err != nil {
 		return monitorModel{}, err
 	}
-	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo(), monitorRepoHostFunc())
+	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo(), legacyMonitorHost())
 	if err != nil {
 		return monitorModel{}, err
 	}
@@ -132,6 +132,16 @@ func bootstrapMonitorModel() (monitorModel, error) {
 var monitorResolveRepoFunc = resolveRepo
 
 var monitorRepoHostFunc = func() string { return targetHost(nil) }
+
+// legacyMonitorHost matches the endpoint used by the old bare `gh api`
+// monitor request. GH_HOST explicitly selected that endpoint even when the
+// checkout remote or GH_REPO identified another host.
+func legacyMonitorHost() string {
+	if host := normalizeRemoteHost(os.Getenv("GH_HOST")); host != "" {
+		return host
+	}
+	return monitorRepoHostFunc()
+}
 
 // monitorSeedRepo returns [host/]owner/repo of the current directory when
 // available. github.com keeps the compact owner/repo form; Enterprise Server

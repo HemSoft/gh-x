@@ -93,6 +93,28 @@ func TestMonitorSeedRepoHonorsGHRepoHostOverCheckoutRemote(t *testing.T) {
 	}
 }
 
+func TestLegacyMonitorHostHonorsGHHostOverCheckoutRemote(t *testing.T) {
+	savedHost := monitorRepoHostFunc
+	defer func() { monitorRepoHostFunc = savedHost }()
+	t.Setenv("GH_HOST", "GHE.Example.COM.")
+	monitorRepoHostFunc = func() string { return defaultGitHubHost }
+
+	if got := legacyMonitorHost(); got != "ghe.example.com" {
+		t.Fatalf("legacyMonitorHost() = %q, want GH_HOST", got)
+	}
+}
+
+func TestLegacyMonitorHostFallsBackToRepositoryContext(t *testing.T) {
+	savedHost := monitorRepoHostFunc
+	defer func() { monitorRepoHostFunc = savedHost }()
+	t.Setenv("GH_HOST", "")
+	monitorRepoHostFunc = func() string { return "ghe.example.com" }
+
+	if got := legacyMonitorHost(); got != "ghe.example.com" {
+		t.Fatalf("legacyMonitorHost() = %q, want repository context", got)
+	}
+}
+
 func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T) {
 	isolateMonitorHome(t)
 	configPath, err := monitorConfigPath()
