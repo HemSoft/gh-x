@@ -236,11 +236,7 @@ func executeMonitorFetch(cfg *monitorConfig, now time.Time) (*monitorFetchResult
 }
 
 func fetchMonitorHost(request monitorHostQuery, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
-	args := []string{"api"}
-	if request.Host != defaultGitHubHost {
-		args = append(args, "--hostname", request.Host)
-	}
-	args = append(args, "graphql", "-f", fmt.Sprintf("query=%s", request.Query))
+	args := []string{"api", "--hostname", request.Host, "graphql", "-f", fmt.Sprintf("query=%s", request.Query)}
 	stdoutBuf, stderrBuf, execErr := monitorGHExecFunc(args...)
 	if execErr != nil && !hasUsableGraphQLData(stdoutBuf.Bytes()) {
 		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", execErr), stderrBuf.String())

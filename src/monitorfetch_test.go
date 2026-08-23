@@ -58,7 +58,7 @@ func TestExecuteMonitorFetchRoutesAndMergesHostGroups(t *testing.T) {
 		host := defaultGitHubHost
 		nameWithOwner := "owner/public"
 		updatedAt := "2026-08-23T11:00:00Z"
-		if len(args) >= 3 && args[1] == "--hostname" {
+		if len(args) >= 3 && args[1] == "--hostname" && args[2] != defaultGitHubHost {
 			host = args[2]
 			nameWithOwner = "corp/private"
 			updatedAt = "2026-08-23T11:30:00Z"
@@ -86,8 +86,8 @@ func TestExecuteMonitorFetchRoutesAndMergesHostGroups(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("expected one call per host, got %d", len(calls))
 	}
-	if strings.Contains(strings.Join(calls[0], " "), "--hostname") {
-		t.Fatalf("github.com call should use the default endpoint: %v", calls[0])
+	if got := strings.Join(calls[0], " "); !strings.Contains(got, "api --hostname github.com graphql") {
+		t.Fatalf("github.com call missing deterministic hostname routing: %v", calls[0])
 	}
 	if got := strings.Join(calls[1], " "); !strings.Contains(got, "api --hostname ghe.example.com graphql") {
 		t.Fatalf("enterprise call missing hostname routing: %v", calls[1])
@@ -118,7 +118,7 @@ func TestExecuteMonitorFetchKeepsSuccessfulHostsWhenAnotherFails(t *testing.T) {
 	cfg.Repos = append(cfg.Repos, "ghe.example.com/corp/private")
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
-		if len(args) >= 3 && args[1] == "--hostname" {
+		if len(args) >= 3 && args[1] == "--hostname" && args[2] != defaultGitHubHost {
 			return bytes.Buffer{}, *bytes.NewBufferString("connection refused"), errBoom()
 		}
 		payload := `{"data":{"pr0":{"issueCount":1,"nodes":[{"number":3,"title":"t","state":"OPEN",` +
@@ -148,7 +148,7 @@ func TestExecuteMonitorFetchUsesRateLimitFromHostThatReturnsIt(t *testing.T) {
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	wantReset := "2026-08-23T13:00:00Z"
 	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
-		if len(args) >= 3 && args[1] == "--hostname" {
+		if len(args) >= 3 && args[1] == "--hostname" && args[2] != defaultGitHubHost {
 			payload := `{"data":{"rateLimit":{"remaining":42,"resetAt":"` + wantReset + `"}}}`
 			return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
 		}

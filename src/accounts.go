@@ -110,17 +110,15 @@ func execGHActive(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 }
 
 // targetHost resolves which GitHub host a command targets, following gh's own
-// precedence: an explicit HOST/OWNER/REPO value on --repo/-R, then the
-// GH_REPO environment variable, then the current repository's git remote,
-// then GH_HOST, then github.com.
+// precedence: an explicit --hostname, an explicit HOST/OWNER/REPO value on
+// --repo/-R, the GH_REPO environment variable, the current repository's git
+// remote, GH_HOST, then github.com.
 func targetHost(args []string) string {
-	for i := 0; i < len(args)-1; i++ {
-		if args[i] != "--repo" && args[i] != "-R" {
-			continue
-		}
-		if host := hostFromRepoValue(args[i+1]); host != "" {
-			return host
-		}
+	if host := hostFromHostnameArgs(args); host != "" {
+		return host
+	}
+	if host := hostFromRepoArgs(args); host != "" {
+		return host
 	}
 	if host := hostFromRepoValue(os.Getenv("GH_REPO")); host != "" {
 		return host
@@ -132,6 +130,28 @@ func targetHost(args []string) string {
 		return strings.ToLower(host)
 	}
 	return defaultGitHubHost
+}
+
+func hostFromHostnameArgs(args []string) string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--hostname" {
+			if host := normalizeRemoteHost(args[i+1]); host != "" {
+				return host
+			}
+		}
+	}
+	return ""
+}
+
+func hostFromRepoArgs(args []string) string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--repo" || args[i] == "-R" {
+			if host := hostFromRepoValue(args[i+1]); host != "" {
+				return host
+			}
+		}
+	}
+	return ""
 }
 
 // gitRemoteURLFunc reads the current repository's origin URL so commands run

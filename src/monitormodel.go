@@ -47,6 +47,7 @@ type monitorModel struct {
 	lastChanges []monitorChange
 	lastRefresh time.Time
 	refreshErr  string
+	refreshWarn string
 	refreshing  bool
 	interval    time.Duration
 	backoff     time.Duration
@@ -218,6 +219,9 @@ func (m monitorModel) footerLine() string {
 	}
 	if m.refreshErr != "" {
 		return monitorStyleError.Render(truncateMonitorCell("error: "+m.refreshErr, maxInt(width-4, 10)))
+	}
+	if m.refreshWarn != "" {
+		return monitorStyleChanged.Render(truncateMonitorCell("warning: "+m.refreshWarn, maxInt(width-4, 10)))
 	}
 	middle := summarizeMonitorChanges(m.lastChanges, 2)
 

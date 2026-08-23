@@ -366,6 +366,7 @@ func TestTargetHost(t *testing.T) {
 		{"plain owner/repo stays public", []string{"pr", "list", "--repo", "o/r"}, "", defaultGitHubHost},
 		{"host-prefixed -R wins", []string{"pr", "view", "42", "-R", "ghe.corp.io/o/r"}, "", "ghe.corp.io"},
 		{"host-prefixed --repo wins over GH_HOST", []string{"api", "repos/o/p", "--repo", "A.B.C/x/y"}, "other.host", "a.b.c"},
+		{"explicit hostname wins over GH_HOST", []string{"api", "--hostname", "GitHub.COM.", "graphql"}, "ghe.mycorp.net", defaultGitHubHost},
 		{"GH_HOST used without repo flag", []string{"issue", "list"}, "ghe.mycorp.net", "ghe.mycorp.net"},
 		{"dangling repo flag ignored", []string{"repo", "--repo"}, "", defaultGitHubHost},
 	}
