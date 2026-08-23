@@ -21,6 +21,7 @@ const (
 	minimumMonitorInterval = 10 * time.Second
 	maximumMonitorInterval = 6 * time.Hour
 	defaultMonitorInterval = 10 * time.Minute
+	monitorConfigVersion   = 1
 
 	monitorRepoAll = "All repos"
 )
@@ -39,6 +40,7 @@ type monitorDefaults struct {
 
 // monitorConfig is the on-disk configuration for gh x monitor.
 type monitorConfig struct {
+	Version       int              `yaml:"version,omitempty"`
 	Repos         []string         `yaml:"repos"`
 	Defaults      monitorDefaults  `yaml:"defaults"`
 	PRSections    []monitorSection `yaml:"prSections"`
@@ -154,6 +156,7 @@ func defaultMonitorConfig(seedRepo string) *monitorConfig {
 		repos = append(repos, seedRepo)
 	}
 	return &monitorConfig{
+		Version:       monitorConfigVersion,
 		Repos:         repos,
 		Defaults:      monitorDefaults{Limit: defaultMonitorLimit, Interval: formatMonitorInterval(defaultMonitorInterval)},
 		PRSections:    prs,
@@ -168,6 +171,7 @@ func starterMonitorConfigYAML(cfg *monitorConfig) string {
 	sb.WriteString("# gh x monitor configuration.\n")
 	sb.WriteString("# Sections use GitHub search syntax; configured repos are added\n")
 	sb.WriteString("# automatically, so do not include repo: qualifiers in filters.\n\n")
+	fmt.Fprintf(&sb, "version: %d\n\n", monitorConfigVersion)
 	sb.WriteString("repos:\n")
 	for _, repo := range cfg.Repos {
 		fmt.Fprintf(&sb, "  - %s\n", repo)
@@ -218,7 +222,9 @@ func loadOrCreateMonitorConfig(path, seedRepo, legacyHost string) (*monitorConfi
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, false, fmt.Errorf("parse %s: %w", path, err)
 	}
-	cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, legacyHost)
+	if cfg.Version == 0 {
+		cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, legacyHost)
+	}
 	normalizeMonitorConfig(&cfg)
 	if err := validateMonitorConfig(&cfg); err != nil {
 		return nil, false, err
@@ -262,6 +268,9 @@ func writeStarterMonitorConfig(path string, cfg *monitorConfig) error {
 
 // saveMonitorConfig writes the config atomically-ish: temp file then rename.
 func saveMonitorConfig(path string, cfg *monitorConfig) error {
+	if cfg.Version == 0 {
+		cfg.Version = monitorConfigVersion
+	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("encode config: %w", err)
@@ -282,6 +291,9 @@ func saveMonitorConfig(path string, cfg *monitorConfig) error {
 
 // normalizeMonitorConfig fills unset defaults so callers never see zeros.
 func normalizeMonitorConfig(cfg *monitorConfig) {
+	if cfg.Version == 0 {
+		cfg.Version = monitorConfigVersion
+	}
 	cfg.Repos = normalizeMonitorRepoValues(cfg.Repos)
 	if len(cfg.PRSections) == 0 {
 		prs, _ := defaultMonitorSections()

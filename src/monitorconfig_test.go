@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefaultMonitorConfigSeedsRepoAndSections(t *testing.T) {
@@ -62,8 +64,13 @@ func TestLoadOrCreateMonitorConfigRejectsBadYAML(t *testing.T) {
 func TestLoadMonitorConfigQualifiesLegacyEnterpriseRepositories(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yml")
 	cfg := defaultMonitorConfig("")
+	cfg.Version = 0
 	cfg.Repos = []string{"Acme/Widgets", "Acme/Service"}
-	if err := saveMonitorConfig(path, cfg); err != nil {
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,6 +79,26 @@ func TestLoadMonitorConfigQualifiesLegacyEnterpriseRepositories(t *testing.T) {
 		t.Fatalf("load legacy enterprise config: %v", err)
 	}
 	want := []string{"ghe.example.com/Acme/Widgets", "ghe.example.com/Acme/Service"}
+	for i := range want {
+		if loaded.Repos[i] != want[i] {
+			t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], want[i])
+		}
+	}
+}
+
+func TestLoadMonitorConfigDoesNotRemigrateSavedPublicRepositories(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	cfg := defaultMonitorConfig("")
+	cfg.Repos = []string{"HemSoft/gh-x", "HemSoft/other"}
+	if err := saveMonitorConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+	if err != nil {
+		t.Fatalf("load saved public config: %v", err)
+	}
+	want := []string{"HemSoft/gh-x", "HemSoft/other"}
 	for i := range want {
 		if loaded.Repos[i] != want[i] {
 			t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], want[i])
