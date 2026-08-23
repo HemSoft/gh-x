@@ -95,7 +95,7 @@ type checkItem struct {
 
 type displayPullRequest struct {
 	Number    int    `json:"number"`
-	Issues    string `json:"issues"`
+	Issues    string `json:"issues,omitempty"`
 	Title     string `json:"title"`
 	Author    string `json:"author"`
 	State     string `json:"state"`

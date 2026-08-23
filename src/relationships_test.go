@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -46,6 +47,24 @@ func TestRelationshipDisplay(t *testing.T) {
 				t.Fatalf("relationshipDisplay numbers = %v, want %v", numbers, test.wantNumbers)
 			}
 		})
+	}
+}
+
+func TestDisplayPullRequestOmitsUnfetchedIssuesFromJSON(t *testing.T) {
+	unfetched, err := json.Marshal(displayPullRequest{Number: 1})
+	if err != nil {
+		t.Fatalf("marshal unfetched PR: %v", err)
+	}
+	if strings.Contains(string(unfetched), `"issues"`) {
+		t.Fatalf("unfetched PR JSON includes issues: %s", unfetched)
+	}
+
+	enriched, err := json.Marshal(displayPullRequest{Number: 1, Issues: "-"})
+	if err != nil {
+		t.Fatalf("marshal enriched PR: %v", err)
+	}
+	if !strings.Contains(string(enriched), `"issues":"-"`) {
+		t.Fatalf("enriched PR JSON omits issues: %s", enriched)
 	}
 }
 
