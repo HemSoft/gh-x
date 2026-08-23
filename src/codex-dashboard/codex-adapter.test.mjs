@@ -13,6 +13,7 @@ test("derives project names from Windows and POSIX paths", () => {
     const cases = [
         ["D:\\github\\HemSoft\\gh-x", "gh-x"],
         ["/home/runner/work/gh-x", "gh-x"],
+        ["/home/runner/work/foo\\bar", "foo\\bar"],
     ];
 
     for (const [cwd, expected] of cases) {

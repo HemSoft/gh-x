@@ -319,6 +319,7 @@ jobs:
 
       - name: "Enforce: mutation score ≥ 90%"
         run: |
+          set -o pipefail
           results=$(mktemp)
           gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src 2>&1 | tee "$results"
           if grep -Fq "No results to report" "$results"; then

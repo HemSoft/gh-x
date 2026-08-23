@@ -125,7 +125,8 @@ export function createCodexAdapter({
 }
 
 export function projectNameFromCwd(cwd) {
-    return path.win32.basename(cwd) || cwd;
+    const parser = path.posix.isAbsolute(cwd) ? path.posix : path.win32;
+    return parser.basename(cwd) || cwd;
 }
 
 async function readThreads({
