@@ -222,12 +222,18 @@ func loadOrCreateMonitorConfig(path, seedRepo, legacyHost string) (*monitorConfi
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, false, fmt.Errorf("parse %s: %w", path, err)
 	}
-	if cfg.Version == 0 {
+	legacyConfig := cfg.Version == 0
+	if legacyConfig {
 		cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, legacyHost)
 	}
 	normalizeMonitorConfig(&cfg)
 	if err := validateMonitorConfig(&cfg); err != nil {
 		return nil, false, err
+	}
+	if legacyConfig {
+		if err := saveMonitorConfig(path, &cfg); err != nil {
+			return nil, false, fmt.Errorf("persist migrated config: %w", err)
+		}
 	}
 	return &cfg, false, nil
 }

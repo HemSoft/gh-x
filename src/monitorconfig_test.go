@@ -84,6 +84,19 @@ func TestLoadMonitorConfigQualifiesLegacyEnterpriseRepositories(t *testing.T) {
 			t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], want[i])
 		}
 	}
+
+	reloaded, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
+	if err != nil {
+		t.Fatalf("reload migrated config under github.com: %v", err)
+	}
+	if reloaded.Version != monitorConfigVersion {
+		t.Fatalf("persisted version = %d, want %d", reloaded.Version, monitorConfigVersion)
+	}
+	for i := range want {
+		if reloaded.Repos[i] != want[i] {
+			t.Fatalf("reloaded Repos[%d] = %q, want %q", i, reloaded.Repos[i], want[i])
+		}
+	}
 }
 
 func TestLoadMonitorConfigDoesNotRemigrateSavedPublicRepositories(t *testing.T) {
