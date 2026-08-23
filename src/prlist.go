@@ -453,7 +453,7 @@ func applyAIReviewCheck(dp *displayPullRequest, info prSupplementalInfo, checks 
 		dp.AIReview = "fail"
 		dp.AIClean = nil
 	case "pass":
-		if dp.AIReview == "-" && info.Threads.Resolved == info.Threads.Total {
+		if dp.AIReview == "-" && !info.HasUnresolvedAIThreads {
 			dp.AIReview = "pass"
 			dp.AIClean = boolPtr(true)
 		}
@@ -861,10 +861,11 @@ type reviewThreadInfo struct {
 }
 
 type prSupplementalInfo struct {
-	Threads   reviewThreadInfo
-	AIReview  string
-	AIClean   bool
-	Approvals int
+	Threads                reviewThreadInfo
+	AIReview               string
+	AIClean                bool
+	HasUnresolvedAIThreads bool
+	Approvals              int
 }
 
 // aiReviewNode holds the fields needed to detect bot reviewer status.
@@ -1462,9 +1463,10 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			Total:    prData.ReviewThreads.TotalCount,
 			Resolved: countResolvedThreads(aiThreads),
 		},
-		AIReview:  aiReview,
-		AIClean:   aiClean,
-		Approvals: countUniqueApprovers(approverLogins),
+		AIReview:               aiReview,
+		AIClean:                aiClean,
+		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
+		Approvals:              countUniqueApprovers(approverLogins),
 	}, true
 }
 

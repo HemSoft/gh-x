@@ -1516,8 +1516,12 @@ func TestApplyAIReviewCheckFailsClosed(t *testing.T) {
 			info: prSupplementalInfo{Threads: reviewThreadInfo{Total: 2, Resolved: 2}}, checks: success, wantReview: "pass", wantClean: true,
 		},
 		{
-			name: "unresolved thread", display: displayPullRequest{AIReview: "-"},
-			info: prSupplementalInfo{Threads: reviewThreadInfo{Total: 2, Resolved: 1}}, checks: success, wantReview: "-",
+			name: "unresolved human thread", display: displayPullRequest{AIReview: "-"},
+			info: prSupplementalInfo{Threads: reviewThreadInfo{Total: 2, Resolved: 1}}, checks: success, wantReview: "pass", wantClean: true,
+		},
+		{
+			name: "unresolved AI thread", display: displayPullRequest{AIReview: "-"},
+			info: prSupplementalInfo{Threads: reviewThreadInfo{Total: 2, Resolved: 1}, HasUnresolvedAIThreads: true}, checks: success, wantReview: "-",
 		},
 		{
 			name: "current review failure", display: displayPullRequest{AIReview: "fail"},
