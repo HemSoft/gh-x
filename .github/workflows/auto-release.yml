@@ -88,7 +88,6 @@ jobs:
           esac
 
           echo "tag=$next" >> "$GITHUB_OUTPUT"
-          echo "bump=$bump" >> "$GITHUB_OUTPUT"
           echo "Auto-releasing as $next ($bump bump, previous: $latest)"
 
       - name: Build cross-platform binaries
