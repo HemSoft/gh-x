@@ -17,6 +17,10 @@ and this project uses semantic versioning.
 
 - Removed the `pr list` watch flags (`--watch`, `--monitor`, `--interval`);
   use `gh x monitor` instead.
+- Moved all Go sources and tests under `src/`; build commands now target
+  `./src`.
+- Condensed pull request tables with one-space column gaps, compact review
+  decision symbols, and `Rev` and `Upd` headers.
 
 ### Fixed
 
@@ -37,24 +41,6 @@ and this project uses semantic versioning.
   worktree cleanup candidates, and separate open issue and pull request tables.
 - Added an `SFL` column that shows the latest formal SFL Reviewer decision
   independently from aggregate AI finding status.
-
-### Changed
-
-- Moved all Go sources and tests under `src/`; build commands now target
-  `./src`.
-- Condensed pull request tables with one-space column gaps, compact review
-  decision symbols, and `Rev` and `Upd` headers.
-
-### Removed
-
-- Removed the SFL review automation from the repository (`sfl-pr-review`
-  workflows, `sfl.json`, the `sfl-review` label, and gh-aw support files) and
-  dropped the `SFL` column from `gh x pr list`, `gh x pr atm`, `gh x pr me`,
-  and watch mode. AI PR reviews for this repository now come from cubic and
-  Codex reviews only.
-
-### Fixed
-
 - Recognized current-head Codex Cloud review summaries posted as pull-request
   conversation comments, so clean reviews show `AI pass` and `0/0!` instead of
   appearing as if no AI review ran.
@@ -67,6 +53,14 @@ and this project uses semantic versioning.
 - Recognized `sfl-app[bot]` as an SFL reviewer.
 - Reported `?` for AI and SFL status when GitHub returns incomplete review
   and thread data, instead of a possibly incorrect status.
+
+### Removed
+
+- Removed the SFL review automation from the repository (`sfl-pr-review`
+  workflows, `sfl.json`, the `sfl-review` label, and gh-aw support files) and
+  dropped the `SFL` column from `gh x pr list`, `gh x pr atm`, `gh x pr me`,
+  and watch mode. AI PR reviews for this repository now come from cubic and
+  Codex reviews only.
 
 ### Improved
 
