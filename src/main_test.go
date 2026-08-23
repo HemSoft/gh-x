@@ -1391,6 +1391,142 @@ func TestEnrichPullRequests(t *testing.T) {
 	}
 }
 
+func TestEnrichPullRequestsUsesSuccessfulCubicCheckAsCurrentHeadAIReview(t *testing.T) {
+	now := time.Date(2026, 8, 23, 19, 42, 17, 0, time.UTC)
+	prs := []pullRequest{{
+		Number:    25,
+		Title:     "Route enterprise monitors by host",
+		State:     "OPEN",
+		UpdatedAt: now,
+		StatusCheckRollup: []checkItem{{
+			Typename:    "CheckRun",
+			Name:        "cubic · AI code reviewer",
+			Status:      "COMPLETED",
+			Conclusion:  "SUCCESS",
+			CompletedAt: now,
+		}},
+	}}
+	supp := map[int]prSupplementalInfo{
+		25: {Threads: reviewThreadInfo{Total: 11, Resolved: 11}, AIReview: "-"},
+	}
+
+	rendered := enrichPullRequests(prs, supp, false, nil, now)
+	if rendered[0].AIReview != "pass" {
+		t.Fatalf("AIReview = %q, want pass from current-head Cubic check", rendered[0].AIReview)
+	}
+	if rendered[0].AIClean == nil || !*rendered[0].AIClean {
+		t.Fatal("expected successful current-head Cubic check to set AIClean")
+	}
+}
+
+func TestDetectAIReviewCheck(t *testing.T) {
+	now := time.Date(2026, 8, 23, 19, 42, 17, 0, time.UTC)
+	tests := []struct {
+		name   string
+		checks []checkItem
+		want   string
+	}{
+		{name: "none", want: "-"},
+		{
+			name: "successful Cubic review",
+			checks: []checkItem{{
+				Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "SUCCESS",
+			}},
+			want: "pass",
+		},
+		{
+			name: "failed Cubic review",
+			checks: []checkItem{{
+				Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "FAILURE",
+			}},
+			want: "fail",
+		},
+		{
+			name: "pending Cubic review",
+			checks: []checkItem{{
+				Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "IN_PROGRESS",
+			}},
+			want: "-",
+		},
+		{
+			name: "unrelated successful check",
+			checks: []checkItem{{
+				Typename: "CheckRun", Name: "Build & Test", Status: "COMPLETED", Conclusion: "SUCCESS",
+			}},
+			want: "-",
+		},
+		{
+			name: "latest rerun wins",
+			checks: []checkItem{
+				{Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "FAILURE", CompletedAt: now.Add(-time.Minute)},
+				{Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "SUCCESS", CompletedAt: now},
+			},
+			want: "pass",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := detectAIReviewCheck(tc.checks); got != tc.want {
+				t.Fatalf("detectAIReviewCheck() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestApplyAIReviewCheckFailsClosed(t *testing.T) {
+	success := []checkItem{{
+		Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "SUCCESS",
+	}}
+	failure := []checkItem{{
+		Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "FAILURE",
+	}}
+	tests := []struct {
+		name               string
+		display            displayPullRequest
+		info               prSupplementalInfo
+		checks             []checkItem
+		supplementalFailed bool
+		wantReview         string
+		wantClean          bool
+	}{
+		{
+			name: "all threads resolved", display: displayPullRequest{AIReview: "-"},
+			info: prSupplementalInfo{Threads: reviewThreadInfo{Total: 2, Resolved: 2}}, checks: success, wantReview: "pass", wantClean: true,
+		},
+		{
+			name: "unresolved thread", display: displayPullRequest{AIReview: "-"},
+			info: prSupplementalInfo{Threads: reviewThreadInfo{Total: 2, Resolved: 1}}, checks: success, wantReview: "-",
+		},
+		{
+			name: "current review failure", display: displayPullRequest{AIReview: "fail"},
+			info: prSupplementalInfo{Threads: reviewThreadInfo{}}, checks: success, wantReview: "fail",
+		},
+		{
+			name: "failed check clears prior clean state", display: displayPullRequest{AIReview: "pass", AIClean: boolPtr(true)},
+			info: prSupplementalInfo{Threads: reviewThreadInfo{}}, checks: failure, wantReview: "fail",
+		},
+		{
+			name: "incomplete supplemental data", display: displayPullRequest{AIReview: "?"},
+			info: prSupplementalInfo{Threads: reviewThreadInfo{}}, checks: success, supplementalFailed: true, wantReview: "?",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dp := tc.display
+			applyAIReviewCheck(&dp, tc.info, tc.checks, tc.supplementalFailed)
+			if dp.AIReview != tc.wantReview {
+				t.Fatalf("AIReview = %q, want %q", dp.AIReview, tc.wantReview)
+			}
+			gotClean := dp.AIClean != nil && *dp.AIClean
+			if gotClean != tc.wantClean {
+				t.Fatalf("AIClean = %v, want %v", gotClean, tc.wantClean)
+			}
+		})
+	}
+}
+
 func TestParsePRSupplementalNode(t *testing.T) {
 	t.Run("valid JSON", func(t *testing.T) {
 		raw := []byte(`{

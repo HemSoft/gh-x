@@ -413,6 +413,7 @@ func enrichPullRequests(prs []pullRequest, supplemental map[int]prSupplementalIn
 	for _, pr := range prs {
 		dp := buildDisplayPullRequest(pr, now)
 		applySupplementalInfo(&dp, supplemental, pr.Number, supplementalFailed)
+		applyAIReviewCheck(&dp, supplemental[pr.Number], pr.StatusCheckRollup, supplementalFailed)
 		downgradeChecksIfMissing(&dp, requiredByBranch, pr.BaseRefName, pr.StatusCheckRollup)
 		rendered = append(rendered, dp)
 	}
@@ -435,6 +436,43 @@ func applySupplementalInfo(dp *displayPullRequest, supplemental map[int]prSupple
 	if dp.AIReview == "" {
 		dp.AIReview = "-"
 	}
+}
+
+var knownAIReviewChecks = map[string]bool{
+	"cubic · ai code reviewer": true,
+}
+
+func applyAIReviewCheck(dp *displayPullRequest, info prSupplementalInfo, checks []checkItem, supplementalFailed bool) {
+	if supplementalFailed {
+		return
+	}
+
+	switch detectAIReviewCheck(checks) {
+	case "fail":
+		dp.AIReview = "fail"
+		dp.AIClean = nil
+	case "pass":
+		if dp.AIReview == "-" && info.Threads.Resolved == info.Threads.Total {
+			dp.AIReview = "pass"
+			dp.AIClean = boolPtr(true)
+		}
+	}
+}
+
+func detectAIReviewCheck(checks []checkItem) string {
+	for _, check := range latestCheckItems(checks) {
+		if check.Typename != "CheckRun" || !knownAIReviewChecks[strings.ToLower(strings.TrimSpace(check.Name))] {
+			continue
+		}
+
+		switch strings.ToUpper(check.Conclusion) {
+		case "SUCCESS":
+			return "pass"
+		case "FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED":
+			return "fail"
+		}
+	}
+	return "-"
 }
 
 func downgradeChecksIfMissing(dp *displayPullRequest, requiredByBranch map[string]map[string]bool, base string, checkItems []checkItem) {
