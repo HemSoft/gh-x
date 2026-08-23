@@ -253,7 +253,7 @@ func hiddenReposSummary(repos []string, data *monitorFetchResult) string {
 	}
 	var hidden []string
 	for _, repo := range repos {
-		if !data.Accessible[repo] {
+		if accessible, known := data.Accessible[repo]; known && !accessible {
 			hidden = append(hidden, repo)
 		}
 	}

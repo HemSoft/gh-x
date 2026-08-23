@@ -121,7 +121,7 @@ func TestExecuteMonitorFetchKeepsSuccessfulHostsWhenAnotherFails(t *testing.T) {
 		if len(args) >= 3 && args[1] == "--hostname" && args[2] != defaultGitHubHost {
 			return bytes.Buffer{}, *bytes.NewBufferString("connection refused"), errBoom()
 		}
-		payload := `{"data":{"pr0":{"issueCount":1,"nodes":[{"number":3,"title":"t","state":"OPEN",` +
+		payload := `{"data":{"acc0":{"nameWithOwner":"owner/public"},"pr0":{"issueCount":1,"nodes":[{"number":3,"title":"t","state":"OPEN",` +
 			`"updatedAt":"2026-08-23T11:00:00Z","repository":{"nameWithOwner":"owner/public"}}]}}}`
 		return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
 	}
@@ -136,6 +136,9 @@ func TestExecuteMonitorFetchKeepsSuccessfulHostsWhenAnotherFails(t *testing.T) {
 	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "ghe.example.com") ||
 		!strings.Contains(result.Warnings[0], "connection refused") {
 		t.Fatalf("failed host warning missing context: %v", result.Warnings)
+	}
+	if hidden := hiddenReposSummary(cfg.Repos, result); hidden != "" {
+		t.Fatalf("failed host was reported as confirmed hidden: %q", hidden)
 	}
 }
 
