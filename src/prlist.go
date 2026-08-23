@@ -412,8 +412,9 @@ func enrichPullRequests(prs []pullRequest, supplemental map[int]prSupplementalIn
 	rendered := make([]displayPullRequest, 0, len(prs))
 	for _, pr := range prs {
 		dp := buildDisplayPullRequest(pr, now)
+		info, supplementalFound := supplemental[pr.Number]
 		applySupplementalInfo(&dp, supplemental, pr.Number, supplementalFailed)
-		applyAIReviewCheck(&dp, supplemental[pr.Number], pr.StatusCheckRollup, supplementalFailed)
+		applyAIReviewCheck(&dp, info, pr.StatusCheckRollup, supplementalFailed || !supplementalFound)
 		downgradeChecksIfMissing(&dp, requiredByBranch, pr.BaseRefName, pr.StatusCheckRollup)
 		rendered = append(rendered, dp)
 	}
@@ -442,8 +443,8 @@ var knownAIReviewChecks = map[string]bool{
 	"cubic · ai code reviewer": true,
 }
 
-func applyAIReviewCheck(dp *displayPullRequest, info prSupplementalInfo, checks []checkItem, supplementalFailed bool) {
-	if supplementalFailed {
+func applyAIReviewCheck(dp *displayPullRequest, info prSupplementalInfo, checks []checkItem, supplementalUnavailable bool) {
+	if supplementalUnavailable {
 		return
 	}
 

@@ -1419,6 +1419,27 @@ func TestEnrichPullRequestsUsesSuccessfulCubicCheckAsCurrentHeadAIReview(t *test
 	}
 }
 
+func TestEnrichPullRequestsDoesNotTrustCubicCheckWithoutSupplementalEntry(t *testing.T) {
+	now := time.Date(2026, 8, 23, 21, 32, 21, 0, time.UTC)
+	prs := []pullRequest{{
+		Number:    25,
+		Title:     "Route enterprise monitors by host",
+		State:     "OPEN",
+		UpdatedAt: now,
+		StatusCheckRollup: []checkItem{{
+			Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "SUCCESS",
+		}},
+	}}
+
+	rendered := enrichPullRequests(prs, map[int]prSupplementalInfo{}, false, nil, now)
+	if rendered[0].AIReview != "-" {
+		t.Fatalf("AIReview = %q, want - when supplemental PR data is missing", rendered[0].AIReview)
+	}
+	if rendered[0].AIClean != nil {
+		t.Fatalf("expected missing supplemental PR data to leave AIClean unset, got %v", *rendered[0].AIClean)
+	}
+}
+
 func TestDetectAIReviewCheck(t *testing.T) {
 	now := time.Date(2026, 8, 23, 19, 42, 17, 0, time.UTC)
 	tests := []struct {
