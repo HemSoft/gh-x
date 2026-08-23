@@ -254,11 +254,6 @@ func qualifyLegacyMonitorRepos(values []string, legacyHost string) []string {
 	if host == "" || host == defaultGitHubHost {
 		return values
 	}
-	for _, value := range values {
-		if len(strings.Split(strings.Trim(strings.TrimSpace(value), "/"), "/")) == 3 {
-			return values
-		}
-	}
 	qualified := append([]string(nil), values...)
 	for i, value := range qualified {
 		if len(strings.Split(strings.Trim(strings.TrimSpace(value), "/"), "/")) == 2 {

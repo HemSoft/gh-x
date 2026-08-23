@@ -105,6 +105,32 @@ func TestLoadMonitorConfigQualifiesLegacyEnterpriseRepositories(t *testing.T) {
 	}
 }
 
+func TestLoadMonitorConfigQualifiesUnprefixedRepositoriesInMixedLegacyList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	legacy := "repos: [Acme/Widgets, github.com/HemSoft/gh-x]\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+	if err != nil {
+		t.Fatalf("load mixed legacy config: %v", err)
+	}
+	want := []string{"ghe.example.com/Acme/Widgets", "HemSoft/gh-x"}
+	for i := range want {
+		if loaded.Repos[i] != want[i] {
+			t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], want[i])
+		}
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(persisted) != legacy {
+		t.Fatalf("legacy config was rewritten:\n%s\nwant unchanged:\n%s", persisted, legacy)
+	}
+}
+
 func TestLoadMonitorConfigDoesNotRemigrateSavedPublicRepositories(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yml")
 	cfg := defaultMonitorConfig("")
