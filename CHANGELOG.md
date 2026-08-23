@@ -9,6 +9,8 @@ and this project uses semantic versioning.
 
 ### Added
 
+- Added linked pull request numbers to issue tables and linked issue numbers to
+  pull request tables, including both sections of `gh x status`.
 - Added `gh x monitor`, a Bubble Tea dashboard across configured repositories
   with PR and issue sections, saved layout state, and per-section filters
   defined in `src/cfg.yml`. Replaces `gh x pr list --watch`.

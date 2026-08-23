@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -526,7 +527,7 @@ func TestRenderIssueTableHeaders(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	output := buf.String()
-	for _, h := range []string{"#", "Title", "Author", "State", "Labels", "Assignees", "Updated"} {
+	for _, h := range []string{"#", "PRs", "Title", "Author", "State", "Labels", "Assignees", "Updated"} {
 		if !strings.Contains(output, h) {
 			t.Errorf("expected header %q in output: %q", h, output)
 		}
@@ -536,6 +537,8 @@ func TestRenderIssueTableHeaders(t *testing.T) {
 func TestExecuteIssueListHappyPath(t *testing.T) {
 	origFetch := fetchIssuesFunc
 	defer func() { fetchIssuesFunc = origFetch }()
+	origRelationships := fetchIssueRelationshipsFunc
+	defer func() { fetchIssueRelationshipsFunc = origRelationships }()
 
 	now := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
 	fetchIssuesFunc = func(_ issueListOptions) ([]issueEntry, error) {
@@ -552,6 +555,9 @@ func TestExecuteIssueListHappyPath(t *testing.T) {
 			},
 		}, nil
 	}
+	fetchIssueRelationshipsFunc = func(_, _, _ string, numbers []int) (map[int][]linkedReference, error) {
+		return map[int][]linkedReference{numbers[0]: {{Number: 9, URL: "https://github.com/org/repo/pull/9"}}}, nil
+	}
 
 	var buf bytes.Buffer
 	err := executeIssueList(issueListOptions{limit: 30, state: "open"}, &buf, now)
@@ -564,6 +570,9 @@ func TestExecuteIssueListHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(output, "Fix the bug") {
 		t.Errorf("expected title in output")
+	}
+	if !strings.Contains(output, "#9") {
+		t.Fatalf("expected linked PR in output: %q", output)
 	}
 }
 
@@ -666,6 +675,8 @@ func TestIssueRouting(t *testing.T) {
 func TestExecuteIssueListAuthorResolution(t *testing.T) {
 	origFetch := fetchIssuesFunc
 	defer func() { fetchIssuesFunc = origFetch }()
+	origRelationships := fetchIssueRelationshipsFunc
+	defer func() { fetchIssueRelationshipsFunc = origRelationships }()
 	origResolve := resolveAuthorLoginFunc
 	defer func() { resolveAuthorLoginFunc = origResolve }()
 
@@ -684,6 +695,9 @@ func TestExecuteIssueListAuthorResolution(t *testing.T) {
 			{Number: 1, Title: "Test", State: "OPEN", UpdatedAt: now},
 		}, nil
 	}
+	fetchIssueRelationshipsFunc = func(_, _, _ string, numbers []int) (map[int][]linkedReference, error) {
+		return map[int][]linkedReference{numbers[0]: {}}, nil
+	}
 
 	var buf bytes.Buffer
 	err := executeIssueList(issueListOptions{
@@ -697,6 +711,64 @@ func TestExecuteIssueListAuthorResolution(t *testing.T) {
 	}
 	if resolvedAuthor != "John Doe" {
 		t.Fatalf("expected resolveAuthorLoginFunc called with 'John Doe', got %q", resolvedAuthor)
+	}
+}
+
+func TestFetchDisplayIssuesRelationships(t *testing.T) {
+	savedIssues := fetchIssuesFunc
+	savedRelationships := fetchIssueRelationshipsFunc
+	defer func() {
+		fetchIssuesFunc = savedIssues
+		fetchIssueRelationshipsFunc = savedRelationships
+	}()
+
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	fetchIssuesFunc = func(_ issueListOptions) ([]issueEntry, error) {
+		return []issueEntry{{Number: 7}, {Number: 9}}, nil
+	}
+	fetchIssueRelationshipsFunc = func(owner, name, host string, numbers []int) (map[int][]linkedReference, error) {
+		if owner != "owner" || name != "repo" || host != "ghe.example.com" {
+			t.Fatalf("relationship target = %s/%s on %s", owner, name, host)
+		}
+		if !reflect.DeepEqual(numbers, []int{7, 9}) {
+			t.Fatalf("relationship numbers = %v, want [7 9]", numbers)
+		}
+		return map[int][]linkedReference{
+			7: {{Number: 25}, {Number: 3}},
+			9: {},
+		}, nil
+	}
+
+	issues, err := fetchDisplayIssues(issueListOptions{repo: "ghe.example.com/owner/repo"}, now)
+	if err != nil {
+		t.Fatalf("fetchDisplayIssues returned error: %v", err)
+	}
+	if issues[0].PullRequests != "#3, #25" || issues[1].PullRequests != "-" {
+		t.Fatalf("relationship displays = %q and %q", issues[0].PullRequests, issues[1].PullRequests)
+	}
+}
+
+func TestFetchDisplayIssuesRelationshipFailure(t *testing.T) {
+	savedIssues := fetchIssuesFunc
+	savedRelationships := fetchIssueRelationshipsFunc
+	defer func() {
+		fetchIssuesFunc = savedIssues
+		fetchIssueRelationshipsFunc = savedRelationships
+	}()
+
+	fetchIssuesFunc = func(_ issueListOptions) ([]issueEntry, error) {
+		return []issueEntry{{Number: 7}}, nil
+	}
+	fetchIssueRelationshipsFunc = func(_, _, _ string, _ []int) (map[int][]linkedReference, error) {
+		return nil, fmt.Errorf("graphql unavailable")
+	}
+
+	issues, err := fetchDisplayIssues(issueListOptions{repo: "owner/repo"}, time.Time{})
+	if err != nil {
+		t.Fatalf("relationship failure should not fail issue list: %v", err)
+	}
+	if issues[0].PullRequests != "?" {
+		t.Fatalf("failed relationship display = %q, want ?", issues[0].PullRequests)
 	}
 }
 

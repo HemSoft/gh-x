@@ -46,14 +46,17 @@ type issueEntry struct {
 }
 
 type displayIssue struct {
-	Number    int
-	Title     string
-	Author    string
-	State     string
-	Labels    string
-	Assignees string
-	Updated   string
-	URL       string
+	Number       int
+	PullRequests string
+	Title        string
+	Author       string
+	State        string
+	Labels       string
+	Assignees    string
+	Updated      string
+	URL          string
+
+	pullRequestRefs []linkedReference
 }
 
 const issueJSONFields = "number,title,author,state,labels,assignees,updatedAt,url"
@@ -203,11 +206,37 @@ func fetchDisplayIssues(options issueListOptions, now time.Time) ([]displayIssue
 		return nil, err
 	}
 
+	relationships, relationshipsFailed := fetchIssueRelationshipData(options.repo, issues)
+
 	displayIssues := make([]displayIssue, len(issues))
 	for i, entry := range issues {
 		displayIssues[i] = buildDisplayIssue(entry, now)
+		refs, found := relationships[entry.Number]
+		displayIssues[i].PullRequests, displayIssues[i].pullRequestRefs = relationshipDisplay(
+			refs,
+			relationshipsFailed || !found,
+		)
 	}
 	return displayIssues, nil
+}
+
+func fetchIssueRelationshipData(repo string, issues []issueEntry) (map[int][]linkedReference, bool) {
+	if len(issues) == 0 {
+		return nil, false
+	}
+	owner, name, err := resolveRepo(repo)
+	if err != nil {
+		return nil, true
+	}
+	numbers := make([]int, len(issues))
+	for i, issue := range issues {
+		numbers[i] = issue.Number
+	}
+	relationships, err := fetchIssueRelationshipsFunc(owner, name, repositoryTargetHost(repo), numbers)
+	if err != nil {
+		return nil, true
+	}
+	return relationships, false
 }
 
 func buildDisplayIssue(entry issueEntry, now time.Time) displayIssue {
@@ -217,14 +246,15 @@ func buildDisplayIssue(entry issueEntry, now time.Time) displayIssue {
 	}
 
 	return displayIssue{
-		Number:    entry.Number,
-		Title:     trimTitle(entry.Title, 51),
-		Author:    authorName,
-		State:     normalizeIssueState(entry.State),
-		Labels:    joinLabels(entry.Labels),
-		Assignees: joinAssignees(entry.Assignees),
-		Updated:   formatRelativeTime(entry.UpdatedAt, now),
-		URL:       entry.URL,
+		Number:       entry.Number,
+		PullRequests: "-",
+		Title:        trimTitle(entry.Title, 51),
+		Author:       authorName,
+		State:        normalizeIssueState(entry.State),
+		Labels:       joinLabels(entry.Labels),
+		Assignees:    joinAssignees(entry.Assignees),
+		Updated:      formatRelativeTime(entry.UpdatedAt, now),
+		URL:          entry.URL,
 	}
 }
 
@@ -304,7 +334,7 @@ func renderIssueTable(stdout io.Writer, issues []displayIssue, options issueList
 func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool) error {
 	styler := newTableStyler(stdout, colorEnabled)
 
-	headerLabels := []string{"#", "Title", "Author", "State", "Labels", "Assignees", "Updated"}
+	headerLabels := []string{"#", "PRs", "Title", "Author", "State", "Labels", "Assignees", "Updated"}
 	headers := make([]tableCell, len(headerLabels))
 	for i, label := range headerLabels {
 		headers[i] = styler.dim(label)
@@ -314,6 +344,7 @@ func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool)
 	for i, issue := range issues {
 		rows[i] = []tableCell{
 			styler.numberCell(issue.Number, issue.URL),
+			styler.relationshipCell(issue.PullRequests, issue.pullRequestRefs),
 			styler.plain(issue.Title),
 			styler.plain(issue.Author),
 			styler.issueStateCell(issue.State),
@@ -325,8 +356,8 @@ func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool)
 
 	colWidths := computeColumnWidths(headers, rows)
 
-	// Fit to terminal: Title(1), Author(2), Labels(4), Assignees(5) are flexible
-	flexibleCols := []int{1, 2, 4, 5}
+	// Fit to terminal: PRs(1), Title(2), Author(3), Labels(5), Assignees(6) are flexible
+	flexibleCols := []int{1, 2, 3, 5, 6}
 	colWidths = fitColumnsToTerminal(colWidths, flexibleCols, getTerminalWidth())
 	rows = truncateCells(rows, colWidths, flexibleCols)
 

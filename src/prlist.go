@@ -95,6 +95,7 @@ type checkItem struct {
 
 type displayPullRequest struct {
 	Number    int    `json:"number"`
+	Issues    string `json:"issues"`
 	Title     string `json:"title"`
 	Author    string `json:"author"`
 	State     string `json:"state"`
@@ -109,7 +110,8 @@ type displayPullRequest struct {
 	URL       string `json:"url"`
 	Repo      string `json:"repo,omitempty"`
 
-	checksDowngraded bool      // unexported; required-check rules downgraded a pass
+	checksDowngraded bool // unexported; required-check rules downgraded a pass
+	issueRefs        []linkedReference
 	updatedAt        time.Time // unexported; used for sorting
 }
 
@@ -353,7 +355,7 @@ func fetchSupplementalData(repo string, prs []pullRequest) (map[int]prSupplement
 	for i, pr := range prs {
 		numbers[i] = pr.Number
 	}
-	fetched, err := fetchPRSupplemental(owner, name, numbers)
+	fetched, err := fetchPRSupplemental(owner, name, repositoryTargetHost(repo), numbers)
 	if err != nil {
 		return nil, true, owner, name
 	}
@@ -414,6 +416,7 @@ func enrichPullRequests(prs []pullRequest, supplemental map[int]prSupplementalIn
 		dp := buildDisplayPullRequest(pr, now)
 		info, supplementalFound := supplemental[pr.Number]
 		applySupplementalInfo(&dp, supplemental, pr.Number, supplementalFailed)
+		dp.Issues, dp.issueRefs = relationshipDisplay(info.ClosingIssues, supplementalFailed || !supplementalFound)
 		applyAIReviewCheck(&dp, info, pr.StatusCheckRollup, supplementalFailed || !supplementalFound)
 		downgradeChecksIfMissing(&dp, requiredByBranch, pr.BaseRefName, pr.StatusCheckRollup)
 		rendered = append(rendered, dp)
@@ -540,6 +543,7 @@ func buildDisplayPullRequest(pullRequest pullRequest, now time.Time) displayPull
 
 	return displayPullRequest{
 		Number:    pullRequest.Number,
+		Issues:    "-",
 		Title:     trimTitle(pullRequest.Title, 51),
 		Author:    authorName,
 		State:     normalizeState(pullRequest.State, pullRequest.IsDraft),
@@ -585,7 +589,7 @@ func renderTableWithStyle(stdout io.Writer, options listOptions, pullRequests []
 func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, colorEnabled bool) error {
 	styler := newTableStyler(stdout, colorEnabled)
 
-	headerLabels := []string{"#", "Title", "Author", "State", "Rev", "AI", "Appv", "Checks", "Cmts", "Branch", "Upd"}
+	headerLabels := []string{"#", "Issues", "Title", "Author", "State", "Rev", "AI", "Appv", "Checks", "Cmts", "Branch", "Upd"}
 	headers := make([]tableCell, len(headerLabels))
 	for i, label := range headerLabels {
 		headers[i] = styler.dim(label)
@@ -595,6 +599,7 @@ func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, 
 	for i, pr := range pullRequests {
 		rows[i] = []tableCell{
 			styler.numberCell(pr.Number, pr.URL),
+			styler.relationshipCell(pr.Issues, pr.issueRefs),
 			styler.plain(pr.Title),
 			styler.plain(pr.Author),
 			styler.stateCell(pr.State),
@@ -610,8 +615,8 @@ func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, 
 
 	colWidths := computeColumnWidths(headers, rows)
 
-	// Fit to terminal: Title(1), Author(2), Branch(9) are flexible
-	flexibleCols := []int{1, 2, 9}
+	// Fit to terminal: Issues(1), Title(2), Author(3), Branch(10) are flexible
+	flexibleCols := []int{1, 2, 3, 10}
 	colWidths = fitColumnsToTerminal(colWidths, flexibleCols, getTerminalWidth())
 	rows = truncateCells(rows, colWidths, flexibleCols)
 
@@ -862,6 +867,7 @@ type reviewThreadInfo struct {
 
 type prSupplementalInfo struct {
 	Threads                reviewThreadInfo
+	ClosingIssues          []linkedReference
 	AIReview               string
 	AIClean                bool
 	HasUnresolvedAIThreads bool
@@ -1273,21 +1279,20 @@ func resolveAuthorFromOrg(name, org string) string {
 	return ""
 }
 
-func fetchPRSupplemental(owner, name string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+func fetchPRSupplemental(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
 	if len(prNumbers) == 0 {
 		return nil, nil
 	}
 
 	// Batch PRs to avoid exceeding Windows command-line length limits (~32K chars).
 	// Each PR's query fragment is ~350 chars; batches of 30 stay well under the limit.
-	const batchSize = 30
 	result := make(map[int]prSupplementalInfo)
-	for i := 0; i < len(prNumbers); i += batchSize {
-		end := i + batchSize
+	for i := 0; i < len(prNumbers); i += relationshipBatchSize {
+		end := i + relationshipBatchSize
 		if end > len(prNumbers) {
 			end = len(prNumbers)
 		}
-		batch, err := fetchPRSupplementalBatchFunc(owner, name, prNumbers[i:end])
+		batch, err := fetchPRSupplementalBatchFunc(owner, name, host, prNumbers[i:end])
 		if err != nil {
 			return nil, err
 		}
@@ -1298,11 +1303,11 @@ func fetchPRSupplemental(owner, name string, prNumbers []int) (map[int]prSupplem
 	return result, nil
 }
 
-func fetchPRSupplementalBatch(owner, name string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`pr%d: pullRequest(number: %d) { number headRefOid comments(last: 100) { totalCount nodes { body createdAt author { login __typename } } } reviewThreads(last: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(last: 100) { totalCount nodes { state submittedAt commit { oid } author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
+			`pr%d: pullRequest(number: %d) { number headRefOid closingIssuesReferences(first: 100) { nodes { number url } } comments(last: 100) { totalCount nodes { body createdAt author { login __typename } } } reviewThreads(last: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(last: 100) { totalCount nodes { state submittedAt commit { oid } author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
 			num, num,
 		))
 	}
@@ -1312,11 +1317,11 @@ func fetchPRSupplementalBatch(owner, name string, prNumbers []int) (map[int]prSu
 		owner, name, strings.Join(queryParts, " "),
 	)
 
-	stdout, _, err := ghExecFunc("api", "graphql", "-f", fmt.Sprintf("query=%s", query))
+	data, err := fetchGraphQL(host, query)
 	if err != nil {
 		return nil, err
 	}
-	return parseSupplementalResponse(stdout.Bytes())
+	return parseSupplementalResponse(data)
 }
 
 func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, error) {
@@ -1343,9 +1348,12 @@ func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, error) 
 // Returns the PR number, supplemental info, and whether parsing succeeded.
 func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool) {
 	var prData struct {
-		Number     int    `json:"number"`
-		HeadRefOID string `json:"headRefOid"`
-		Comments   struct {
+		Number                  int    `json:"number"`
+		HeadRefOID              string `json:"headRefOid"`
+		ClosingIssuesReferences struct {
+			Nodes []linkedReference `json:"nodes"`
+		} `json:"closingIssuesReferences"`
+		Comments struct {
 			TotalCount int `json:"totalCount"`
 			Nodes      []struct {
 				Body      string    `json:"body"`
@@ -1463,6 +1471,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			Total:    prData.ReviewThreads.TotalCount,
 			Resolved: countResolvedThreads(aiThreads),
 		},
+		ClosingIssues:          prData.ClosingIssuesReferences.Nodes,
 		AIReview:               aiReview,
 		AIClean:                aiClean,
 		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
