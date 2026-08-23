@@ -416,7 +416,10 @@ func enrichPullRequests(prs []pullRequest, supplemental map[int]prSupplementalIn
 		dp := buildDisplayPullRequest(pr, now)
 		info, supplementalFound := supplemental[pr.Number]
 		applySupplementalInfo(&dp, supplemental, pr.Number, supplementalFailed)
-		dp.Issues, dp.issueRefs = relationshipDisplay(info.ClosingIssues, supplementalFailed || !supplementalFound)
+		dp.Issues, dp.issueRefs = relationshipDisplay(
+			info.ClosingIssues,
+			supplementalFailed || !supplementalFound || !info.ClosingIssuesAvailable,
+		)
 		applyAIReviewCheck(&dp, info, pr.StatusCheckRollup, supplementalFailed || !supplementalFound)
 		downgradeChecksIfMissing(&dp, requiredByBranch, pr.BaseRefName, pr.StatusCheckRollup)
 		rendered = append(rendered, dp)
@@ -868,6 +871,7 @@ type reviewThreadInfo struct {
 type prSupplementalInfo struct {
 	Threads                reviewThreadInfo
 	ClosingIssues          []linkedReference
+	ClosingIssuesAvailable bool
 	AIReview               string
 	AIClean                bool
 	HasUnresolvedAIThreads bool
@@ -1350,7 +1354,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 	var prData struct {
 		Number                  int    `json:"number"`
 		HeadRefOID              string `json:"headRefOid"`
-		ClosingIssuesReferences struct {
+		ClosingIssuesReferences *struct {
 			Nodes []linkedReference `json:"nodes"`
 		} `json:"closingIssuesReferences"`
 		Comments struct {
@@ -1471,12 +1475,22 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			Total:    prData.ReviewThreads.TotalCount,
 			Resolved: countResolvedThreads(aiThreads),
 		},
-		ClosingIssues:          prData.ClosingIssuesReferences.Nodes,
+		ClosingIssues:          closingIssueNodes(prData.ClosingIssuesReferences),
+		ClosingIssuesAvailable: prData.ClosingIssuesReferences != nil,
 		AIReview:               aiReview,
 		AIClean:                aiClean,
 		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
 		Approvals:              countUniqueApprovers(approverLogins),
 	}, true
+}
+
+func closingIssueNodes(connection *struct {
+	Nodes []linkedReference `json:"nodes"`
+}) []linkedReference {
+	if connection == nil {
+		return nil
+	}
+	return connection.Nodes
 }
 
 func anyConnectionTruncated(truncated ...bool) bool {

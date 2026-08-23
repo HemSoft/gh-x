@@ -154,11 +154,11 @@ func parseIssueRelationships(data []byte) (map[int][]linkedReference, error) {
 	for _, raw := range response.Data.Repository {
 		var issue struct {
 			Number                         int `json:"number"`
-			ClosedByPullRequestsReferences struct {
+			ClosedByPullRequestsReferences *struct {
 				Nodes []linkedReference `json:"nodes"`
 			} `json:"closedByPullRequestsReferences"`
 		}
-		if err := json.Unmarshal(raw, &issue); err != nil || issue.Number <= 0 {
+		if err := json.Unmarshal(raw, &issue); err != nil || issue.Number <= 0 || issue.ClosedByPullRequestsReferences == nil {
 			continue
 		}
 		result[issue.Number] = issue.ClosedByPullRequestsReferences.Nodes

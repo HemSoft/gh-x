@@ -205,6 +205,9 @@ func TestFetchPRSupplementalBatchIncludesClosingIssuesAndHost(t *testing.T) {
 	if len(refs) != 1 || refs[0].Number != 18 {
 		t.Fatalf("PR #25 closing issues = %#v, want issue #18", refs)
 	}
+	if !result[25].ClosingIssuesAvailable {
+		t.Fatal("PR #25 closing issue relationship should be available")
+	}
 }
 
 func TestParseIssueRelationships(t *testing.T) {
@@ -216,7 +219,7 @@ func TestParseIssueRelationships(t *testing.T) {
 	}{
 		{
 			name:    "valid and null nodes",
-			input:   `{"data":{"repository":{"issue1":{"number":1,"closedByPullRequestsReferences":{"nodes":[]}},"issue2":null}}}`,
+			input:   `{"data":{"repository":{"issue1":{"number":1,"closedByPullRequestsReferences":{"nodes":[]}},"issue2":null,"issue3":{"number":3,"closedByPullRequestsReferences":null}}}}`,
 			wantLen: 1,
 		},
 		{name: "empty repository", input: `{"data":{"repository":{}}}`, wantLen: 0},
@@ -246,8 +249,8 @@ func TestEnrichPullRequestsAddsIssueRelationships(t *testing.T) {
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	prs := []pullRequest{{Number: 1}, {Number: 2}, {Number: 3}}
 	supplemental := map[int]prSupplementalInfo{
-		1: {ClosingIssues: []linkedReference{{Number: 21}, {Number: 3}}},
-		2: {},
+		1: {ClosingIssues: []linkedReference{{Number: 21}, {Number: 3}}, ClosingIssuesAvailable: true},
+		2: {ClosingIssuesAvailable: true},
 	}
 
 	rendered := enrichPullRequests(prs, supplemental, false, nil, now)
@@ -261,6 +264,16 @@ func TestEnrichPullRequestsAddsIssueRelationships(t *testing.T) {
 	failed := enrichPullRequests(prs[:1], supplemental, true, nil, now)
 	if failed[0].Issues != "?" {
 		t.Fatalf("failed enrichment Issues = %q, want ?", failed[0].Issues)
+	}
+}
+
+func TestEnrichPullRequestsTreatsNullRelationshipConnectionAsUnavailable(t *testing.T) {
+	prs := []pullRequest{{Number: 1}}
+	supplemental := map[int]prSupplementalInfo{1: {ClosingIssuesAvailable: false}}
+
+	rendered := enrichPullRequests(prs, supplemental, false, nil, time.Time{})
+	if rendered[0].Issues != "?" {
+		t.Fatalf("null relationship connection Issues = %q, want ?", rendered[0].Issues)
 	}
 }
 
