@@ -125,7 +125,8 @@ export function createCodexAdapter({
 }
 
 export function projectNameFromCwd(cwd) {
-    const parser = path.posix.isAbsolute(cwd) ? path.posix : path.win32;
+    const isWindowsPath = /^[A-Za-z]:[\\/]/.test(cwd) || cwd.startsWith("\\\\");
+    const parser = isWindowsPath ? path.win32 : path.posix;
     return parser.basename(cwd) || cwd;
 }
 
