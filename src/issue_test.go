@@ -560,7 +560,7 @@ func TestExecuteIssueListHappyPath(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := executeIssueList(issueListOptions{limit: 30, state: "open"}, &buf, now)
+	err := executeIssueList(issueListOptions{repo: "owner/repo", limit: 30, state: "open"}, &buf, now)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
