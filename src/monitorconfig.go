@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +22,7 @@ const (
 	maximumMonitorInterval = 6 * time.Hour
 	defaultMonitorInterval = 10 * time.Minute
 	monitorConfigVersion   = 1
+	monitorMigrationSuffix = ".migration.yml"
 
 	monitorRepoAll = "All repos"
 )
@@ -226,20 +225,15 @@ func loadOrCreateMonitorConfig(path, seedRepo, legacyHost string) (*monitorConfi
 	}
 	legacyConfig := cfg.Version == 0
 	if legacyConfig {
-		cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, legacyHost)
+		persistedHost, err := loadOrCreateMonitorMigration(path, legacyHost)
+		if err != nil {
+			return nil, false, err
+		}
+		cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, persistedHost)
 	}
 	normalizeMonitorConfig(&cfg)
 	if err := validateMonitorConfig(&cfg); err != nil {
 		return nil, false, err
-	}
-	if legacyConfig {
-		migrated, err := migrateLegacyMonitorConfigYAML(data, cfg.Repos)
-		if err != nil {
-			return nil, false, fmt.Errorf("migrate legacy config: %w", err)
-		}
-		if err := writeMonitorConfigData(path, migrated); err != nil {
-			return nil, false, fmt.Errorf("persist migrated config: %w", err)
-		}
 	}
 	return &cfg, false, nil
 }
@@ -305,197 +299,48 @@ func writeMonitorConfigData(path string, data []byte) error {
 	return nil
 }
 
-type monitorYAMLEdit struct {
-	start       int
-	end         int
-	replacement string
+type monitorConfigMigration struct {
+	Version int    `yaml:"version"`
+	Host    string `yaml:"host"`
 }
 
-func migrateLegacyMonitorConfigYAML(data []byte, repos []string) ([]byte, error) {
-	root, err := parseMonitorYAMLRoot(data)
+func loadOrCreateMonitorMigration(configPath, legacyHost string) (string, error) {
+	migrationPath := configPath + monitorMigrationSuffix
+	data, err := os.ReadFile(migrationPath)
+	if err == nil {
+		return parseMonitorMigration(data)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("read monitor migration: %w", err)
+	}
+
+	host := normalizeRemoteHost(legacyHost)
+	if host == "" {
+		host = defaultGitHubHost
+	}
+	data, err = yaml.Marshal(monitorConfigMigration{Version: monitorConfigVersion, Host: host})
 	if err != nil {
-		return nil, err
+		return "", fmt.Errorf("encode monitor migration: %w", err)
 	}
-	lineStarts := yamlLineStarts(data)
-	repoEdits, err := monitorRepoYAMLEdits(data, lineStarts, findYAMLMappingValue(root, "repos"), repos)
-	if err != nil {
-		return nil, err
+	if err := writeMonitorConfigData(migrationPath, data); err != nil {
+		return "", fmt.Errorf("persist monitor migration: %w", err)
 	}
-	versionEdit, err := monitorVersionYAMLEdit(data, lineStarts, root)
-	if err != nil {
-		return nil, err
-	}
-	return applyMonitorYAMLEdits(data, append(repoEdits, versionEdit)), nil
+	return host, nil
 }
 
-func parseMonitorYAMLRoot(data []byte) (*yaml.Node, error) {
-	var document yaml.Node
-	if err := yaml.Unmarshal(data, &document); err != nil {
-		return nil, err
+func parseMonitorMigration(data []byte) (string, error) {
+	var migration monitorConfigMigration
+	if err := yaml.Unmarshal(data, &migration); err != nil {
+		return "", fmt.Errorf("parse monitor migration: %w", err)
 	}
-	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
-		return nil, errors.New("config root must be a mapping")
+	if migration.Version != monitorConfigVersion {
+		return "", fmt.Errorf("unsupported monitor migration version %d", migration.Version)
 	}
-	return document.Content[0], nil
-}
-
-func findYAMLMappingValue(root *yaml.Node, name string) *yaml.Node {
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value == name {
-			return root.Content[i+1]
-		}
+	host := normalizeRemoteHost(migration.Host)
+	if host == "" {
+		return "", errors.New("monitor migration host is empty")
 	}
-	return nil
-}
-
-func monitorRepoYAMLEdits(data []byte, lineStarts []int, repoSequence *yaml.Node, repos []string) ([]monitorYAMLEdit, error) {
-	if repoSequence == nil || repoSequence.Kind != yaml.SequenceNode {
-		return nil, errors.New("config repos must be a sequence")
-	}
-	if len(repoSequence.Content) != len(repos) {
-		return nil, fmt.Errorf("config repos changed during migration: parsed %d, expected %d", len(repoSequence.Content), len(repos))
-	}
-
-	edits := make([]monitorYAMLEdit, 0, len(repos))
-	for i, repoNode := range repoSequence.Content {
-		if repoNode.Kind != yaml.ScalarNode {
-			return nil, fmt.Errorf("config repo %d must be a scalar", i+1)
-		}
-		start, err := yamlNodeOffset(lineStarts, repoNode)
-		if err != nil {
-			return nil, err
-		}
-		end, err := yamlScalarEnd(data, start, repoNode.Style)
-		if err != nil {
-			return nil, err
-		}
-		edits = append(edits, monitorYAMLEdit{
-			start:       start,
-			end:         end,
-			replacement: renderYAMLScalar(repos[i], repoNode.Style),
-		})
-	}
-	return edits, nil
-}
-
-func monitorVersionYAMLEdit(data []byte, lineStarts []int, root *yaml.Node) (monitorYAMLEdit, error) {
-	if versionNode := findYAMLMappingValue(root, "version"); versionNode != nil {
-		start, err := yamlNodeOffset(lineStarts, versionNode)
-		if err != nil {
-			return monitorYAMLEdit{}, err
-		}
-		end, err := yamlScalarEnd(data, start, versionNode.Style)
-		return monitorYAMLEdit{start: start, end: end, replacement: strconv.Itoa(monitorConfigVersion)}, err
-	}
-	if len(root.Content) == 0 {
-		return monitorYAMLEdit{}, errors.New("config mapping is empty")
-	}
-	start, err := yamlNodeOffset(lineStarts, root.Content[0])
-	if err != nil {
-		return monitorYAMLEdit{}, err
-	}
-	return monitorYAMLEdit{
-		start:       start,
-		end:         start,
-		replacement: fmt.Sprintf("version: %d%s", monitorConfigVersion, yamlNewline(data)),
-	}, nil
-}
-
-func applyMonitorYAMLEdits(data []byte, edits []monitorYAMLEdit) []byte {
-	sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
-	result := append([]byte(nil), data...)
-	for _, edit := range edits {
-		updated := make([]byte, 0, len(result)-(edit.end-edit.start)+len(edit.replacement))
-		updated = append(updated, result[:edit.start]...)
-		updated = append(updated, edit.replacement...)
-		updated = append(updated, result[edit.end:]...)
-		result = updated
-	}
-	return result
-}
-
-func yamlLineStarts(data []byte) []int {
-	starts := []int{0}
-	for i, value := range data {
-		if value == '\n' {
-			starts = append(starts, i+1)
-		}
-	}
-	return starts
-}
-
-func yamlNodeOffset(lineStarts []int, node *yaml.Node) (int, error) {
-	if node.Line <= 0 || node.Line > len(lineStarts) || node.Column <= 0 {
-		return 0, fmt.Errorf("invalid YAML position %d:%d", node.Line, node.Column)
-	}
-	return lineStarts[node.Line-1] + node.Column - 1, nil
-}
-
-func yamlScalarEnd(data []byte, start int, style yaml.Style) (int, error) {
-	if start < 0 || start >= len(data) {
-		return 0, errors.New("YAML scalar starts outside document")
-	}
-	switch style {
-	case yaml.SingleQuotedStyle:
-		return singleQuotedYAMLScalarEnd(data, start)
-	case yaml.DoubleQuotedStyle:
-		return doubleQuotedYAMLScalarEnd(data, start)
-	default:
-		return plainYAMLScalarEnd(data, start), nil
-	}
-}
-
-func singleQuotedYAMLScalarEnd(data []byte, start int) (int, error) {
-	for i := start + 1; i < len(data); i++ {
-		if data[i] != '\'' {
-			continue
-		}
-		if i+1 < len(data) && data[i+1] == '\'' {
-			i++
-			continue
-		}
-		return i + 1, nil
-	}
-	return 0, errors.New("unterminated YAML scalar")
-}
-
-func doubleQuotedYAMLScalarEnd(data []byte, start int) (int, error) {
-	escaped := false
-	for i := start + 1; i < len(data); i++ {
-		if data[i] == '"' && !escaped {
-			return i + 1, nil
-		}
-		escaped = data[i] == '\\' && !escaped
-	}
-	return 0, errors.New("unterminated YAML scalar")
-}
-
-func plainYAMLScalarEnd(data []byte, start int) int {
-	for i := start; i < len(data); i++ {
-		switch data[i] {
-		case ' ', '\t', '\r', '\n', ',', ']', '}', '#':
-			return i
-		}
-	}
-	return len(data)
-}
-
-func renderYAMLScalar(value string, style yaml.Style) string {
-	switch style {
-	case yaml.SingleQuotedStyle:
-		return "'" + strings.ReplaceAll(value, "'", "''") + "'"
-	case yaml.DoubleQuotedStyle:
-		return strconv.Quote(value)
-	default:
-		return value
-	}
-}
-
-func yamlNewline(data []byte) string {
-	if strings.Contains(string(data), "\r\n") {
-		return "\r\n"
-	}
-	return "\n"
+	return host, nil
 }
 
 // normalizeMonitorConfig fills unset defaults so callers never see zeros.

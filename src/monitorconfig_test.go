@@ -80,14 +80,20 @@ func TestLoadMonitorConfigQualifiesLegacyEnterpriseRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantYAML := "# keep this heading\nversion: 1\nrepos:\n    - ghe.example.com/Acme/Widgets # keep this note\n    - 'ghe.example.com/Acme/Service'\n"
-	if string(persisted) != wantYAML {
-		t.Fatalf("migrated YAML changed unrelated presentation:\n%s\nwant:\n%s", persisted, wantYAML)
+	if string(persisted) != legacy {
+		t.Fatalf("legacy config was rewritten:\n%s\nwant unchanged:\n%s", persisted, legacy)
+	}
+	migration, err := os.ReadFile(path + monitorMigrationSuffix)
+	if err != nil {
+		t.Fatalf("read migration marker: %v", err)
+	}
+	if host, err := parseMonitorMigration(migration); err != nil || host != "ghe.example.com" {
+		t.Fatalf("migration marker host = %q, err = %v", host, err)
 	}
 
 	reloaded, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
 	if err != nil {
-		t.Fatalf("reload migrated config under github.com: %v", err)
+		t.Fatalf("reload legacy config under github.com: %v", err)
 	}
 	if reloaded.Version != monitorConfigVersion {
 		t.Fatalf("persisted version = %d, want %d", reloaded.Version, monitorConfigVersion)
@@ -119,43 +125,86 @@ func TestLoadMonitorConfigDoesNotRemigrateSavedPublicRepositories(t *testing.T) 
 	}
 }
 
-func TestMigrateLegacyMonitorConfigYAMLPreservesPresentation(t *testing.T) {
+func TestLoadLegacyMonitorConfigSupportsYAMLStyles(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
-		repos []string
-		want  string
+		want  []string
 	}{
 		{
-			name:  "block sequence and comments",
-			input: "# heading\nrepos:\n  - Acme/Widgets # note\n  - 'Acme/Service'\n",
-			repos: []string{"ghe.example.com/Acme/Widgets", "ghe.example.com/Acme/Service"},
-			want:  "# heading\nversion: 1\nrepos:\n  - ghe.example.com/Acme/Widgets # note\n  - 'ghe.example.com/Acme/Service'\n",
+			name:  "alias",
+			input: "shared: &repos\n  - Acme/Widgets\nrepos: *repos\n",
+			want:  []string{"ghe.example.com/Acme/Widgets"},
 		},
 		{
-			name:  "flow sequence and double quotes",
-			input: "repos: [Acme/Widgets, \"Acme/Service\"] # note\n",
-			repos: []string{"ghe.example.com/Acme/Widgets", "ghe.example.com/Acme/Service"},
-			want:  "version: 1\nrepos: [ghe.example.com/Acme/Widgets, \"ghe.example.com/Acme/Service\"] # note\n",
-		},
-		{
-			name:  "existing zero version with CRLF",
-			input: "version: 0 # legacy\r\nrepos:\r\n  - Acme/Widgets\r\n",
-			repos: []string{"ghe.example.com/Acme/Widgets"},
-			want:  "version: 1 # legacy\r\nrepos:\r\n  - ghe.example.com/Acme/Widgets\r\n",
+			name:  "folded block scalar",
+			input: "repos:\n  - >-\n    Acme/Widgets\n",
+			want:  []string{"ghe.example.com/Acme/Widgets"},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := migrateLegacyMonitorConfigYAML([]byte(tc.input), tc.repos)
-			if err != nil {
-				t.Fatalf("migrateLegacyMonitorConfigYAML: %v", err)
+			path := filepath.Join(t.TempDir(), "config.yml")
+			if err := os.WriteFile(path, []byte(tc.input), 0o600); err != nil {
+				t.Fatal(err)
 			}
-			if string(got) != tc.want {
-				t.Fatalf("migration changed presentation:\n%s\nwant:\n%s", got, tc.want)
+			loaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+			if err != nil {
+				t.Fatalf("load legacy config: %v", err)
+			}
+			if len(loaded.Repos) != len(tc.want) {
+				t.Fatalf("Repos = %v, want %v", loaded.Repos, tc.want)
+			}
+			for i := range tc.want {
+				if loaded.Repos[i] != tc.want[i] {
+					t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], tc.want[i])
+				}
+			}
+			persisted, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(persisted) != tc.input {
+				t.Fatalf("legacy config was rewritten:\n%s\nwant unchanged:\n%s", persisted, tc.input)
 			}
 		})
+	}
+}
+
+func TestLoadLegacyMonitorConfigPinsPublicHost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	legacy := "repos: [HemSoft/gh-x]\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
+	if err != nil {
+		t.Fatalf("load public legacy config: %v", err)
+	}
+	if loaded.Repos[0] != "HemSoft/gh-x" {
+		t.Fatalf("public repo = %q, want HemSoft/gh-x", loaded.Repos[0])
+	}
+	reloaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+	if err != nil {
+		t.Fatalf("reload public legacy config under enterprise host: %v", err)
+	}
+	if reloaded.Repos[0] != "HemSoft/gh-x" {
+		t.Fatalf("pinned public repo = %q, want HemSoft/gh-x", reloaded.Repos[0])
+	}
+}
+
+func TestParseMonitorMigrationRejectsInvalidData(t *testing.T) {
+	tests := []string{
+		"version: [broken",
+		"version: 2\nhost: github.com\n",
+		"version: 1\nhost: ''\n",
+	}
+	for _, input := range tests {
+		if _, err := parseMonitorMigration([]byte(input)); err == nil {
+			t.Fatalf("parseMonitorMigration(%q) succeeded", input)
+		}
 	}
 }
 
