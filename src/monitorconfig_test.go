@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 func TestDefaultMonitorConfigSeedsRepoAndSections(t *testing.T) {
@@ -63,14 +61,8 @@ func TestLoadOrCreateMonitorConfigRejectsBadYAML(t *testing.T) {
 
 func TestLoadMonitorConfigQualifiesLegacyEnterpriseRepositories(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yml")
-	cfg := defaultMonitorConfig("")
-	cfg.Version = 0
-	cfg.Repos = []string{"Acme/Widgets", "Acme/Service"}
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	legacy := "# keep this heading\nrepos:\n    - Acme/Widgets # keep this note\n    - 'Acme/Service'\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -83,6 +75,14 @@ func TestLoadMonitorConfigQualifiesLegacyEnterpriseRepositories(t *testing.T) {
 		if loaded.Repos[i] != want[i] {
 			t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], want[i])
 		}
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantYAML := "# keep this heading\nversion: 1\nrepos:\n    - ghe.example.com/Acme/Widgets # keep this note\n    - 'ghe.example.com/Acme/Service'\n"
+	if string(persisted) != wantYAML {
+		t.Fatalf("migrated YAML changed unrelated presentation:\n%s\nwant:\n%s", persisted, wantYAML)
 	}
 
 	reloaded, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
@@ -116,6 +116,46 @@ func TestLoadMonitorConfigDoesNotRemigrateSavedPublicRepositories(t *testing.T) 
 		if loaded.Repos[i] != want[i] {
 			t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], want[i])
 		}
+	}
+}
+
+func TestMigrateLegacyMonitorConfigYAMLPreservesPresentation(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		repos []string
+		want  string
+	}{
+		{
+			name:  "block sequence and comments",
+			input: "# heading\nrepos:\n  - Acme/Widgets # note\n  - 'Acme/Service'\n",
+			repos: []string{"ghe.example.com/Acme/Widgets", "ghe.example.com/Acme/Service"},
+			want:  "# heading\nversion: 1\nrepos:\n  - ghe.example.com/Acme/Widgets # note\n  - 'ghe.example.com/Acme/Service'\n",
+		},
+		{
+			name:  "flow sequence and double quotes",
+			input: "repos: [Acme/Widgets, \"Acme/Service\"] # note\n",
+			repos: []string{"ghe.example.com/Acme/Widgets", "ghe.example.com/Acme/Service"},
+			want:  "version: 1\nrepos: [ghe.example.com/Acme/Widgets, \"ghe.example.com/Acme/Service\"] # note\n",
+		},
+		{
+			name:  "existing zero version with CRLF",
+			input: "version: 0 # legacy\r\nrepos:\r\n  - Acme/Widgets\r\n",
+			repos: []string{"ghe.example.com/Acme/Widgets"},
+			want:  "version: 1 # legacy\r\nrepos:\r\n  - ghe.example.com/Acme/Widgets\r\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := migrateLegacyMonitorConfigYAML([]byte(tc.input), tc.repos)
+			if err != nil {
+				t.Fatalf("migrateLegacyMonitorConfigYAML: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("migration changed presentation:\n%s\nwant:\n%s", got, tc.want)
+			}
+		})
 	}
 }
 
