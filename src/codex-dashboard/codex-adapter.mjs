@@ -60,7 +60,7 @@ export function createCodexAdapter({
                     sessions.push({
                         sessionId: thread.id,
                         status: active ? "active" : "idle",
-                        project: path.basename(thread.cwd) || thread.cwd,
+                        project: projectNameFromCwd(thread.cwd),
                         cwd: thread.cwd,
                         branch: thread.branch || "Unavailable",
                         summary: rollout.latestUserPrompt || thread.title || "Untitled session",
@@ -122,6 +122,10 @@ export function createCodexAdapter({
             }
         },
     };
+}
+
+export function projectNameFromCwd(cwd) {
+    return path.win32.basename(cwd) || cwd;
 }
 
 async function readThreads({

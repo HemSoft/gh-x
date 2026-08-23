@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
 import { createCopilotAdapter } from "./copilot-adapter.mjs";
@@ -48,9 +49,9 @@ test("reads the installed session store, overlays activity, and builds plan usag
         },
     };
     const adapter = createCopilotAdapter({
-        extensionDirectory: "C:\\fixture",
+        extensionDirectory: path.join("fixture"),
         accessImpl: async () => {},
-        importModule: async (filePath) => modules[filePath.split("\\").at(-1)],
+        importModule: async (filePath) => modules[path.basename(filePath)],
         now: () => new Date("2026-08-19T12:00:00.000Z"),
     });
 
