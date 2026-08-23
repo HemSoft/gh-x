@@ -223,18 +223,11 @@ func loadOrCreateMonitorConfig(path, seedRepo, legacyHost string) (*monitorConfi
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, false, fmt.Errorf("parse %s: %w", path, err)
 	}
-	legacyConfig := cfg.Version == 0
-	newMigration := false
-	migrationHost := ""
-	if legacyConfig {
-		migrationHost, newMigration, err = loadMonitorMigration(path, legacyHost)
-		if err != nil {
-			return nil, false, err
-		}
-		cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, migrationHost)
+	if cfg.Version != 0 && cfg.Version != monitorConfigVersion {
+		return nil, false, fmt.Errorf("unsupported monitor config version %d", cfg.Version)
 	}
-	normalizeMonitorConfig(&cfg)
-	if err := validateMonitorConfig(&cfg); err != nil {
+	migrationHost, newMigration, err := prepareLoadedMonitorConfig(&cfg, path, legacyHost)
+	if err != nil {
 		return nil, false, err
 	}
 	if newMigration {
@@ -243,6 +236,23 @@ func loadOrCreateMonitorConfig(path, seedRepo, legacyHost string) (*monitorConfi
 		}
 	}
 	return &cfg, false, nil
+}
+
+func prepareLoadedMonitorConfig(cfg *monitorConfig, path, legacyHost string) (string, bool, error) {
+	if cfg.Version != 0 {
+		normalizeMonitorConfig(cfg)
+		return "", false, validateMonitorConfig(cfg)
+	}
+	migrationHost, newMigration, err := loadMonitorMigration(path, legacyHost)
+	if err != nil {
+		return "", false, err
+	}
+	cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, migrationHost)
+	normalizeMonitorConfig(cfg)
+	if err := validateMonitorConfig(cfg); err != nil {
+		return "", false, err
+	}
+	return migrationHost, newMigration, nil
 }
 
 // qualifyLegacyMonitorRepos preserves pre-host-routing configs. Before host

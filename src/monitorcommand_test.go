@@ -104,14 +104,14 @@ func TestLegacyMonitorHostHonorsGHHostOverCheckoutRemote(t *testing.T) {
 	}
 }
 
-func TestLegacyMonitorHostFallsBackToRepositoryContext(t *testing.T) {
+func TestLegacyMonitorHostDefaultsToPublicDespiteRepositoryContext(t *testing.T) {
 	savedHost := monitorRepoHostFunc
 	defer func() { monitorRepoHostFunc = savedHost }()
 	t.Setenv("GH_HOST", "")
 	monitorRepoHostFunc = func() string { return "ghe.example.com" }
 
-	if got := legacyMonitorHost(); got != "ghe.example.com" {
-		t.Fatalf("legacyMonitorHost() = %q, want repository context", got)
+	if got := legacyMonitorHost(); got != defaultGitHubHost {
+		t.Fatalf("legacyMonitorHost() = %q, want %s", got, defaultGitHubHost)
 	}
 }
 

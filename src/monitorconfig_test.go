@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,6 +57,21 @@ func TestLoadOrCreateMonitorConfigRejectsBadYAML(t *testing.T) {
 	}
 	if _, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost); err == nil {
 		t.Fatal("expected YAML error")
+	}
+}
+
+func TestLoadMonitorConfigRejectsUnsupportedVersion(t *testing.T) {
+	for _, version := range []int{-1, 2} {
+		t.Run(fmt.Sprintf("version %d", version), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yml")
+			data := fmt.Sprintf("version: %d\nrepos: [HemSoft/gh-x]\n", version)
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost); err == nil {
+				t.Fatalf("version %d was accepted", version)
+			}
+		})
 	}
 }
 
