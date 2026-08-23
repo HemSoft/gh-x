@@ -21,6 +21,8 @@ const (
 	minimumMonitorInterval = 10 * time.Second
 	maximumMonitorInterval = 6 * time.Hour
 	defaultMonitorInterval = 10 * time.Minute
+	monitorConfigVersion   = 1
+	monitorMigrationSuffix = ".migration.yml"
 
 	monitorRepoAll = "All repos"
 )
@@ -39,10 +41,80 @@ type monitorDefaults struct {
 
 // monitorConfig is the on-disk configuration for gh x monitor.
 type monitorConfig struct {
+	Version       int              `yaml:"version,omitempty"`
 	Repos         []string         `yaml:"repos"`
 	Defaults      monitorDefaults  `yaml:"defaults"`
 	PRSections    []monitorSection `yaml:"prSections"`
 	IssueSections []monitorSection `yaml:"issueSections"`
+}
+
+// monitorRepository is the normalized identity of one configured repository.
+// Plain OWNER/REPO entries belong to github.com; Enterprise entries retain
+// their explicit host so requests and UI row keys cannot cross hosts.
+type monitorRepository struct {
+	Host  string
+	Owner string
+	Name  string
+}
+
+func parseMonitorRepository(value string) (monitorRepository, error) {
+	trimmed := strings.Trim(strings.TrimSpace(value), "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 2 || len(parts) > 3 {
+		return monitorRepository{}, fmt.Errorf("repo %q must be OWNER/REPO (or HOST/OWNER/REPO)", value)
+	}
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+		if parts[i] == "" {
+			return monitorRepository{}, fmt.Errorf("repo %q has an empty segment", value)
+		}
+	}
+
+	host := defaultGitHubHost
+	if len(parts) == 3 {
+		host = normalizeRemoteHost(parts[0])
+		if host == "" {
+			return monitorRepository{}, fmt.Errorf("repo %q has an empty host", value)
+		}
+	}
+	return monitorRepository{
+		Host:  host,
+		Owner: parts[len(parts)-2],
+		Name:  parts[len(parts)-1],
+	}, nil
+}
+
+func parseMonitorRepositories(values []string) ([]monitorRepository, error) {
+	repositories := make([]monitorRepository, 0, len(values))
+	for _, value := range values {
+		repository, err := parseMonitorRepository(value)
+		if err != nil {
+			return nil, err
+		}
+		repositories = append(repositories, repository)
+	}
+	return repositories, nil
+}
+
+func (r monitorRepository) nameWithOwner() string {
+	return r.Owner + "/" + r.Name
+}
+
+func (r monitorRepository) configValue() string {
+	if r.Host == defaultGitHubHost {
+		return r.nameWithOwner()
+	}
+	return r.Host + "/" + r.nameWithOwner()
+}
+
+func normalizeMonitorRepoValues(values []string) []string {
+	normalized := append([]string(nil), values...)
+	for i, value := range normalized {
+		if repository, err := parseMonitorRepository(value); err == nil {
+			normalized[i] = repository.configValue()
+		}
+	}
+	return normalized
 }
 
 // monitorConfigPath returns the platform-appropriate config file location:
@@ -85,6 +157,7 @@ func defaultMonitorConfig(seedRepo string) *monitorConfig {
 		repos = append(repos, seedRepo)
 	}
 	return &monitorConfig{
+		Version:       monitorConfigVersion,
 		Repos:         repos,
 		Defaults:      monitorDefaults{Limit: defaultMonitorLimit, Interval: formatMonitorInterval(defaultMonitorInterval)},
 		PRSections:    prs,
@@ -99,12 +172,13 @@ func starterMonitorConfigYAML(cfg *monitorConfig) string {
 	sb.WriteString("# gh x monitor configuration.\n")
 	sb.WriteString("# Sections use GitHub search syntax; configured repos are added\n")
 	sb.WriteString("# automatically, so do not include repo: qualifiers in filters.\n\n")
+	fmt.Fprintf(&sb, "version: %d\n\n", monitorConfigVersion)
 	sb.WriteString("repos:\n")
 	for _, repo := range cfg.Repos {
 		fmt.Fprintf(&sb, "  - %s\n", repo)
 	}
 	if len(cfg.Repos) == 0 {
-		sb.WriteString("  [] # add owner/repo entries here\n")
+		sb.WriteString("  [] # add [host/]owner/repo entries here\n")
 	}
 	fmt.Fprintf(&sb, "\ndefaults:\n")
 	fmt.Fprintf(&sb, "  limit: %d      # rows fetched per section (max 100)\n", cfg.Defaults.Limit)
@@ -131,7 +205,7 @@ func writeStarterSection(sb *strings.Builder, section monitorSection) {
 // loadOrCreateMonitorConfig reads the config at path, creating a commented
 // starter file seeded with seedRepo when it does not exist yet. The second
 // return reports whether a new file was created.
-func loadOrCreateMonitorConfig(path, seedRepo string) (*monitorConfig, bool, error) {
+func loadOrCreateMonitorConfig(path, seedRepo, legacyHost string) (*monitorConfig, bool, error) {
 	data, err := os.ReadFile(path)
 	switch {
 	case err == nil:
@@ -149,11 +223,54 @@ func loadOrCreateMonitorConfig(path, seedRepo string) (*monitorConfig, bool, err
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, false, fmt.Errorf("parse %s: %w", path, err)
 	}
-	normalizeMonitorConfig(&cfg)
-	if err := validateMonitorConfig(&cfg); err != nil {
+	if cfg.Version != 0 && cfg.Version != monitorConfigVersion {
+		return nil, false, fmt.Errorf("unsupported monitor config version %d", cfg.Version)
+	}
+	migrationHost, newMigration, err := prepareLoadedMonitorConfig(&cfg, path, legacyHost)
+	if err != nil {
 		return nil, false, err
 	}
+	if newMigration {
+		if err := saveMonitorMigration(path, migrationHost); err != nil {
+			return nil, false, err
+		}
+	}
 	return &cfg, false, nil
+}
+
+func prepareLoadedMonitorConfig(cfg *monitorConfig, path, legacyHost string) (string, bool, error) {
+	if cfg.Version != 0 {
+		normalizeMonitorConfig(cfg)
+		return "", false, validateMonitorConfig(cfg)
+	}
+	migrationHost, newMigration, err := loadMonitorMigration(path, legacyHost)
+	if err != nil {
+		return "", false, err
+	}
+	cfg.Repos = qualifyLegacyMonitorRepos(cfg.Repos, migrationHost)
+	normalizeMonitorConfig(cfg)
+	if err := validateMonitorConfig(cfg); err != nil {
+		return "", false, err
+	}
+	return migrationHost, newMigration, nil
+}
+
+// qualifyLegacyMonitorRepos preserves pre-host-routing configs. Before host
+// prefixes were supported, every OWNER/REPO entry inherited one endpoint. If
+// the current endpoint is Enterprise and the config contains no explicit host,
+// retain that behavior by qualifying every repository during load.
+func qualifyLegacyMonitorRepos(values []string, legacyHost string) []string {
+	host := normalizeRemoteHost(legacyHost)
+	if host == "" || host == defaultGitHubHost {
+		return values
+	}
+	qualified := append([]string(nil), values...)
+	for i, value := range qualified {
+		if len(strings.Split(strings.Trim(strings.TrimSpace(value), "/"), "/")) == 2 {
+			qualified[i] = host + "/" + strings.Trim(strings.TrimSpace(value), "/")
+		}
+	}
+	return qualified
 }
 
 // writeStarterMonitorConfig writes the hand-commented starter template.
@@ -169,10 +286,17 @@ func writeStarterMonitorConfig(path string, cfg *monitorConfig) error {
 
 // saveMonitorConfig writes the config atomically-ish: temp file then rename.
 func saveMonitorConfig(path string, cfg *monitorConfig) error {
+	if cfg.Version == 0 {
+		cfg.Version = monitorConfigVersion
+	}
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("encode config: %w", err)
 	}
+	return writeMonitorConfigData(path, data)
+}
+
+func writeMonitorConfigData(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
@@ -187,8 +311,61 @@ func saveMonitorConfig(path string, cfg *monitorConfig) error {
 	return nil
 }
 
+type monitorConfigMigration struct {
+	Version int    `yaml:"version"`
+	Host    string `yaml:"host"`
+}
+
+func loadMonitorMigration(configPath, legacyHost string) (string, bool, error) {
+	migrationPath := configPath + monitorMigrationSuffix
+	data, err := os.ReadFile(migrationPath)
+	if err == nil {
+		host, parseErr := parseMonitorMigration(data)
+		return host, false, parseErr
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", false, fmt.Errorf("read monitor migration: %w", err)
+	}
+
+	host := normalizeRemoteHost(legacyHost)
+	if host == "" {
+		host = defaultGitHubHost
+	}
+	return host, true, nil
+}
+
+func saveMonitorMigration(configPath, host string) error {
+	data, err := yaml.Marshal(monitorConfigMigration{Version: monitorConfigVersion, Host: host})
+	if err != nil {
+		return fmt.Errorf("encode monitor migration: %w", err)
+	}
+	if err := writeMonitorConfigData(configPath+monitorMigrationSuffix, data); err != nil {
+		return fmt.Errorf("persist monitor migration: %w", err)
+	}
+	return nil
+}
+
+func parseMonitorMigration(data []byte) (string, error) {
+	var migration monitorConfigMigration
+	if err := yaml.Unmarshal(data, &migration); err != nil {
+		return "", fmt.Errorf("parse monitor migration: %w", err)
+	}
+	if migration.Version != monitorConfigVersion {
+		return "", fmt.Errorf("unsupported monitor migration version %d", migration.Version)
+	}
+	host := normalizeRemoteHost(migration.Host)
+	if host == "" {
+		return "", errors.New("monitor migration host is empty")
+	}
+	return host, nil
+}
+
 // normalizeMonitorConfig fills unset defaults so callers never see zeros.
 func normalizeMonitorConfig(cfg *monitorConfig) {
+	if cfg.Version == 0 {
+		cfg.Version = monitorConfigVersion
+	}
+	cfg.Repos = normalizeMonitorRepoValues(cfg.Repos)
 	if len(cfg.PRSections) == 0 {
 		prs, _ := defaultMonitorSections()
 		cfg.PRSections = prs
@@ -233,16 +410,8 @@ func validateMonitorRepos(repos []string) error {
 
 // validateMonitorRepo accepts OWNER/REPO or HOST/OWNER/REPO entries.
 func validateMonitorRepo(repo string) error {
-	parts := strings.Split(strings.Trim(repo, "/"), "/")
-	if len(parts) < 2 || len(parts) > 3 {
-		return fmt.Errorf("repo %q must be OWNER/REPO (or HOST/OWNER/REPO)", repo)
-	}
-	for _, part := range parts {
-		if strings.TrimSpace(part) == "" {
-			return fmt.Errorf("repo %q has an empty segment", repo)
-		}
-	}
-	return nil
+	_, err := parseMonitorRepository(repo)
+	return err
 }
 
 func validateMonitorSections(sections []monitorSection) error {

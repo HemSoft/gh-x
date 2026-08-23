@@ -53,6 +53,113 @@ func TestRunMonitorCmdBootstrapErrorSurfaces(t *testing.T) {
 	}
 }
 
+func TestMonitorSeedRepoPreservesEnterpriseHost(t *testing.T) {
+	savedResolve := monitorResolveRepoFunc
+	savedHost := monitorRepoHostFunc
+	defer func() {
+		monitorResolveRepoFunc = savedResolve
+		monitorRepoHostFunc = savedHost
+	}()
+	monitorResolveRepoFunc = func(string) (string, string, error) {
+		return "Acme", "Widgets", nil
+	}
+	monitorRepoHostFunc = func() string { return "GHE.Example.COM." }
+
+	if got := monitorSeedRepo(); got != "ghe.example.com/Acme/Widgets" {
+		t.Fatalf("monitorSeedRepo() = %q, want enterprise-qualified repo", got)
+	}
+}
+
+func TestMonitorSeedRepoHonorsGHRepoHostOverCheckoutRemote(t *testing.T) {
+	savedResolve := monitorResolveRepoFunc
+	savedHost := monitorRepoHostFunc
+	savedRemote := gitRemoteURLFunc
+	defer func() {
+		monitorResolveRepoFunc = savedResolve
+		monitorRepoHostFunc = savedHost
+		gitRemoteURLFunc = savedRemote
+		resetRemoteCache()
+	}()
+	t.Setenv("GH_REPO", "ghe.example.com/Acme/Widgets")
+	gitRemoteURLFunc = func() string { return "https://github.com/HemSoft/gh-x.git" }
+	resetRemoteCache()
+	monitorResolveRepoFunc = func(string) (string, string, error) {
+		return "Acme", "Widgets", nil
+	}
+	monitorRepoHostFunc = func() string { return targetHost(nil) }
+
+	if got := monitorSeedRepo(); got != "ghe.example.com/Acme/Widgets" {
+		t.Fatalf("monitorSeedRepo() = %q, want GH_REPO host to win", got)
+	}
+}
+
+func TestLegacyMonitorHostHonorsGHHostOverCheckoutRemote(t *testing.T) {
+	savedHost := monitorRepoHostFunc
+	defer func() { monitorRepoHostFunc = savedHost }()
+	t.Setenv("GH_HOST", "GHE.Example.COM.")
+	monitorRepoHostFunc = func() string { return defaultGitHubHost }
+
+	if got := legacyMonitorHost(); got != "ghe.example.com" {
+		t.Fatalf("legacyMonitorHost() = %q, want GH_HOST", got)
+	}
+}
+
+func TestLegacyMonitorHostDefaultsToPublicDespiteRepositoryContext(t *testing.T) {
+	savedHost := monitorRepoHostFunc
+	defer func() { monitorRepoHostFunc = savedHost }()
+	t.Setenv("GH_HOST", "")
+	monitorRepoHostFunc = func() string { return "ghe.example.com" }
+
+	if got := legacyMonitorHost(); got != defaultGitHubHost {
+		t.Fatalf("legacyMonitorHost() = %q, want %s", got, defaultGitHubHost)
+	}
+}
+
+func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T) {
+	isolateMonitorHome(t)
+	configPath, err := monitorConfigPath()
+	if err != nil {
+		t.Fatalf("monitorConfigPath: %v", err)
+	}
+	cfg := defaultMonitorConfig("")
+	cfg.Repos = []string{"HemSoft/gh-x", "ghe.example.com/Acme/Widgets"}
+	if err := saveMonitorConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveMonitorConfig: %v", err)
+	}
+
+	savedResolve := monitorResolveRepoFunc
+	savedHost := monitorRepoHostFunc
+	defer func() {
+		monitorResolveRepoFunc = savedResolve
+		monitorRepoHostFunc = savedHost
+	}()
+	monitorResolveRepoFunc = func(string) (string, string, error) {
+		return "ignored", "seed", nil
+	}
+	monitorRepoHostFunc = func() string { return defaultGitHubHost }
+
+	var stdout bytes.Buffer
+	if err := printMonitorQuery(&stdout); err != nil {
+		t.Fatalf("printMonitorQuery: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"# github.com\n",
+		"# ghe.example.com\n",
+		"query Monitor1 {",
+		"query Monitor2 {",
+		"repo:HemSoft/gh-x",
+		"repo:Acme/Widgets",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("printed queries missing %q:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "repo:ghe.example.com/Acme/Widgets") {
+		t.Fatalf("enterprise hostname leaked into repo qualifier:\n%s", output)
+	}
+}
+
 func isolateMonitorHome(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()

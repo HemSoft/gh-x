@@ -78,15 +78,25 @@ func printMonitorQuery(stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo())
+	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo(), legacyMonitorHost())
 	if err != nil {
 		return err
 	}
-	query, err := buildMonitorGraphQLQuery(cfg)
+	queries, err := buildMonitorHostQueries(cfg)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, query)
+	for i, query := range queries {
+		printedQuery := query.Query
+		if len(queries) > 1 {
+			fmt.Fprintf(stdout, "# %s\n", query.Host)
+			printedQuery = fmt.Sprintf("query Monitor%d %s", i+1, query.Query)
+		}
+		fmt.Fprintln(stdout, printedQuery)
+		if i < len(queries)-1 {
+			fmt.Fprintln(stdout)
+		}
+	}
 	return nil
 }
 
@@ -100,7 +110,7 @@ func bootstrapMonitorModel() (monitorModel, error) {
 	if err != nil {
 		return monitorModel{}, err
 	}
-	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo())
+	cfg, _, err := loadOrCreateMonitorConfig(configPath, monitorSeedRepo(), legacyMonitorHost())
 	if err != nil {
 		return monitorModel{}, err
 	}
@@ -119,12 +129,32 @@ func bootstrapMonitorModel() (monitorModel, error) {
 	return newMonitorModel(cfg, configPath, statePath, state), nil
 }
 
-// monitorSeedRepo returns owner/repo of the current directory when available;
-// failures are fine because the starter config documents where to add repos.
+var monitorResolveRepoFunc = resolveRepo
+
+var monitorRepoHostFunc = func() string { return targetHost(nil) }
+
+// legacyMonitorHost matches the endpoint used by the old bare `gh api`
+// monitor request. GH_HOST explicitly selected that endpoint even when the
+// checkout remote or GH_REPO identified another host; without GH_HOST, gh api
+// defaulted to github.com.
+func legacyMonitorHost() string {
+	if host := normalizeRemoteHost(os.Getenv("GH_HOST")); host != "" {
+		return host
+	}
+	return defaultGitHubHost
+}
+
+// monitorSeedRepo returns [host/]owner/repo of the current directory when
+// available. github.com keeps the compact owner/repo form; Enterprise Server
+// repositories retain their host in the starter config.
 func monitorSeedRepo() string {
-	owner, name, err := resolveRepo("")
+	owner, name, err := monitorResolveRepoFunc("")
 	if err != nil {
 		return ""
 	}
-	return owner + "/" + name
+	host := normalizeRemoteHost(monitorRepoHostFunc())
+	if host == "" {
+		host = defaultGitHubHost
+	}
+	return (monitorRepository{Host: host, Owner: owner, Name: name}).configValue()
 }

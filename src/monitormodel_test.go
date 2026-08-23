@@ -189,6 +189,22 @@ func TestHandleFetchedErrorBacksOff(t *testing.T) {
 	}
 }
 
+func TestApplyFetchResultSurfacesPartialHostWarning(t *testing.T) {
+	m := newTestMonitorModel()
+	m.layout = computeMonitorLayout(100, 24)
+	result := newMonitorFetchResult(m.cfg, time.Now())
+	result.Warnings = []string{"ghe.example.com: connection refused\nretry later"}
+
+	m.applyFetchResult(result)
+	if !strings.Contains(m.refreshWarn, "ghe.example.com: connection refused retry later") {
+		t.Fatalf("partial-host warning not retained safely: %q", m.refreshWarn)
+	}
+	footer := m.footerLine()
+	if !strings.Contains(footer, "warning:") || !strings.Contains(footer, "ghe.example.com") {
+		t.Fatalf("partial-host warning not visible in footer: %q", footer)
+	}
+}
+
 func TestQuitSavesState(t *testing.T) {
 	m := newTestMonitorModel()
 	m.statePath = "state.json"

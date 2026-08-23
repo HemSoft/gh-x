@@ -48,9 +48,10 @@ example:
 ```
 
 The target host is resolved following gh's own precedence: an explicit
-`HOST/OWNER/REPO` value on `--repo`/`-R`, then the `GH_REPO` environment
-variable, then the current repository's git remote (so commands run inside an
-Enterprise Server checkout just work), then `GH_HOST`, then `github.com`.
+`--hostname`, an explicit `HOST/OWNER/REPO` value on `--repo`/`-R`, then the
+`GH_REPO` environment variable, then the current repository's git remote (so
+commands run inside an Enterprise Server checkout just work), then `GH_HOST`,
+then `github.com`.
 Fallback candidates come from that same host in `gh auth status --json hosts`,
 and Enterprise Server
 retries inject `GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` instead of
@@ -101,7 +102,7 @@ Compared to `gh pr list`, this command keeps all existing filters but renders a 
 | **Author**| PR author login |
 | **State**| `open`, `draft`, `closed`, or `merged` |
 | **Rev**  | Overall review decision: `✓` approved, `✗` changes requested, or `•` review required |
-| **AI**   | AI reviewer status: `pass` (approved/no issues), `fail` (issues found), or `-` (no AI review). Detects CodeRabbit, Copilot PR reviewer, and other `[bot]` reviewers |
+| **AI**   | AI reviewer status: `pass` (approved/no issues), `fail` (issues found), or `-` (no AI review). Detects CodeRabbit, Copilot PR reviewer, other `[bot]` reviewers, and Cubic's AI reviewer check |
 | **Appv** | Count of unique formal approvals, including bot reviewers |
 | **Checks**| CI status: `pass`, `fail`, `pending`, `merge`, or `-`. `merge` (red) indicates merge conflicts with the base branch. Includes required checks from repo rulesets that haven't reported yet |
 | **Cmts** | Review thread resolution: `resolved/total` (e.g., `3/5`). `-` if no threads |

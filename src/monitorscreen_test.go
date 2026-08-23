@@ -478,6 +478,28 @@ func TestHandleEditorDoneReloadsConfig(t *testing.T) {
 	}
 }
 
+func TestHandleEditorDoneUsesLegacyAPIHostSemantics(t *testing.T) {
+	path := t.TempDir() + "/config.yml"
+	if err := os.WriteFile(path, []byte("repos: [Acme/Widgets]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	savedHost := monitorRepoHostFunc
+	defer func() { monitorRepoHostFunc = savedHost }()
+	t.Setenv("GH_HOST", "ghe.example.com")
+	monitorRepoHostFunc = func() string { return defaultGitHubHost }
+
+	m := newTestMonitorModel()
+	m.configPath = path
+	model, cmd := m.handleEditorDone(monitorEditorDoneMsg{})
+	updated := model.(monitorModel)
+	if cmd == nil {
+		t.Fatal("reload should refresh data")
+	}
+	if updated.cfg.Repos[0] != "ghe.example.com/Acme/Widgets" {
+		t.Fatalf("reloaded repo = %q, want Enterprise host", updated.cfg.Repos[0])
+	}
+}
+
 func TestCheckoutCommands(t *testing.T) {
 	pr := monitorRowForTest("o/r", 12, "open")
 	if got := checkoutCommandFor(pr); got != "gh pr checkout 12 -R o/r" {

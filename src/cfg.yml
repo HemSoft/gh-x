@@ -1,3 +1,4 @@
+version: 1
 repos:
     - owner/new
     - owner/other

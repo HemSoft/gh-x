@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,7 +27,7 @@ func TestDefaultMonitorConfigSeedsRepoAndSections(t *testing.T) {
 
 func TestLoadOrCreateMonitorConfigCreatesStarterFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "subdir", "config.yml")
-	_, created, err := loadOrCreateMonitorConfig(path, "owner/repo")
+	_, created, err := loadOrCreateMonitorConfig(path, "owner/repo", defaultGitHubHost)
 	if err != nil {
 		t.Fatalf("loadOrCreateMonitorConfig: %v", err)
 	}
@@ -40,7 +41,7 @@ func TestLoadOrCreateMonitorConfigCreatesStarterFile(t *testing.T) {
 	if string(data)[:1] != "#" {
 		t.Fatal("starter file should begin with a comment")
 	}
-	loaded, createdAgain, err := loadOrCreateMonitorConfig(path, "")
+	loaded, createdAgain, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
 	if err != nil || createdAgain {
 		t.Fatalf("reload should succeed without recreating: created=%v err=%v", createdAgain, err)
 	}
@@ -54,8 +55,239 @@ func TestLoadOrCreateMonitorConfigRejectsBadYAML(t *testing.T) {
 	if err := os.WriteFile(path, []byte("repos: [broken"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loadOrCreateMonitorConfig(path, ""); err == nil {
+	if _, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost); err == nil {
 		t.Fatal("expected YAML error")
+	}
+}
+
+func TestLoadMonitorConfigRejectsUnsupportedVersion(t *testing.T) {
+	for _, version := range []int{-1, 2} {
+		t.Run(fmt.Sprintf("version %d", version), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yml")
+			data := fmt.Sprintf("version: %d\nrepos: [HemSoft/gh-x]\n", version)
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost); err == nil {
+				t.Fatalf("version %d was accepted", version)
+			}
+		})
+	}
+}
+
+func TestLoadMonitorConfigQualifiesLegacyEnterpriseRepositories(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	legacy := "# keep this heading\nrepos:\n    - Acme/Widgets # keep this note\n    - 'Acme/Service'\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+	if err != nil {
+		t.Fatalf("load legacy enterprise config: %v", err)
+	}
+	want := []string{"ghe.example.com/Acme/Widgets", "ghe.example.com/Acme/Service"}
+	for i := range want {
+		if loaded.Repos[i] != want[i] {
+			t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], want[i])
+		}
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(persisted) != legacy {
+		t.Fatalf("legacy config was rewritten:\n%s\nwant unchanged:\n%s", persisted, legacy)
+	}
+	migration, err := os.ReadFile(path + monitorMigrationSuffix)
+	if err != nil {
+		t.Fatalf("read migration marker: %v", err)
+	}
+	if host, err := parseMonitorMigration(migration); err != nil || host != "ghe.example.com" {
+		t.Fatalf("migration marker host = %q, err = %v", host, err)
+	}
+
+	reloaded, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
+	if err != nil {
+		t.Fatalf("reload legacy config under github.com: %v", err)
+	}
+	if reloaded.Version != monitorConfigVersion {
+		t.Fatalf("persisted version = %d, want %d", reloaded.Version, monitorConfigVersion)
+	}
+	for i := range want {
+		if reloaded.Repos[i] != want[i] {
+			t.Fatalf("reloaded Repos[%d] = %q, want %q", i, reloaded.Repos[i], want[i])
+		}
+	}
+}
+
+func TestLoadMonitorConfigQualifiesUnprefixedRepositoriesInMixedLegacyList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	legacy := "repos: [Acme/Widgets, github.com/HemSoft/gh-x]\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+	if err != nil {
+		t.Fatalf("load mixed legacy config: %v", err)
+	}
+	want := []string{"ghe.example.com/Acme/Widgets", "HemSoft/gh-x"}
+	for i := range want {
+		if loaded.Repos[i] != want[i] {
+			t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], want[i])
+		}
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(persisted) != legacy {
+		t.Fatalf("legacy config was rewritten:\n%s\nwant unchanged:\n%s", persisted, legacy)
+	}
+}
+
+func TestLoadMonitorConfigDoesNotRemigrateSavedPublicRepositories(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	cfg := defaultMonitorConfig("")
+	cfg.Repos = []string{"HemSoft/gh-x", "HemSoft/other"}
+	if err := saveMonitorConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+	if err != nil {
+		t.Fatalf("load saved public config: %v", err)
+	}
+	want := []string{"HemSoft/gh-x", "HemSoft/other"}
+	for i := range want {
+		if loaded.Repos[i] != want[i] {
+			t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], want[i])
+		}
+	}
+}
+
+func TestLoadLegacyMonitorConfigSupportsYAMLStyles(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{
+			name:  "alias",
+			input: "shared: &repos\n  - Acme/Widgets\nrepos: *repos\n",
+			want:  []string{"ghe.example.com/Acme/Widgets"},
+		},
+		{
+			name:  "folded block scalar",
+			input: "repos:\n  - >-\n    Acme/Widgets\n",
+			want:  []string{"ghe.example.com/Acme/Widgets"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yml")
+			if err := os.WriteFile(path, []byte(tc.input), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+			if err != nil {
+				t.Fatalf("load legacy config: %v", err)
+			}
+			if len(loaded.Repos) != len(tc.want) {
+				t.Fatalf("Repos = %v, want %v", loaded.Repos, tc.want)
+			}
+			for i := range tc.want {
+				if loaded.Repos[i] != tc.want[i] {
+					t.Fatalf("Repos[%d] = %q, want %q", i, loaded.Repos[i], tc.want[i])
+				}
+			}
+			persisted, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(persisted) != tc.input {
+				t.Fatalf("legacy config was rewritten:\n%s\nwant unchanged:\n%s", persisted, tc.input)
+			}
+		})
+	}
+}
+
+func TestLoadLegacyMonitorConfigPinsPublicHost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	legacy := "repos: [HemSoft/gh-x]\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
+	if err != nil {
+		t.Fatalf("load public legacy config: %v", err)
+	}
+	if loaded.Repos[0] != "HemSoft/gh-x" {
+		t.Fatalf("public repo = %q, want HemSoft/gh-x", loaded.Repos[0])
+	}
+	reloaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+	if err != nil {
+		t.Fatalf("reload public legacy config under enterprise host: %v", err)
+	}
+	if reloaded.Repos[0] != "HemSoft/gh-x" {
+		t.Fatalf("pinned public repo = %q, want HemSoft/gh-x", reloaded.Repos[0])
+	}
+}
+
+func TestLoadLegacyMonitorConfigDoesNotPinHostBeforeValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	if err := os.WriteFile(path, []byte("repos: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com"); err == nil {
+		t.Fatal("expected invalid empty repository list")
+	}
+	if _, err := os.Stat(path + monitorMigrationSuffix); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid config persisted migration marker: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte("repos: [HemSoft/gh-x]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
+	if err != nil {
+		t.Fatalf("load repaired config: %v", err)
+	}
+	if loaded.Repos[0] != "HemSoft/gh-x" {
+		t.Fatalf("repaired repo = %q, want HemSoft/gh-x", loaded.Repos[0])
+	}
+}
+
+func TestParseMonitorMigrationRejectsInvalidData(t *testing.T) {
+	tests := []string{
+		"version: [broken",
+		"version: 2\nhost: github.com\n",
+		"version: 1\nhost: ''\n",
+	}
+	for _, input := range tests {
+		if _, err := parseMonitorMigration([]byte(input)); err == nil {
+			t.Fatalf("parseMonitorMigration(%q) succeeded", input)
+		}
+	}
+}
+
+func TestLoadMonitorConfigDoesNotRewriteNewMixedHostRepositories(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yml")
+	cfg := defaultMonitorConfig("")
+	cfg.Repos = []string{"HemSoft/gh-x", "ghe.example.com/Acme/Widgets"}
+	if err := saveMonitorConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com")
+	if err != nil {
+		t.Fatalf("load mixed-host config: %v", err)
+	}
+	if loaded.Repos[0] != "HemSoft/gh-x" || loaded.Repos[1] != "ghe.example.com/Acme/Widgets" {
+		t.Fatalf("new mixed-host config was rewritten: %v", loaded.Repos)
 	}
 }
 
@@ -86,6 +318,62 @@ func TestValidateMonitorConfigErrors(t *testing.T) {
 	badSection.PRSections[0].Filters = ""
 	if err := validateMonitorConfig(badSection); err == nil {
 		t.Fatal("expected section filter error")
+	}
+}
+
+func TestParseMonitorRepositoryNormalizesHostOwnerAndName(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  monitorRepository
+		label string
+	}{
+		{
+			name:  "github.com default",
+			input: " HemSoft/gh-x ",
+			want:  monitorRepository{Host: defaultGitHubHost, Owner: "HemSoft", Name: "gh-x"},
+			label: "HemSoft/gh-x",
+		},
+		{
+			name:  "explicit github.com",
+			input: "GitHub.COM/HemSoft/gh-x",
+			want:  monitorRepository{Host: defaultGitHubHost, Owner: "HemSoft", Name: "gh-x"},
+			label: "HemSoft/gh-x",
+		},
+		{
+			name:  "enterprise host",
+			input: "GHE.Example.COM./Acme/Widgets",
+			want:  monitorRepository{Host: "ghe.example.com", Owner: "Acme", Name: "Widgets"},
+			label: "ghe.example.com/Acme/Widgets",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseMonitorRepository(tc.input)
+			if err != nil {
+				t.Fatalf("parseMonitorRepository(%q): %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseMonitorRepository(%q) = %+v, want %+v", tc.input, got, tc.want)
+			}
+			if got.configValue() != tc.label {
+				t.Fatalf("configValue() = %q, want %q", got.configValue(), tc.label)
+			}
+		})
+	}
+}
+
+func TestNormalizeMonitorConfigCanonicalizesRepositories(t *testing.T) {
+	cfg := defaultMonitorConfig("")
+	cfg.Repos = []string{"GitHub.COM/HemSoft/gh-x", "GHE.Example.COM./Acme/Widgets"}
+	normalizeMonitorConfig(cfg)
+
+	want := []string{"HemSoft/gh-x", "ghe.example.com/Acme/Widgets"}
+	for i := range want {
+		if cfg.Repos[i] != want[i] {
+			t.Fatalf("Repos[%d] = %q, want %q", i, cfg.Repos[i], want[i])
+		}
 	}
 }
 
@@ -137,7 +425,7 @@ func TestSaveMonitorConfigRoundTrips(t *testing.T) {
 	if err := saveMonitorConfig(path, cfg); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	loaded, _, err := loadOrCreateMonitorConfig(path, "")
+	loaded, _, err := loadOrCreateMonitorConfig(path, "", defaultGitHubHost)
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}

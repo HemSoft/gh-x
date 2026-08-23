@@ -24,6 +24,9 @@ and this project uses semantic versioning.
 
 ### Fixed
 
+- Routed `gh x monitor` GraphQL requests by normalized GitHub host, so
+  Enterprise and mixed-host configurations use host-specific endpoints while
+  search qualifiers remain `OWNER/REPO`.
 - Added automatic multi-account fallback: when the active GitHub account
   cannot access the target repository, commands retry with another logged-in
   account's token via `GH_TOKEN` on the retried subprocess only, print a

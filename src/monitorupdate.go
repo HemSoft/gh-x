@@ -69,6 +69,7 @@ func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) 
 	m.refreshing = false
 	if msg.err != nil {
 		m.refreshErr = sanitizeMonitorError(msg.err)
+		m.refreshWarn = ""
 		m.backoff = nextMonitorBackoff(m.backoff)
 		return m, scheduleMonitorTick(m.backoff)
 	}
@@ -77,7 +78,10 @@ func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) 
 }
 
 func sanitizeMonitorError(err error) string {
-	text := err.Error()
+	return sanitizeMonitorMessage(err.Error())
+}
+
+func sanitizeMonitorMessage(text string) string {
 	const maxLen = 160
 	if len([]rune(text)) > maxLen {
 		text = string([]rune(text)[:maxLen]) + "…"
@@ -113,6 +117,7 @@ func (m *monitorModel) applyFetchResult(result *monitorFetchResult) {
 	m.addedKeys = addedKeysSet(changes)
 	m.lastRefresh = result.FetchedAt
 	m.refreshErr = ""
+	m.refreshWarn = sanitizeMonitorMessage(strings.Join(result.Warnings, "; "))
 	m.backoff = minimumMonitorInterval
 	m.clampSelections()
 }

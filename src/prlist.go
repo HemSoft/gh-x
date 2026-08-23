@@ -412,7 +412,9 @@ func enrichPullRequests(prs []pullRequest, supplemental map[int]prSupplementalIn
 	rendered := make([]displayPullRequest, 0, len(prs))
 	for _, pr := range prs {
 		dp := buildDisplayPullRequest(pr, now)
+		info, supplementalFound := supplemental[pr.Number]
 		applySupplementalInfo(&dp, supplemental, pr.Number, supplementalFailed)
+		applyAIReviewCheck(&dp, info, pr.StatusCheckRollup, supplementalFailed || !supplementalFound)
 		downgradeChecksIfMissing(&dp, requiredByBranch, pr.BaseRefName, pr.StatusCheckRollup)
 		rendered = append(rendered, dp)
 	}
@@ -435,6 +437,43 @@ func applySupplementalInfo(dp *displayPullRequest, supplemental map[int]prSupple
 	if dp.AIReview == "" {
 		dp.AIReview = "-"
 	}
+}
+
+var knownAIReviewChecks = map[string]bool{
+	"cubic · ai code reviewer": true,
+}
+
+func applyAIReviewCheck(dp *displayPullRequest, info prSupplementalInfo, checks []checkItem, supplementalUnavailable bool) {
+	if supplementalUnavailable {
+		return
+	}
+
+	switch detectAIReviewCheck(checks) {
+	case "fail":
+		dp.AIReview = "fail"
+		dp.AIClean = nil
+	case "pass":
+		if dp.AIReview == "-" && !info.HasUnresolvedAIThreads {
+			dp.AIReview = "pass"
+			dp.AIClean = boolPtr(true)
+		}
+	}
+}
+
+func detectAIReviewCheck(checks []checkItem) string {
+	for _, check := range latestCheckItems(checks) {
+		if check.Typename != "CheckRun" || !knownAIReviewChecks[strings.ToLower(strings.TrimSpace(check.Name))] {
+			continue
+		}
+
+		switch strings.ToUpper(check.Conclusion) {
+		case "SUCCESS":
+			return "pass"
+		case "FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED":
+			return "fail"
+		}
+	}
+	return "-"
 }
 
 func downgradeChecksIfMissing(dp *displayPullRequest, requiredByBranch map[string]map[string]bool, base string, checkItems []checkItem) {
@@ -822,10 +861,11 @@ type reviewThreadInfo struct {
 }
 
 type prSupplementalInfo struct {
-	Threads   reviewThreadInfo
-	AIReview  string
-	AIClean   bool
-	Approvals int
+	Threads                reviewThreadInfo
+	AIReview               string
+	AIClean                bool
+	HasUnresolvedAIThreads bool
+	Approvals              int
 }
 
 // aiReviewNode holds the fields needed to detect bot reviewer status.
@@ -1423,9 +1463,10 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			Total:    prData.ReviewThreads.TotalCount,
 			Resolved: countResolvedThreads(aiThreads),
 		},
-		AIReview:  aiReview,
-		AIClean:   aiClean,
-		Approvals: countUniqueApprovers(approverLogins),
+		AIReview:               aiReview,
+		AIClean:                aiClean,
+		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
+		Approvals:              countUniqueApprovers(approverLogins),
 	}, true
 }
 
