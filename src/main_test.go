@@ -2340,6 +2340,44 @@ func TestParseRequiredCheckRules(t *testing.T) {
 	}
 }
 
+func TestParseRequiredCheckRulesResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		expect map[string]bool
+		valid  bool
+	}{
+		{
+			name:   "valid required check",
+			input:  `[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"ci/build"}]}}]`,
+			expect: map[string]bool{"ci/build": true},
+			valid:  true,
+		},
+		{name: "valid empty array", input: `[]`, valid: true},
+		{name: "top-level null", input: `null`},
+		{name: "top-level object", input: `{}`},
+		{name: "null array entry", input: `[null]`},
+		{name: "scalar array entry", input: `[1]`},
+		{
+			name:  "invalid nested checks type",
+			input: `[{"type":"required_status_checks","parameters":{"required_status_checks":"invalid"}}]`,
+		},
+		{name: "malformed JSON", input: `[`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, valid := parseRequiredCheckRulesResult([]byte(tc.input))
+			if valid != tc.valid {
+				t.Fatalf("parseRequiredCheckRulesResult() valid = %v, want %v", valid, tc.valid)
+			}
+			if !reflect.DeepEqual(got, tc.expect) {
+				t.Fatalf("parseRequiredCheckRulesResult() = %v, want %v", got, tc.expect)
+			}
+		})
+	}
+}
+
 func TestParseRepoViewResponse(t *testing.T) {
 	tests := []struct {
 		name      string

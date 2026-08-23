@@ -4,9 +4,23 @@ import test from "node:test";
 import {
     createCodexAdapter,
     parseRollout,
+    projectNameFromCwd,
 } from "./codex-adapter.mjs";
 
 const now = () => new Date("2026-08-18T16:30:00.000Z");
+
+test("derives project names from Windows and POSIX paths", () => {
+    const cases = [
+        ["D:\\github\\HemSoft\\gh-x", "gh-x"],
+        ["/home/runner/work/gh-x", "gh-x"],
+        ["/home/runner/work/foo\\bar", "foo\\bar"],
+        ["team\\repo", "team\\repo"],
+    ];
+
+    for (const [cwd, expected] of cases) {
+        assert.equal(projectNameFromCwd(cwd), expected);
+    }
+});
 
 test("parses rollout usage, rate limits, tools, and active state evidence", async () => {
     const events = [

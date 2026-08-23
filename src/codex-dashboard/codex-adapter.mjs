@@ -60,7 +60,7 @@ export function createCodexAdapter({
                     sessions.push({
                         sessionId: thread.id,
                         status: active ? "active" : "idle",
-                        project: path.basename(thread.cwd) || thread.cwd,
+                        project: projectNameFromCwd(thread.cwd),
                         cwd: thread.cwd,
                         branch: thread.branch || "Unavailable",
                         summary: rollout.latestUserPrompt || thread.title || "Untitled session",
@@ -122,6 +122,12 @@ export function createCodexAdapter({
             }
         },
     };
+}
+
+export function projectNameFromCwd(cwd) {
+    const isWindowsPath = /^[A-Za-z]:[\\/]/.test(cwd) || cwd.startsWith("\\\\");
+    const parser = isWindowsPath ? path.win32 : path.posix;
+    return parser.basename(cwd) || cwd;
 }
 
 async function readThreads({
