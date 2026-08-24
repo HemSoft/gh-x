@@ -77,6 +77,21 @@ front for the same reason; in `--search`, only identity qualifiers (`author:`,
 `assignee:`, `mentions:`, `commenter:`, `involves:`, `review-requested:`,
 `reviewed-by:`) are expanded, leaving other query text untouched.
 
+## What `gh x issue list` adds
+
+The issue table keeps the standard filters and adds compact repository context:
+
+| Column | Description |
+|--------|-------------|
+| **#** | Issue number, linked to the issue on GitHub in terminals with OSC 8 support |
+| **PRs** | Pull requests linked through GitHub's issue-closing relationship. `-` means none and `?` means relationship data was unavailable |
+| **Title** | Truncated to 51 characters |
+| **Author** | Issue author login |
+| **State** | `open` or `closed` |
+| **Labels** | Comma-separated issue labels |
+| **Assignees** | Comma-separated assignee logins |
+| **Updated** | Relative update time |
+
 ## What `gh x status` adds
 
 `gh x status` starts with a repository health header for the resolved default
@@ -98,6 +113,7 @@ Compared to `gh pr list`, this command keeps all existing filters but renders a 
 | Column   | Description |
 |----------|-------------|
 | **#**    | PR number — clickable link to the PR on GitHub (terminals with OSC 8 support) |
+| **Issues** | Issues linked through GitHub's closing relationship. `-` means none and `?` means relationship data was unavailable |
 | **Title**| Truncated to 51 chars |
 | **Author**| PR author login |
 | **State**| `open`, `draft`, `closed`, or `merged` |

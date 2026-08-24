@@ -239,7 +239,7 @@ func TestResolveAuthorLogin_SearchReturnsNull(t *testing.T) {
 }
 
 func TestFetchPRSupplemental_Empty(t *testing.T) {
-	result, err := fetchPRSupplemental("owner", "repo", nil)
+	result, err := fetchPRSupplemental("owner", "repo", "github.com", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestFetchPRSupplemental_SingleBatch(t *testing.T) {
 	saved := fetchPRSupplementalBatchFunc
 	defer func() { fetchPRSupplementalBatchFunc = saved }()
 
-	fetchPRSupplementalBatchFunc = func(owner, name string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
 		result := make(map[int]prSupplementalInfo)
 		for _, n := range prNumbers {
 			result[n] = prSupplementalInfo{AIReview: "clean"}
@@ -260,7 +260,7 @@ func TestFetchPRSupplemental_SingleBatch(t *testing.T) {
 		return result, nil
 	}
 
-	result, err := fetchPRSupplemental("owner", "repo", []int{1, 2, 3})
+	result, err := fetchPRSupplemental("owner", "repo", "github.com", []int{1, 2, 3})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestFetchPRSupplemental_MultipleBatches(t *testing.T) {
 	defer func() { fetchPRSupplementalBatchFunc = saved }()
 
 	batchCalls := 0
-	fetchPRSupplementalBatchFunc = func(owner, name string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
 		batchCalls++
 		result := make(map[int]prSupplementalInfo)
 		for _, n := range prNumbers {
@@ -294,7 +294,7 @@ func TestFetchPRSupplemental_MultipleBatches(t *testing.T) {
 		prs[i] = i + 1
 	}
 
-	result, err := fetchPRSupplemental("owner", "repo", prs)
+	result, err := fetchPRSupplemental("owner", "repo", "github.com", prs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -310,11 +310,11 @@ func TestFetchPRSupplemental_BatchError(t *testing.T) {
 	saved := fetchPRSupplementalBatchFunc
 	defer func() { fetchPRSupplementalBatchFunc = saved }()
 
-	fetchPRSupplementalBatchFunc = func(owner, name string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
 		return nil, fmt.Errorf("graphql error")
 	}
 
-	_, err := fetchPRSupplemental("owner", "repo", []int{1, 2})
+	_, err := fetchPRSupplemental("owner", "repo", "github.com", []int{1, 2})
 	if err == nil || err.Error() != "graphql error" {
 		t.Fatalf("expected graphql error, got %v", err)
 	}
