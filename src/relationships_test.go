@@ -239,7 +239,7 @@ func TestParseIssueRelationships(t *testing.T) {
 	}{
 		{
 			name:    "valid and null nodes",
-			input:   `{"data":{"repository":{"issue1":{"number":1,"closedByPullRequestsReferences":{"totalCount":0,"nodes":[]}},"issue2":null,"issue3":{"number":3,"closedByPullRequestsReferences":null},"issue4":{"number":4,"closedByPullRequestsReferences":{"totalCount":2,"nodes":[{"number":8,"url":"https://example.test/8"}]}}}}}`,
+			input:   `{"data":{"repository":{"issue1":{"number":1,"closedByPullRequestsReferences":{"totalCount":0,"nodes":[]}},"issue2":null,"issue3":{"number":3,"closedByPullRequestsReferences":null},"issue4":{"number":4,"closedByPullRequestsReferences":{"totalCount":2,"nodes":[{"number":8,"url":"https://example.test/8"}]}},"issue5":{"number":5,"closedByPullRequestsReferences":{"nodes":[]}},"issue6":{"number":6,"closedByPullRequestsReferences":{"totalCount":null,"nodes":[]}}}}}`,
 			wantLen: 1,
 		},
 		{name: "empty repository", input: `{"data":{"repository":{}}}`, wantLen: 0},
@@ -297,21 +297,27 @@ func TestEnrichPullRequestsTreatsNullRelationshipConnectionAsUnavailable(t *test
 	}
 }
 
-func TestParsePRSupplementalNodeTreatsTruncatedRelationshipsAsUnavailable(t *testing.T) {
-	raw := json.RawMessage(`{
-		"number": 25,
-		"closingIssuesReferences": {
-			"totalCount": 2,
-			"nodes": [{"number": 18, "url": "https://example.test/18"}]
-		}
-	}`)
-
-	_, info, ok := parsePRSupplementalNode(raw)
-	if !ok {
-		t.Fatal("truncated relationship supplemental node should still parse")
+func TestParsePRSupplementalNodeTreatsIncompleteRelationshipsAsUnavailable(t *testing.T) {
+	tests := []struct {
+		name       string
+		connection string
+	}{
+		{name: "truncated", connection: `{"totalCount":2,"nodes":[{"number":18,"url":"https://example.test/18"}]}`},
+		{name: "missing count", connection: `{"nodes":[]}`},
+		{name: "null count", connection: `{"totalCount":null,"nodes":[]}`},
 	}
-	if info.ClosingIssuesAvailable || len(info.ClosingIssues) != 0 {
-		t.Fatalf("truncated relationships = available %t, refs %#v; want unavailable", info.ClosingIssuesAvailable, info.ClosingIssues)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw := json.RawMessage(`{"number":25,"closingIssuesReferences":` + test.connection + `}`)
+			_, info, ok := parsePRSupplementalNode(raw)
+			if !ok {
+				t.Fatal("incomplete relationship supplemental node should still parse")
+			}
+			if info.ClosingIssuesAvailable || len(info.ClosingIssues) != 0 {
+				t.Fatalf("incomplete relationships = available %t, refs %#v; want unavailable", info.ClosingIssuesAvailable, info.ClosingIssues)
+			}
+		})
 	}
 }
 

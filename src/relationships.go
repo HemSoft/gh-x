@@ -15,12 +15,12 @@ type linkedReference struct {
 }
 
 type linkedReferenceConnection struct {
-	TotalCount int               `json:"totalCount"`
+	TotalCount *int              `json:"totalCount"`
 	Nodes      []linkedReference `json:"nodes"`
 }
 
 func (c *linkedReferenceConnection) complete() bool {
-	return c != nil && c.TotalCount <= len(c.Nodes)
+	return c != nil && c.TotalCount != nil && *c.TotalCount <= len(c.Nodes)
 }
 
 func relationshipDisplay(refs []linkedReference, unavailable bool) (string, []linkedReference) {

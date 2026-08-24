@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -1186,6 +1187,9 @@ func decodeRequiredCheckRules(data []byte) (map[string]bool, error) {
 }
 
 func resolveRepo(repoOverride string) (string, string, error) {
+	if repoOverride == "" {
+		repoOverride = strings.TrimSpace(os.Getenv("GH_REPO"))
+	}
 	if repoOverride != "" {
 		parts := strings.Split(repoOverride, "/")
 		if len(parts) < 2 {

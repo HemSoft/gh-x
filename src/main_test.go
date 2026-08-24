@@ -1198,6 +1198,18 @@ func TestResolveRepoOverride(t *testing.T) {
 	}
 }
 
+func TestResolveRepoUsesGHRepo(t *testing.T) {
+	t.Setenv("GH_REPO", "ghe.example.com/env-owner/env-repo")
+
+	owner, name, err := resolveRepo("")
+	if err != nil {
+		t.Fatalf("resolveRepo returned error: %v", err)
+	}
+	if owner != "env-owner" || name != "env-repo" {
+		t.Fatalf("resolveRepo with GH_REPO = %s/%s, want env-owner/env-repo", owner, name)
+	}
+}
+
 func TestResolveAuthorLogin_NoSpace(t *testing.T) {
 	tests := []struct {
 		input string
