@@ -92,9 +92,9 @@ The issue table keeps the standard filters and adds compact repository context:
 | **Assignees** | Comma-separated assignee logins |
 | **Updated** | Relative update time |
 
-An empty, unfiltered open issue backlog prints one rotating celebration.
-State, search, author, assignee, milestone, and label filters keep the factual
-`No issues found.` message.
+An empty, unfiltered open issue backlog prints one randomly selected
+celebration from the shared pool. State, search, author, assignee, milestone,
+and label filters keep the factual `No issues found.` message.
 
 ## What `gh x status` adds
 
@@ -170,9 +170,9 @@ the table visible during transient refresh failures, and reports concise state
 changes below the table. It requires a terminal and cannot be combined with
 `--json` or `--web`.
 
-An empty, unfiltered open backlog prints one rotating celebration. Narrowed or
-historical queries keep the factual `No pull requests found.` message, and JSON
-output remains unchanged.
+An empty, unfiltered open backlog prints one randomly selected celebration from
+the shared pool. Narrowed or historical queries keep the factual
+`No pull requests found.` message, and JSON output remains unchanged.
 
 ## What `gh x pr me` adds
 
