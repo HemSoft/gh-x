@@ -717,7 +717,7 @@ func classifyCheckItem(item checkItem) (fail, pending bool) {
 	}
 	// CheckRun
 	switch strings.ToUpper(item.Conclusion) {
-	case "FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED":
+	case "FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "CANCELLED":
 		return true, false
 	case "":
 		// No conclusion yet — still running

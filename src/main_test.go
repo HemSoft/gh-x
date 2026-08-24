@@ -1970,6 +1970,7 @@ func TestClassifyCheckItem(t *testing.T) {
 		{"status expected", checkItem{Typename: "StatusContext", State: "EXPECTED"}, false, true},
 		{"status success", checkItem{Typename: "StatusContext", State: "SUCCESS"}, false, false},
 		{"check failure", checkItem{Typename: "CheckRun", Conclusion: "FAILURE"}, true, false},
+		{"check cancelled", checkItem{Typename: "CheckRun", Conclusion: "CANCELLED"}, true, false},
 		{"check timed_out", checkItem{Typename: "CheckRun", Conclusion: "TIMED_OUT"}, true, false},
 		{"check no conclusion", checkItem{Typename: "CheckRun", Conclusion: ""}, false, true},
 		{"check in_progress", checkItem{Typename: "CheckRun", Conclusion: "SUCCESS", Status: "IN_PROGRESS"}, false, true},
@@ -2107,6 +2108,14 @@ func TestNormalizeCheckStateDistinguishesReviewerOnlyWaits(t *testing.T) {
 			items: []checkItem{
 				passingCI,
 				{Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "FAILURE"},
+			},
+			want: "fail",
+		},
+		{
+			name: "cancelled non-review takes precedence",
+			items: []checkItem{
+				{Typename: "CheckRun", Name: "CI", Status: "COMPLETED", Conclusion: "CANCELLED"},
+				pendingReview,
 			},
 			want: "fail",
 		},
