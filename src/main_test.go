@@ -1503,6 +1503,13 @@ func TestDetectAIReviewCheck(t *testing.T) {
 			want: "fail",
 		},
 		{
+			name: "cancelled Cubic review",
+			checks: []checkItem{{
+				Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "CANCELLED",
+			}},
+			want: "fail",
+		},
+		{
 			name: "pending Cubic review",
 			checks: []checkItem{{
 				Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "IN_PROGRESS",
@@ -1542,6 +1549,9 @@ func TestApplyAIReviewCheckFailsClosed(t *testing.T) {
 	failure := []checkItem{{
 		Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "FAILURE",
 	}}
+	cancelled := []checkItem{{
+		Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "CANCELLED",
+	}}
 	tests := []struct {
 		name               string
 		display            displayPullRequest
@@ -1570,6 +1580,10 @@ func TestApplyAIReviewCheckFailsClosed(t *testing.T) {
 		{
 			name: "failed check clears prior clean state", display: displayPullRequest{AIReview: "pass", AIClean: boolPtr(true)},
 			info: prSupplementalInfo{Threads: reviewThreadInfo{}}, checks: failure, wantReview: "fail",
+		},
+		{
+			name: "cancelled check clears prior clean state", display: displayPullRequest{AIReview: "pass", AIClean: boolPtr(true)},
+			info: prSupplementalInfo{Threads: reviewThreadInfo{}}, checks: cancelled, wantReview: "fail",
 		},
 		{
 			name: "incomplete supplemental data", display: displayPullRequest{AIReview: "?"},
@@ -2118,6 +2132,14 @@ func TestNormalizeCheckStateDistinguishesReviewerOnlyWaits(t *testing.T) {
 				pendingReview,
 			},
 			want: "fail",
+		},
+		{
+			name: "skipped non-review blocks reviewer-only state",
+			items: []checkItem{
+				{Typename: "CheckRun", Name: "Optional CI", Status: "COMPLETED", Conclusion: "SKIPPED"},
+				pendingReview,
+			},
+			want: "pending",
 		},
 		{
 			name: "unrecognized review-like name remains pending",

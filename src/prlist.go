@@ -481,7 +481,7 @@ func detectAIReviewCheck(checks []checkItem) string {
 		switch strings.ToUpper(check.Conclusion) {
 		case "SUCCESS":
 			return "pass"
-		case "FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED":
+		case "FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "CANCELLED":
 			return "fail"
 		}
 	}
@@ -743,29 +743,49 @@ func normalizeCheckState(items []checkItem) string {
 		return "-"
 	}
 
-	hasFail := false
-	hasPending := false
-	hasPendingReview := false
-	for _, item := range latestCheckItems(items) {
-		f, p := classifyCheckItem(item)
-		hasFail = hasFail || f
-		if p && isKnownAIReviewCheck(item) {
-			hasPendingReview = true
-		} else {
-			hasPending = hasPending || p
-		}
-	}
+	summary := summarizeCheckState(items)
 
 	switch {
-	case hasFail:
+	case summary.hasFail:
 		return "fail"
-	case hasPending:
+	case summary.hasPending:
 		return "pending"
-	case hasPendingReview:
+	case summary.hasPendingReview && summary.blocksReview:
+		return "pending"
+	case summary.hasPendingReview:
 		return "review"
 	default:
 		return "pass"
 	}
+}
+
+type checkStateSummary struct {
+	hasFail          bool
+	hasPending       bool
+	hasPendingReview bool
+	blocksReview     bool
+}
+
+func summarizeCheckState(items []checkItem) checkStateSummary {
+	var summary checkStateSummary
+	for _, item := range latestCheckItems(items) {
+		f, p := classifyCheckItem(item)
+		summary.hasFail = summary.hasFail || f
+		if isKnownAIReviewCheck(item) {
+			summary.hasPendingReview = summary.hasPendingReview || p
+			continue
+		}
+		summary.hasPending = summary.hasPending || p
+		summary.blocksReview = summary.blocksReview || (!f && !p && !checkItemPassed(item))
+	}
+	return summary
+}
+
+func checkItemPassed(item checkItem) bool {
+	if item.Typename == "StatusContext" {
+		return strings.EqualFold(item.State, "SUCCESS")
+	}
+	return strings.EqualFold(item.Conclusion, "SUCCESS")
 }
 
 // latestCheckItems collapses repeated check contexts from reruns so stale
