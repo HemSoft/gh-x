@@ -580,7 +580,11 @@ func renderTable(stdout io.Writer, options listOptions, pullRequests []displayPu
 
 func renderTableWithStyle(stdout io.Writer, options listOptions, pullRequests []displayPullRequest, colorEnabled bool) error {
 	if len(pullRequests) == 0 {
-		fmt.Fprintln(stdout, "No pull requests found.")
+		if isOpenPullRequestBacklog(options) {
+			writeBacklogPraise(stdout)
+		} else {
+			fmt.Fprintln(stdout, "No pull requests found.")
+		}
 		return nil
 	}
 
