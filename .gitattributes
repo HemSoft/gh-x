@@ -1,1 +1,7 @@
 .github/workflows/*.lock.yml linguist-generated=true
+
+# Keep Go inputs stable across Windows and Unix checkouts.
+*.go text eol=lf
+*.sh text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
