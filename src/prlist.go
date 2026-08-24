@@ -159,7 +159,7 @@ func (s tableStyler) reviewCell(review string) tableCell {
 
 func (s tableStyler) checksCell(checks string) tableCell {
 	switch checks {
-	case "pass":
+	case "pass", "review":
 		return s.colored(checks, termenv.ANSIGreen)
 	case "fail":
 		return s.colored(checks, termenv.ANSIRed)
@@ -450,6 +450,11 @@ var knownAIReviewChecks = map[string]bool{
 	"cubic · ai code reviewer": true,
 }
 
+func isKnownAIReviewCheck(check checkItem) bool {
+	return check.Typename == "CheckRun" &&
+		knownAIReviewChecks[strings.ToLower(strings.TrimSpace(check.Name))]
+}
+
 func applyAIReviewCheck(dp *displayPullRequest, info prSupplementalInfo, checks []checkItem, supplementalUnavailable bool) {
 	if supplementalUnavailable {
 		return
@@ -469,7 +474,7 @@ func applyAIReviewCheck(dp *displayPullRequest, info prSupplementalInfo, checks 
 
 func detectAIReviewCheck(checks []checkItem) string {
 	for _, check := range latestCheckItems(checks) {
-		if check.Typename != "CheckRun" || !knownAIReviewChecks[strings.ToLower(strings.TrimSpace(check.Name))] {
+		if !isKnownAIReviewCheck(check) {
 			continue
 		}
 
@@ -484,7 +489,7 @@ func detectAIReviewCheck(checks []checkItem) string {
 }
 
 func downgradeChecksIfMissing(dp *displayPullRequest, requiredByBranch map[string]map[string]bool, base string, checkItems []checkItem) {
-	if dp.Checks != "pass" {
+	if dp.Checks != "pass" && dp.Checks != "review" {
 		return
 	}
 	required, ok := requiredByBranch[base]
@@ -740,10 +745,15 @@ func normalizeCheckState(items []checkItem) string {
 
 	hasFail := false
 	hasPending := false
+	hasPendingReview := false
 	for _, item := range latestCheckItems(items) {
 		f, p := classifyCheckItem(item)
 		hasFail = hasFail || f
-		hasPending = hasPending || p
+		if p && isKnownAIReviewCheck(item) {
+			hasPendingReview = true
+		} else {
+			hasPending = hasPending || p
+		}
 	}
 
 	switch {
@@ -751,6 +761,8 @@ func normalizeCheckState(items []checkItem) string {
 		return "fail"
 	case hasPending:
 		return "pending"
+	case hasPendingReview:
+		return "review"
 	default:
 		return "pass"
 	}

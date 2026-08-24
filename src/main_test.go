@@ -1374,6 +1374,31 @@ func TestDowngradeChecksIfMissing(t *testing.T) {
 		}
 	})
 
+	t.Run("review with missing required becomes pending", func(t *testing.T) {
+		dp := displayPullRequest{Checks: "review"}
+		items := []checkItem{
+			{Typename: "CheckRun", Name: "ci/test"},
+			{Typename: "CheckRun", Name: "cubic · AI code reviewer"},
+		}
+		downgradeChecksIfMissing(&dp, required, "main", items)
+		if dp.Checks != "pending" {
+			t.Fatalf("expected 'pending', got %q", dp.Checks)
+		}
+	})
+
+	t.Run("review with all required stays review", func(t *testing.T) {
+		dp := displayPullRequest{Checks: "review"}
+		items := []checkItem{
+			{Typename: "CheckRun", Name: "ci/test"},
+			{Typename: "CheckRun", Name: "ci/lint"},
+			{Typename: "CheckRun", Name: "cubic · AI code reviewer"},
+		}
+		downgradeChecksIfMissing(&dp, required, "main", items)
+		if dp.Checks != "review" {
+			t.Fatalf("expected 'review', got %q", dp.Checks)
+		}
+	})
+
 	t.Run("no required for branch stays pass", func(t *testing.T) {
 		dp := displayPullRequest{Checks: "pass"}
 		downgradeChecksIfMissing(&dp, required, "develop", nil)
@@ -2047,6 +2072,80 @@ func TestNormalizeCheckStateUsesLatestNamedCheckRun(t *testing.T) {
 	}
 }
 
+func TestNormalizeCheckStateDistinguishesReviewerOnlyWaits(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	passingCI := checkItem{Typename: "CheckRun", Name: "CI", Status: "COMPLETED", Conclusion: "SUCCESS"}
+	pendingReview := checkItem{Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "IN_PROGRESS"}
+	tests := []struct {
+		name  string
+		items []checkItem
+		want  string
+	}{
+		{
+			name:  "only recognized reviewer is pending",
+			items: []checkItem{passingCI, pendingReview},
+			want:  "review",
+		},
+		{
+			name: "queued recognized reviewer",
+			items: []checkItem{
+				passingCI,
+				{Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "QUEUED"},
+			},
+			want: "review",
+		},
+		{
+			name: "pending non-review takes precedence",
+			items: []checkItem{
+				{Typename: "CheckRun", Name: "CI", Status: "IN_PROGRESS"},
+				pendingReview,
+			},
+			want: "pending",
+		},
+		{
+			name: "failed reviewer takes precedence",
+			items: []checkItem{
+				passingCI,
+				{Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "FAILURE"},
+			},
+			want: "fail",
+		},
+		{
+			name: "unrecognized review-like name remains pending",
+			items: []checkItem{
+				passingCI,
+				{Typename: "CheckRun", Name: "AI review preview", Status: "IN_PROGRESS"},
+			},
+			want: "pending",
+		},
+		{
+			name: "status context with recognized name remains pending",
+			items: []checkItem{
+				passingCI,
+				{Typename: "StatusContext", Context: "cubic · AI code reviewer", State: "EXPECTED"},
+			},
+			want: "pending",
+		},
+		{
+			name: "latest reviewer rerun wins",
+			items: []checkItem{
+				passingCI,
+				{Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "COMPLETED", Conclusion: "FAILURE", StartedAt: now.Add(-time.Minute)},
+				{Typename: "CheckRun", Name: "cubic · AI code reviewer", Status: "IN_PROGRESS", StartedAt: now},
+			},
+			want: "review",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeCheckState(tc.items); got != tc.want {
+				t.Fatalf("normalizeCheckState() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCountResolvedThreads(t *testing.T) {
 	threads := []aiReviewThread{
 		{IsResolved: true},
@@ -2426,11 +2525,20 @@ func TestReviewCellAllDecisions(t *testing.T) {
 func TestChecksCellAllStates(t *testing.T) {
 	var buf bytes.Buffer
 	styler := newTableStyler(&buf, false)
-	for _, state := range []string{"pass", "fail", "pending", "merge", "-"} {
+	for _, state := range []string{"pass", "review", "fail", "pending", "merge", "-"} {
 		cell := styler.checksCell(state)
 		if cell.text != state {
 			t.Fatalf("checksCell(%q).text = %q", state, cell.text)
 		}
+	}
+}
+
+func TestChecksCellReviewIsGreen(t *testing.T) {
+	styler := newTableStyler(bytes.NewBuffer(nil), true)
+	got := styler.checksCell("review")
+	want := styler.colored("review", termenv.ANSIGreen)
+	if got.styled != want.styled {
+		t.Fatalf("checksCell(\"review\").styled = %q, want green %q", got.styled, want.styled)
 	}
 }
 
