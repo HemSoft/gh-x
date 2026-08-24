@@ -89,6 +89,7 @@ func resolveCommand(name string) subcommand {
 		{"-v", false, func(_ []string, out, _ io.Writer) error { return runVersion(out) }},
 		{"--version", false, func(_ []string, out, _ io.Writer) error { return runVersion(out) }},
 		{"status", true, runStatus},
+		{"s", true, runStatus},
 		{"changelog", true, runChangelog},
 		{"pr", true, runPr},
 		{"run", true, runRunCmd},
@@ -543,7 +544,7 @@ Usage:
   gh x <command> [flags]
 
 Available Commands:
-  status     Show repository health, issues, and pull requests
+  status     Show repository health, issues, and pull requests (alias: s)
   changelog  Show release notes for recent versions
   pr         Pull request commands (list, me, atm, review, changelog)
   issue      Issue commands (list)
@@ -555,6 +556,7 @@ Available Commands:
 
 Examples:
   gh x status
+  gh x s
   gh x changelog
   gh x changelog 3
   gh x pr list

@@ -412,19 +412,55 @@ func TestRenderStatusEmptyAndUnavailableSections(t *testing.T) {
 	})
 }
 
-func TestRunStatusUsesFetcher(t *testing.T) {
+func TestRunStatusAliasesUseFetcher(t *testing.T) {
 	defer saveStatusFuncs()()
 	fetchStatusDashboardFunc = func() (statusDashboard, error) {
 		return statusDashboard{Repository: "owner/repo"}, nil
 	}
 
-	var stdout, stderr bytes.Buffer
-	_, err := run([]string{"status"}, &stdout, &stderr)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{name: "full command", command: "status"},
+		{name: "short alias", command: "s"},
 	}
-	if !strings.Contains(stdout.String(), "owner/repo") || !strings.Contains(stdout.String(), "No open issues.") {
-		t.Fatalf("unexpected status output: %q", stdout.String())
+
+	outputs := make(map[string]string, len(tests))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			_, err := run([]string{tc.command}, &stdout, &stderr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(stdout.String(), "owner/repo") || !strings.Contains(stdout.String(), "No open issues.") {
+				t.Fatalf("unexpected status output: %q", stdout.String())
+			}
+			outputs[tc.command] = stdout.String() + stderr.String()
+		})
+	}
+
+	if outputs["s"] != outputs["status"] {
+		t.Fatalf("status alias output differs\nstatus: %q\nalias:  %q", outputs["status"], outputs["s"])
+	}
+}
+
+func TestRootUsageMentionsStatusAlias(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "command listing", want: "status     Show repository health, issues, and pull requests (alias: s)"},
+		{name: "example", want: "gh x s"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(rootUsage, tc.want) {
+				t.Fatalf("root usage should contain %q", tc.want)
+			}
+		})
 	}
 }
 
