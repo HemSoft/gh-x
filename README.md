@@ -30,6 +30,7 @@ gh x pr me [flags]      # all your open PRs (authored + assigned) across an org
 gh x pr atm [flags]     # org-wide PRs needing your attention
 gh x pr review [number] # read-only agentic PR review
 gh x pr changelog       # show release notes for recent versions
+gh x monitor            # full-terminal multi-repository PR and issue dashboard
 gh x status             # repository, branch, worktree, issue, and PR health
 gh x run list [flags]   # workflow runs with clickable IDs
 gh x version            # show version and check for updates (also: --version, -v)
@@ -148,9 +149,6 @@ Compared to `gh pr list`, this command keeps all existing filters but renders a 
 | `-d, --draft` | Show only draft PRs |
 | `-w, --web` | Open in browser |
 | `--json` | Output as JSON |
-| `--watch` | Refresh the table until `Esc` or `Ctrl+C` |
-| `--monitor` | Alias for `--watch` |
-| `--interval DUR` | Refresh interval for watch mode (default: `30s`) |
 
 ### Examples
 
@@ -161,18 +159,88 @@ gh x pr list --repo owner/repo --limit 10
 gh x pr list --label bug --label urgent
 gh x pr list --search "review:required status:success"
 gh x pr list --json
-gh x pr list --watch
-gh x pr list --monitor --interval 45s
 ```
-
-Watch mode is an interactive, read-only view. It reruns the same query, keeps
-the table visible during transient refresh failures, and reports concise state
-changes below the table. It requires a terminal and cannot be combined with
-`--json` or `--web`.
 
 An empty, unfiltered open backlog prints one randomly selected celebration from
 the shared pool. Narrowed or historical queries keep the factual
 `No pull requests found.` message, and JSON output remains unchanged.
+
+## What `gh x monitor` adds
+
+`gh x monitor` is an interactive, read-only dashboard for pull requests and
+issues across multiple repositories. The sidebar selects a repository, the top
+tabs switch between pull requests and issues, configurable sections apply
+GitHub search filters, and the detail pane shows the selected item's body.
+
+```bash
+gh x monitor                 # launch the dashboard
+gh x m                       # short alias
+gh x monitor --print-query   # print the host-specific GraphQL query and exit
+```
+
+The first launch creates `config.yml` in the operating system's user config
+directory. When possible, it seeds `repos` with the repository in the current
+working directory.
+
+| Platform | Configuration file |
+| --- | --- |
+| Windows | `%AppData%\gh-x\config.yml` |
+| macOS | `~/Library/Application Support/gh-x/config.yml` |
+| Linux and other Unix systems | `${XDG_CONFIG_HOME:-$HOME/.config}/gh-x/config.yml` |
+
+The repository's `src/cfg.yml` is development data and is not read by
+`gh x monitor` in production.
+
+### Monitor configuration
+
+```yaml
+version: 1
+
+repos:
+  - HemSoft/gh-x
+  - ghe.example.com/acme/platform
+
+defaults:
+  limit: 30
+  interval: 10m
+
+prSections:
+  - title: "Mine"
+    filters: "is:open author:@me"
+  - title: "Review requests"
+    filters: "is:open review-requested:@me"
+    limit: 20
+  - title: "All open"
+    filters: "is:open"
+
+issueSections:
+  - title: "Assigned to me"
+    filters: "is:open assignee:@me"
+  - title: "All open"
+    filters: "is:open"
+```
+
+| Field | Meaning |
+| --- | --- |
+| `version` | Configuration schema version. The current value is `1`. |
+| `repos` | One or more `OWNER/REPO` entries. Use `HOST/OWNER/REPO` for GitHub Enterprise Server. |
+| `defaults.limit` | Default rows fetched per section, from 1 to 100. The generated default is 30. |
+| `defaults.interval` | Auto-refresh cadence as a Go duration, from `10s` to `6h`. The generated default is `10m`. |
+| `prSections` | Pull request sub-tabs. Each entry needs `title` and `filters`; optional `limit` from 1 to 100 overrides the default. |
+| `issueSections` | Issue sub-tabs with the same `title`, `filters`, and optional `limit` fields. |
+
+Section filters use GitHub search syntax. The monitor adds each configured
+repository automatically, so section filters must not include `repo:`
+qualifiers. GitHub.com repositories use the compact `OWNER/REPO` form.
+Enterprise repositories keep their host prefix and are queried through that
+host's authenticated `gh` account. If either section list is empty or omitted,
+the monitor restores its generated default sections.
+
+Press `s` to edit repositories, the default row limit, and the refresh interval
+inside the dashboard. Press `e` to edit the complete YAML file with `$VISUAL`,
+then `$EDITOR`, or the platform default editor. The monitor reloads the file
+when the editor exits. A separate `state.json` in the same directory remembers
+the selected tab, section, and repository; it is not a configuration source.
 
 ## What `gh x pr me` adds
 
@@ -428,17 +496,20 @@ Neither route is exposed to the LAN or public internet. The hub reads Codex stat
 
 ## Releases
 
-Every push to `main` that includes code changes automatically creates
-a new patch release with prebuilt binaries for all platforms.
-Documentation-only changes are skipped.
+Every qualifying push to `main` runs the reusable CI quality workflow. After
+all gates pass, the release workflow reads the latest commit subject and
+chooses the next semantic version:
 
-For major or minor version bumps, tag manually:
+- Subjects using `type!:` or `type(scope)!:`, and subjects containing
+  `BREAKING CHANGE` or `BREAKING-CHANGE`, produce a major release.
+- `feat:` and scoped `feat(scope):` subjects produce a minor release.
+- Every other subject produces a patch release.
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+The workflow skips a commit that already has a semantic-version tag. Changes
+limited to Markdown, `.agents/**`, or `LICENSE` do not start a release. Each
+created release includes prebuilt binaries for the supported operating systems
+and architectures.
 
 ## License
 
-MIT
+[MIT](LICENSE)
