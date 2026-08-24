@@ -307,7 +307,11 @@ func (s tableStyler) issueStateCell(state string) tableCell {
 
 func renderIssueTable(stdout io.Writer, issues []displayIssue, options issueListOptions, colorEnabled bool) error {
 	if len(issues) == 0 {
-		fmt.Fprintln(stdout, "No issues found.")
+		if isOpenIssueBacklog(options) {
+			writeBacklogPraise(stdout)
+		} else {
+			fmt.Fprintln(stdout, "No issues found.")
+		}
 		return nil
 	}
 

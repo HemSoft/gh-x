@@ -388,13 +388,14 @@ func TestRenderStatusColorHasLinksButNoClipboard(t *testing.T) {
 }
 
 func TestRenderStatusEmptyAndUnavailableSections(t *testing.T) {
+	useBacklogPraiseIndex(t, 0)
 	t.Run("empty", func(t *testing.T) {
 		var buf bytes.Buffer
 		if err := renderStatus(&buf, statusDashboard{}, false); err != nil {
 			t.Fatal(err)
 		}
 		output := buf.String()
-		if !strings.Contains(output, "No open issues.") || !strings.Contains(output, "No open pull requests.") {
+		if strings.Count(output, backlogPraises[0]) != 2 {
 			t.Fatalf("missing empty states:\n%s", output)
 		}
 	})
@@ -413,6 +414,7 @@ func TestRenderStatusEmptyAndUnavailableSections(t *testing.T) {
 }
 
 func TestRunStatusAliasesUseFetcher(t *testing.T) {
+	useBacklogPraiseIndex(t, 0)
 	defer saveStatusFuncs()()
 	fetchStatusDashboardFunc = func() (statusDashboard, error) {
 		return statusDashboard{Repository: "owner/repo"}, nil
@@ -434,7 +436,7 @@ func TestRunStatusAliasesUseFetcher(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(stdout.String(), "owner/repo") || !strings.Contains(stdout.String(), "No open issues.") {
+			if !strings.Contains(stdout.String(), "owner/repo") || !strings.Contains(stdout.String(), backlogPraises[0]) {
 				t.Fatalf("unexpected status output: %q", stdout.String())
 			}
 			outputs[tc.command] = stdout.String() + stderr.String()

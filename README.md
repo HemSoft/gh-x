@@ -92,6 +92,10 @@ The issue table keeps the standard filters and adds compact repository context:
 | **Assignees** | Comma-separated assignee logins |
 | **Updated** | Relative update time |
 
+An empty, unfiltered open issue backlog prints one rotating celebration.
+State, search, author, assignee, milestone, and label filters keep the factual
+`No issues found.` message.
+
 ## What `gh x status` adds
 
 `gh x status` starts with a repository health header for the resolved default
@@ -105,6 +109,8 @@ the command never deletes or prunes a worktree.
 
 Open issues and enriched open pull requests appear in separate tables below the
 header. Local Git status still renders when GitHub data is unavailable.
+When either unfiltered open-work section is empty, it prints one randomly
+selected celebration from the same pool used by the list commands.
 
 ## What `gh x pr list` adds
 
@@ -163,6 +169,10 @@ Watch mode is an interactive, read-only view. It reruns the same query, keeps
 the table visible during transient refresh failures, and reports concise state
 changes below the table. It requires a terminal and cannot be combined with
 `--json` or `--web`.
+
+An empty, unfiltered open backlog prints one rotating celebration. Narrowed or
+historical queries keep the factual `No pull requests found.` message, and JSON
+output remains unchanged.
 
 ## What `gh x pr me` adds
 

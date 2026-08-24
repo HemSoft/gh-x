@@ -599,6 +599,7 @@ func TestExecuteIssueListFetchError(t *testing.T) {
 }
 
 func TestExecuteIssueListEmpty(t *testing.T) {
+	useBacklogPraiseIndex(t, 0)
 	origFetch := fetchIssuesFunc
 	defer func() { fetchIssuesFunc = origFetch }()
 
@@ -611,8 +612,8 @@ func TestExecuteIssueListEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(buf.String(), "No issues found.") {
-		t.Fatalf("expected empty message, got %q", buf.String())
+	if !strings.Contains(buf.String(), backlogPraises[0]) {
+		t.Fatalf("expected backlog praise, got %q", buf.String())
 	}
 }
 

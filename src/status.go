@@ -802,7 +802,7 @@ func renderStatusIssueSection(stdout io.Writer, styler tableStyler, dashboard st
 	}
 	fmt.Fprintf(stdout, "Open issues (%s)\n", statusSectionCount(len(dashboard.Issues)))
 	if len(dashboard.Issues) == 0 {
-		fmt.Fprintln(stdout, "No open issues.")
+		writeBacklogPraise(stdout)
 		return nil
 	}
 	if err := renderIssueRows(stdout, dashboard.Issues, styler.colorEnabled); err != nil {
@@ -823,7 +823,7 @@ func renderStatusPullRequestSection(stdout io.Writer, styler tableStyler, dashbo
 	}
 	fmt.Fprintf(stdout, "Open pull requests (%s)\n", statusSectionCount(len(dashboard.PullRequests)))
 	if len(dashboard.PullRequests) == 0 {
-		fmt.Fprintln(stdout, "No open pull requests.")
+		writeBacklogPraise(stdout)
 		return nil
 	}
 	if err := renderPullRequestRows(stdout, dashboard.PullRequests, styler.colorEnabled); err != nil {
