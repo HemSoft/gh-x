@@ -21,15 +21,16 @@ func TestRelationshipDisplay(t *testing.T) {
 		{name: "unavailable", unavailable: true, wantText: "?"},
 		{name: "none", wantText: "-"},
 		{
-			name: "sorted unique references",
+			name: "sorted unique references preserve cross-repository numbers",
 			refs: []linkedReference{
-				{Number: 21, URL: "https://example.test/21"},
+				{Number: 21, URL: "https://example.test/repo-a/21"},
 				{Number: 3, URL: "https://example.test/3"},
-				{Number: 21, URL: "https://example.test/duplicate"},
+				{Number: 21, URL: "https://example.test/repo-a/21"},
+				{Number: 21, URL: "https://example.test/repo-b/21"},
 				{Number: 0, URL: "https://example.test/invalid"},
 			},
-			wantText:    "#3, #21",
-			wantNumbers: []int{3, 21},
+			wantText:    "#3, #21, #21",
+			wantNumbers: []int{3, 21, 21},
 		},
 	}
 
@@ -176,7 +177,7 @@ func TestFetchIssueRelationshipsBatchUsesOneGraphQLRequest(t *testing.T) {
 	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 		calls++
 		captured = strings.Join(args, " ")
-		response := `{"data":{"repository":{"issue7":{"number":7,"closedByPullRequestsReferences":{"nodes":[{"number":25,"url":"https://github.com/owner/repo/pull/25"}]}},"issue9":{"number":9,"closedByPullRequestsReferences":{"nodes":[]}}}}}`
+		response := `{"data":{"repository":{"issue7":{"number":7,"closedByPullRequestsReferences":{"totalCount":1,"nodes":[{"number":25,"url":"https://github.com/owner/repo/pull/25"}]}},"issue9":{"number":9,"closedByPullRequestsReferences":{"totalCount":0,"nodes":[]}}}}}`
 		return *bytes.NewBufferString(response), bytes.Buffer{}, nil
 	}
 
@@ -187,7 +188,7 @@ func TestFetchIssueRelationshipsBatchUsesOneGraphQLRequest(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("GraphQL calls = %d, want 1", calls)
 	}
-	for _, want := range []string{"--hostname ghe.example.com", "issue7: issue(number: 7)", "issue9: issue(number: 9)"} {
+	for _, want := range []string{"--hostname ghe.example.com", "issue7: issue(number: 7)", "issue9: issue(number: 9)", "totalCount nodes"} {
 		if !strings.Contains(captured, want) {
 			t.Fatalf("GraphQL request missing %q: %s", want, captured)
 		}
@@ -207,7 +208,7 @@ func TestFetchPRSupplementalBatchIncludesClosingIssuesAndHost(t *testing.T) {
 	var captured string
 	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 		captured = strings.Join(args, " ")
-		response := `{"data":{"repository":{"pr25":{"number":25,"headRefOid":"abc","closingIssuesReferences":{"nodes":[{"number":18,"url":"https://github.com/owner/repo/issues/18"}]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`
+		response := `{"data":{"repository":{"pr25":{"number":25,"headRefOid":"abc","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":18,"url":"https://github.com/owner/repo/issues/18"}]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`
 		return *bytes.NewBufferString(response), bytes.Buffer{}, nil
 	}
 
@@ -215,7 +216,7 @@ func TestFetchPRSupplementalBatchIncludesClosingIssuesAndHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchPRSupplementalBatch returned error: %v", err)
 	}
-	for _, want := range []string{"--hostname ghe.example.com", "closingIssuesReferences(first: 100)"} {
+	for _, want := range []string{"--hostname ghe.example.com", "closingIssuesReferences(first: 100) { totalCount"} {
 		if !strings.Contains(captured, want) {
 			t.Fatalf("PR GraphQL request missing %q: %s", want, captured)
 		}
@@ -238,7 +239,7 @@ func TestParseIssueRelationships(t *testing.T) {
 	}{
 		{
 			name:    "valid and null nodes",
-			input:   `{"data":{"repository":{"issue1":{"number":1,"closedByPullRequestsReferences":{"nodes":[]}},"issue2":null,"issue3":{"number":3,"closedByPullRequestsReferences":null}}}}`,
+			input:   `{"data":{"repository":{"issue1":{"number":1,"closedByPullRequestsReferences":{"totalCount":0,"nodes":[]}},"issue2":null,"issue3":{"number":3,"closedByPullRequestsReferences":null},"issue4":{"number":4,"closedByPullRequestsReferences":{"totalCount":2,"nodes":[{"number":8,"url":"https://example.test/8"}]}}}}}`,
 			wantLen: 1,
 		},
 		{name: "empty repository", input: `{"data":{"repository":{}}}`, wantLen: 0},
@@ -293,6 +294,24 @@ func TestEnrichPullRequestsTreatsNullRelationshipConnectionAsUnavailable(t *test
 	rendered := enrichPullRequests(prs, supplemental, false, nil, time.Time{})
 	if rendered[0].Issues != "?" {
 		t.Fatalf("null relationship connection Issues = %q, want ?", rendered[0].Issues)
+	}
+}
+
+func TestParsePRSupplementalNodeTreatsTruncatedRelationshipsAsUnavailable(t *testing.T) {
+	raw := json.RawMessage(`{
+		"number": 25,
+		"closingIssuesReferences": {
+			"totalCount": 2,
+			"nodes": [{"number": 18, "url": "https://example.test/18"}]
+		}
+	}`)
+
+	_, info, ok := parsePRSupplementalNode(raw)
+	if !ok {
+		t.Fatal("truncated relationship supplemental node should still parse")
+	}
+	if info.ClosingIssuesAvailable || len(info.ClosingIssues) != 0 {
+		t.Fatalf("truncated relationships = available %t, refs %#v; want unavailable", info.ClosingIssuesAvailable, info.ClosingIssues)
 	}
 }
 

@@ -14,6 +14,15 @@ type linkedReference struct {
 	URL    string `json:"url"`
 }
 
+type linkedReferenceConnection struct {
+	TotalCount int               `json:"totalCount"`
+	Nodes      []linkedReference `json:"nodes"`
+}
+
+func (c *linkedReferenceConnection) complete() bool {
+	return c != nil && c.TotalCount <= len(c.Nodes)
+}
+
 func relationshipDisplay(refs []linkedReference, unavailable bool) (string, []linkedReference) {
 	if unavailable {
 		return "?", nil
@@ -33,16 +42,26 @@ func relationshipDisplay(refs []linkedReference, unavailable bool) (string, []li
 
 func normalizeLinkedReferences(refs []linkedReference) []linkedReference {
 	normalized := make([]linkedReference, 0, len(refs))
-	seen := make(map[int]bool, len(refs))
+	seen := make(map[string]bool, len(refs))
 	for _, ref := range refs {
-		if ref.Number <= 0 || seen[ref.Number] {
+		if ref.Number <= 0 {
 			continue
 		}
-		seen[ref.Number] = true
+		key := ref.URL
+		if key == "" {
+			key = fmt.Sprintf("#%d", ref.Number)
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		normalized = append(normalized, ref)
 	}
 	sort.Slice(normalized, func(i, j int) bool {
-		return normalized[i].Number < normalized[j].Number
+		if normalized[i].Number != normalized[j].Number {
+			return normalized[i].Number < normalized[j].Number
+		}
+		return normalized[i].URL < normalized[j].URL
 	})
 	return normalized
 }
@@ -125,7 +144,7 @@ func fetchIssueRelationshipsBatch(owner, name, host string, issueNumbers []int) 
 	queryParts := make([]string, 0, len(issueNumbers))
 	for _, number := range issueNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`issue%d: issue(number: %d) { number closedByPullRequestsReferences(first: 100) { nodes { number url } } }`,
+			`issue%d: issue(number: %d) { number closedByPullRequestsReferences(first: 100) { totalCount nodes { number url } } }`,
 			number, number,
 		))
 	}
@@ -153,12 +172,10 @@ func parseIssueRelationships(data []byte) (map[int][]linkedReference, error) {
 	result := make(map[int][]linkedReference)
 	for _, raw := range response.Data.Repository {
 		var issue struct {
-			Number                         int `json:"number"`
-			ClosedByPullRequestsReferences *struct {
-				Nodes []linkedReference `json:"nodes"`
-			} `json:"closedByPullRequestsReferences"`
+			Number                         int                        `json:"number"`
+			ClosedByPullRequestsReferences *linkedReferenceConnection `json:"closedByPullRequestsReferences"`
 		}
-		if err := json.Unmarshal(raw, &issue); err != nil || issue.Number <= 0 || issue.ClosedByPullRequestsReferences == nil {
+		if err := json.Unmarshal(raw, &issue); err != nil || issue.Number <= 0 || !issue.ClosedByPullRequestsReferences.complete() {
 			continue
 		}
 		result[issue.Number] = issue.ClosedByPullRequestsReferences.Nodes

@@ -1311,7 +1311,7 @@ func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[in
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`pr%d: pullRequest(number: %d) { number headRefOid closingIssuesReferences(first: 100) { nodes { number url } } comments(last: 100) { totalCount nodes { body createdAt author { login __typename } } } reviewThreads(last: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(last: 100) { totalCount nodes { state submittedAt commit { oid } author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
+			`pr%d: pullRequest(number: %d) { number headRefOid closingIssuesReferences(first: 100) { totalCount nodes { number url } } comments(last: 100) { totalCount nodes { body createdAt author { login __typename } } } reviewThreads(last: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(last: 100) { totalCount nodes { state submittedAt commit { oid } author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
 			num, num,
 		))
 	}
@@ -1352,12 +1352,10 @@ func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, error) 
 // Returns the PR number, supplemental info, and whether parsing succeeded.
 func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool) {
 	var prData struct {
-		Number                  int    `json:"number"`
-		HeadRefOID              string `json:"headRefOid"`
-		ClosingIssuesReferences *struct {
-			Nodes []linkedReference `json:"nodes"`
-		} `json:"closingIssuesReferences"`
-		Comments struct {
+		Number                  int                        `json:"number"`
+		HeadRefOID              string                     `json:"headRefOid"`
+		ClosingIssuesReferences *linkedReferenceConnection `json:"closingIssuesReferences"`
+		Comments                struct {
 			TotalCount int `json:"totalCount"`
 			Nodes      []struct {
 				Body      string    `json:"body"`
@@ -1476,7 +1474,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			Resolved: countResolvedThreads(aiThreads),
 		},
 		ClosingIssues:          closingIssueNodes(prData.ClosingIssuesReferences),
-		ClosingIssuesAvailable: prData.ClosingIssuesReferences != nil,
+		ClosingIssuesAvailable: prData.ClosingIssuesReferences.complete(),
 		AIReview:               aiReview,
 		AIClean:                aiClean,
 		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
@@ -1484,10 +1482,8 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 	}, true
 }
 
-func closingIssueNodes(connection *struct {
-	Nodes []linkedReference `json:"nodes"`
-}) []linkedReference {
-	if connection == nil {
+func closingIssueNodes(connection *linkedReferenceConnection) []linkedReference {
+	if !connection.complete() {
 		return nil
 	}
 	return connection.Nodes
