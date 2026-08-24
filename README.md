@@ -120,7 +120,7 @@ Compared to `gh pr list`, this command keeps all existing filters but renders a 
 | **Rev**  | Overall review decision: `✓` approved, `✗` changes requested, or `•` review required |
 | **AI**   | AI reviewer status: `pass` (approved/no issues), `fail` (issues found), or `-` (no AI review). Detects CodeRabbit, Copilot PR reviewer, other `[bot]` reviewers, and Cubic's AI reviewer check |
 | **Appv** | Count of unique formal approvals, including bot reviewers |
-| **Checks**| CI status: `pass`, `fail`, `pending`, `merge`, or `-`. `merge` (red) indicates merge conflicts with the base branch. Includes required checks from repo rulesets that haven't reported yet |
+| **Checks**| CI status: `pass`, `review`, `fail`, `pending`, `merge`, or `-`. `review` (green) means every non-review check passed and only a recognized AI reviewer check remains. `merge` (red) indicates merge conflicts with the base branch. Includes required checks from repo rulesets that haven't reported yet |
 | **Cmts** | Review thread resolution: `resolved/total` (e.g., `3/5`). `-` if no threads |
 | **Branch**| Head branch name |
 | **Upd**  | Relative time: `12m`, `3h`, `2d`, `4mo` |
