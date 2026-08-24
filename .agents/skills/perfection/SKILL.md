@@ -85,7 +85,8 @@ go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
 Check if tools are installed: `Get-Command staticcheck, gocritic, errcheck, gocyclo, gocognit, gremlins, deadcode, govulncheck -ErrorAction SilentlyContinue | Select-Object Name`
 
-Markdown linting (runs via npx, no install needed): `npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#.agents' '#.github/agents'`
+Markdown linting runs through the version in `.github/quality-tools.env`; the
+current command is `npx --yes markdownlint-cli2@0.20.0 '**/*.md' '#node_modules' '#.agents' '#.github/agents'`.
 
 ## Commands
 
@@ -112,7 +113,7 @@ first failure and executes these gates in order:
 16. `gocyclo -over 10 -ignore "_test\.go" .` (must produce no output)
 17. `gocognit -over 15 -ignore "_test\.go" .` (must produce no output)
 18. Enforce a CRAP score below 30 for every production function.
-19. `npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#.agents' '#.github/agents'`
+19. `npx --yes markdownlint-cli2@0.20.0 '**/*.md' '#node_modules' '#.agents' '#.github/agents'`
 20. `gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src`
 
 Present results as a scorecard table:

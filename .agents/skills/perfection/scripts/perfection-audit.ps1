@@ -105,6 +105,8 @@ function Assert-PinnedToolVersions {
         }
         Write-Host "$($tool.Name) $actual"
     }
+
+    return $pins
 }
 
 function Assert-CrapThreshold {
@@ -206,7 +208,11 @@ $missingTools = @($requiredTools | Where-Object { -not (Get-Command $_ -ErrorAct
 if ($missingTools.Count -gt 0) {
     throw "Missing required quality tools: $($missingTools -join ', '). See .github/quality-tools.env for the pinned versions."
 }
-Assert-PinnedToolVersions (Join-Path $repoRoot '.github\quality-tools.env')
+$qualityToolPins = Assert-PinnedToolVersions (Join-Path $repoRoot '.github\quality-tools.env')
+$markdownlintVersion = $qualityToolPins['MARKDOWNLINT_CLI2_VERSION']
+if (-not $markdownlintVersion) {
+    throw 'Missing MARKDOWNLINT_CLI2_VERSION in .github/quality-tools.env.'
+}
 
 $tempRoot = [System.IO.Path]::GetTempPath()
 $coveragePath = Join-Path $tempRoot "gh-x-coverage-$([guid]::NewGuid().ToString('N')).out"
@@ -250,7 +256,7 @@ try {
     Invoke-NoOutputCommand 'cyclomatic complexity <= 10' 'gocyclo' @('-over', '10', '-ignore', '_test\.go', '.')
     Invoke-NoOutputCommand 'cognitive complexity <= 15' 'gocognit' @('-over', '15', '-ignore', '_test\.go', '.')
     Assert-CrapThreshold $coveragePath 30.0
-    Invoke-CheckedCommand 'Markdown lint' 'npx' @('--yes', 'markdownlint-cli2', '**/*.md', '#node_modules', '#.agents', '#.github/agents')
+    Invoke-CheckedCommand 'Markdown lint' 'npx' @('--yes', "markdownlint-cli2@$markdownlintVersion", '**/*.md', '#node_modules', '#.agents', '#.github/agents')
 
     Show-Section 'mutation efficacy >= 90%'
     $mutationOutput = @(& gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src 2>&1)

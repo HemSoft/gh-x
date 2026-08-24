@@ -3,5 +3,6 @@
 # Keep Go inputs stable across Windows and Unix checkouts.
 *.go text eol=lf
 *.sh text eol=lf
+.github/quality-tools.env text eol=lf
 go.mod text eol=lf
 go.sum text eol=lf

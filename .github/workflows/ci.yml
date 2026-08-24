@@ -126,7 +126,9 @@ jobs:
           fi
 
       - name: Lint markdown
-        run: npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#.agents' '#.github/agents'
+        run: |
+          source .github/quality-tools.env
+          npx --yes "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" '**/*.md' '#node_modules' '#.agents' '#.github/agents'
 
   # ── Quality Gates ──────────────────────────────────────────────
   quality:
