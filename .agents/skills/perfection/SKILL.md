@@ -1,6 +1,6 @@
 ---
 name: perfection
-description: "V1.0 - Commands: audit, coverage, crap, mutate, simplify, harden. Comprehensive Go code quality enforcement for gh-x: test coverage analysis, CRAP score tracking, mutation testing, simplification patterns, and static analysis. Use when improving code quality, writing tests, or before merging."
+description: "V1.1 - Commands: audit, coverage, crap, mutate, simplify, harden. Comprehensive Go code quality enforcement for gh-x: test coverage analysis, CRAP score tracking, mutation testing, simplification patterns, and static analysis. Use when improving code quality, writing tests, or before merging."
 compatibility: Requires go 1.23+, git
 hooks:
   PostToolUse:
@@ -50,56 +50,71 @@ Comprehensive quality enforcement for this Go CLI extension. Every command opera
 - **Build**: `go build ./...`
 - **Test**: `go test -race -count=1 ./...`
 - **Vet**: `go vet ./...`
-- **Coverage**: `go test -race "-coverprofile=coverage.out" ./... && go tool cover -func=coverage.out`
+- **Coverage**: `go test -race -count=1 "-coverprofile=<temp-path>" ./...` then `go tool cover "-func=<temp-path>"`
+- **Dashboard tests**: `node --test src/codex-dashboard/*.test.mjs src/dashboard-hub/*.test.mjs`
 - **CI workflow**: `.github/workflows/ci.yml` — single source of truth for all quality gates
 
 ## Required Tools
 
-Install missing tools before first use:
+CI and the development container use the exact versions in
+`.github/quality-tools.env`. Update that file deliberately and run the full
+audit before committing a version change. Install the current pins locally
+with:
 
 ```powershell
 # Static analysis
-go install honnef.co/go/tools/cmd/staticcheck@latest
+go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+go install github.com/go-critic/go-critic/cmd/gocritic@v0.14.4
+go install github.com/kisielk/errcheck@v1.20.0
 
 # Cyclomatic complexity
-go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+go install github.com/fzipp/gocyclo/cmd/gocyclo@v0.6.0
 
 # Cognitive complexity
-go install github.com/uudashr/gocognit/cmd/gocognit@latest
+go install github.com/uudashr/gocognit/cmd/gocognit@v1.2.1
 
 # Mutation testing
-go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
 
 # Dead code detection
-go install golang.org/x/tools/cmd/deadcode@latest
+go install golang.org/x/tools/cmd/deadcode@v0.49.0
 
 # Vulnerability scanning
-go install golang.org/x/vuln/cmd/govulncheck@latest
+go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 ```
 
-Check if tools are installed: `Get-Command staticcheck, gocyclo, gocognit, gremlins, deadcode, govulncheck -ErrorAction SilentlyContinue | Select-Object Name`
+Check if tools are installed: `Get-Command staticcheck, gocritic, errcheck, gocyclo, gocognit, gremlins, deadcode, govulncheck -ErrorAction SilentlyContinue | Select-Object Name`
 
-Markdown linting (runs via npx, no install needed): `npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#.agents' '#.github/agents'`
+Markdown linting runs through the version in `.github/quality-tools.env`; the
+current command is `npx --yes markdownlint-cli2@0.20.0 '**/*.md' '#node_modules' '#.agents' '#.github/agents'`.
 
 ## Commands
 
 ### `audit` — Full Quality Report
 
-Run all checks and produce a single quality scorecard. Execute in this order:
+Run `.agents/skills/perfection/scripts/perfection-audit.ps1`. It stops at the
+first failure and executes these gates in order:
 
-1. `go build ./...`
-2. `go vet ./...`
-3. `gofmt -l .` (must produce no output)
-4. `go mod tidy` (must produce no diff)
-5. `staticcheck ./...`
-6. `deadcode ./...`
-7. `govulncheck ./...`
-8. `grep -rn '//nolint\|//lint:ignore\|//nosec\|#nosec' --include='*.go' .` (must find nothing)
-9. `grep -rn 'fmt\.Print' --include='*.go' . | grep -v '_test\.go'` (anti-pattern: use writer injection)
-10. `go test -race -count=1 -coverprofile=coverage.out ./... && go tool cover -func=coverage.out`
-11. `gocyclo -over 10 -ignore "_test\.go" .` (must produce no output)
-12. `gocognit -over 15 -ignore "_test\.go" .` (must produce no output)
-13. `npx --yes markdownlint-cli2 '**/*.md' '#node_modules' '#.agents' '#.github/agents'`
+1. Verify every installed analyzer matches `.github/quality-tools.env`.
+2. `go build -o <temp-path> ./...`
+3. `go vet ./...`
+4. `gofmt -l .` (must produce no output)
+5. `go mod tidy -diff` (must produce no diff)
+6. `staticcheck ./...`
+7. `gocritic check ./...`
+8. `errcheck -exclude .errcheck_excludes ./...`
+9. `deadcode ./...` (must produce no output)
+10. `govulncheck ./...`
+11. Scan Go files for forbidden lint suppressions.
+12. Scan production Go files for `fmt.Print*` calls.
+13. `go test -race -count=1 "-coverprofile=<temp-path>" ./...`
+14. `node --test src/codex-dashboard/*.test.mjs src/dashboard-hub/*.test.mjs`
+15. Enforce total coverage at 70% or higher.
+16. `gocyclo -over 10 -ignore "_test\.go" .` (must produce no output)
+17. `gocognit -over 15 -ignore "_test\.go" .` (must produce no output)
+18. Enforce a CRAP score below 30 for every production function.
+19. `npx --yes markdownlint-cli2@0.20.0 '**/*.md' '#node_modules' '#.agents' '#.github/agents'`
+20. `gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src`
 
 Present results as a scorecard table:
 
@@ -113,6 +128,8 @@ Present results as a scorecard table:
 | Formatting (gofmt)  | pass    | pass    | ✅     |
 | Module tidy         | pass    | pass    | ✅     |
 | Staticcheck         | pass    | pass    | ✅     |
+| Gocritic            | pass    | pass    | ✅     |
+| Errcheck            | pass    | pass    | ✅     |
 | Dead Code           | 0 funcs | 0       | ✅     |
 | Vulnerability Scan  | 0 vulns | 0       | ✅     |
 | Lint Suppressions   | 0 found | 0       | ✅     |
@@ -190,7 +207,7 @@ Mutation testing validates test quality by injecting faults and checking if test
 **Primary tool**: [gremlins](https://github.com/go-gremlins/gremlins) — the actively maintained Go mutation testing framework used in CI.
 
 ```powershell
-gremlins unleash --threshold-efficacy 90 ./...
+gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src
 ```
 
 **Timeout**: Mutation testing is CPU-intensive. CI allows 30 minutes. Locally, expect similar.
@@ -312,11 +329,14 @@ These thresholds are enforced in CI (`.github/workflows/ci.yml`). Every gate is 
 | `gofmt` | 0 unformatted files | Lint |
 | `go mod tidy` | no diff | Lint |
 | `staticcheck` | 0 findings | Lint |
+| `gocritic` | 0 findings | Lint |
+| `errcheck` | 0 unchecked errors | Lint |
 | Dead code (`deadcode`) | 0 unreachable funcs | Lint |
 | `govulncheck` | 0 vulnerabilities | Lint |
 | Lint suppressions | 0 `//nolint` etc. | Lint |
 | Anti-patterns | 0 `fmt.Print*` in prod code | Lint |
 | Markdown lint | 0 errors | Lint |
+| Node dashboard tests | 0 failures | Build & Test |
 | Test coverage | ≥70% | Quality Gates |
 | Cyclomatic complexity | ≤10 per function | Quality Gates |
 | Cognitive complexity | ≤15 per function | Quality Gates |
