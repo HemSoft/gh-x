@@ -522,14 +522,21 @@ func TestRenderIssueTableHeaders(t *testing.T) {
 		{Number: 1, Title: "X", Author: "a", State: "open", Updated: "1h"},
 	}
 	var buf bytes.Buffer
-	err := renderIssueTable(&buf, issues, issueListOptions{}, false)
+	err := renderIssueRows(&buf, issues, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	output := buf.String()
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 lines (rules + header + row), got %d: %q", len(lines), output)
+	}
+	if lines[0] != lines[2] || strings.Trim(lines[0], "─") != "" {
+		t.Fatalf("expected matching horizontal rules around header, got %q and %q", lines[0], lines[2])
+	}
 	for _, h := range []string{"#", "PRs", "Title", "Author", "State", "Labels", "Assignees", "Updated"} {
-		if !strings.Contains(output, h) {
-			t.Errorf("expected header %q in output: %q", h, output)
+		if !strings.Contains(lines[1], h) {
+			t.Fatalf("expected header %q in output: %q", h, output)
 		}
 	}
 }

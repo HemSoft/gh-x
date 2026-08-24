@@ -337,7 +337,7 @@ func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool)
 	headerLabels := []string{"#", "PRs", "Title", "Author", "State", "Labels", "Assignees", "Updated"}
 	headers := make([]tableCell, len(headerLabels))
 	for i, label := range headerLabels {
-		headers[i] = styler.dim(label)
+		headers[i] = styler.header(label)
 	}
 
 	rows := make([][]tableCell, len(issues))
@@ -361,7 +361,7 @@ func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool)
 	colWidths = fitColumnsToTerminal(colWidths, flexibleCols, getTerminalWidth())
 	rows = truncateCells(rows, colWidths, flexibleCols)
 
-	writeRow(stdout, headers, colWidths)
+	writeTableHeader(stdout, styler, headers, colWidths)
 	for _, row := range rows {
 		writeRow(stdout, row, colWidths)
 	}

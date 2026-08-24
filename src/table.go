@@ -56,6 +56,13 @@ func (s tableStyler) dim(text string) tableCell {
 	return tableCell{text: text, styled: fn(text), styleFn: fn}
 }
 
+func (s tableStyler) header(text string) tableCell {
+	fn := func(t string) string {
+		return s.output.String(t).Foreground(termenv.ANSICyan).Bold().String()
+	}
+	return tableCell{text: text, styled: fn(text), styleFn: fn}
+}
+
 func (s tableStyler) plain(text string) tableCell {
 	return tableCell{text: text, styled: text}
 }
@@ -91,6 +98,25 @@ func writeRow(w io.Writer, cells []tableCell, widths []int) {
 		}
 	}
 	fmt.Fprintln(w)
+}
+
+func writeTableHeader(w io.Writer, styler tableStyler, headers []tableCell, widths []int) {
+	rule := strings.Repeat("─", tableWidth(widths))
+	styledRule := styler.output.String(rule).Foreground(termenv.ANSICyan).String()
+	fmt.Fprintln(w, styledRule)
+	writeRow(w, headers, widths)
+	fmt.Fprintln(w, styledRule)
+}
+
+func tableWidth(widths []int) int {
+	width := 0
+	for i, columnWidth := range widths {
+		width += columnWidth
+		if i < len(widths)-1 {
+			width += tableColumnGap
+		}
+	}
+	return width
 }
 
 func computeColumnWidths(headers []tableCell, rows [][]tableCell) []int {
@@ -137,15 +163,7 @@ func fitColumnsToTerminal(colWidths []int, flexibleCols []int, termWidth int) []
 
 	const minFlexWidth = 10
 
-	totalWidth := 0
-	for i, w := range colWidths {
-		totalWidth += w
-		if i < len(colWidths)-1 {
-			totalWidth += tableColumnGap
-		}
-	}
-
-	overflow := totalWidth - termWidth
+	overflow := tableWidth(colWidths) - termWidth
 	if overflow <= 0 {
 		return colWidths
 	}
