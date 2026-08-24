@@ -596,7 +596,7 @@ func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, 
 	headerLabels := []string{"#", "Issues", "Title", "Author", "State", "Rev", "AI", "Appv", "Checks", "Cmts", "Branch", "Upd"}
 	headers := make([]tableCell, len(headerLabels))
 	for i, label := range headerLabels {
-		headers[i] = styler.dim(label)
+		headers[i] = styler.header(label)
 	}
 
 	rows := make([][]tableCell, len(pullRequests))
@@ -624,7 +624,7 @@ func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, 
 	colWidths = fitColumnsToTerminal(colWidths, flexibleCols, getTerminalWidth())
 	rows = truncateCells(rows, colWidths, flexibleCols)
 
-	writeRow(stdout, headers, colWidths)
+	writeTableHeader(stdout, styler, headers, colWidths)
 	for _, row := range rows {
 		writeRow(stdout, row, colWidths)
 	}

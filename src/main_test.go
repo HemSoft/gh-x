@@ -194,20 +194,23 @@ func TestRenderTableAlignment(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 lines (header + 2 rows), got %d: %v", len(lines), lines)
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 lines (rules + header + 2 rows), got %d: %v", len(lines), lines)
+	}
+	if lines[0] != lines[2] || strings.Trim(lines[0], "─") != "" {
+		t.Fatalf("expected matching horizontal rules around header, got %q and %q", lines[0], lines[2])
 	}
 
 	// Verify header labels are present
-	if !strings.Contains(lines[0], "Title") || !strings.Contains(lines[0], "Branch") {
+	if !strings.Contains(lines[1], "Title") || !strings.Contains(lines[1], "Branch") {
 		t.Fatal("expected header labels")
 	}
 
 	// Verify columns are aligned: the "Title" column should start at the same
 	// position in header and data rows
-	headerTitleIdx := strings.Index(lines[0], "Title")
-	row1TitleIdx := strings.Index(lines[1], "Short")
-	row2TitleIdx := strings.Index(lines[2], "Longer")
+	headerTitleIdx := strings.Index(lines[1], "Title")
+	row1TitleIdx := strings.Index(lines[3], "Short")
+	row2TitleIdx := strings.Index(lines[4], "Longer")
 	if headerTitleIdx != row1TitleIdx || headerTitleIdx != row2TitleIdx {
 		t.Fatalf("Title column misaligned: header=%d row1=%d row2=%d", headerTitleIdx, row1TitleIdx, row2TitleIdx)
 	}
@@ -2883,6 +2886,51 @@ func TestWriteRow(t *testing.T) {
 	// First cell should have padding (8 - 5 + 1 = 4 spaces).
 	if !strings.Contains(got, "hello    world") {
 		t.Fatalf("writeRow padding incorrect, got %q", got)
+	}
+}
+
+func TestWriteTableHeader(t *testing.T) {
+	var buf bytes.Buffer
+	styler := newTableStyler(&buf, false)
+	headers := []tableCell{styler.header("First"), styler.header("Second")}
+	widths := []int{5, 8}
+
+	writeTableHeader(&buf, styler, headers, widths)
+
+	rule := strings.Repeat("─", tableWidth(widths))
+	want := rule + "\nFirst Second\n" + rule + "\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("writeTableHeader() = %q, want %q", got, want)
+	}
+}
+
+func TestTableWidth(t *testing.T) {
+	tests := []struct {
+		name   string
+		widths []int
+		want   int
+	}{
+		{name: "empty", widths: nil, want: 0},
+		{name: "single column", widths: []int{7}, want: 7},
+		{name: "multiple columns include gaps", widths: []int{5, 8, 3}, want: 18},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := tableWidth(test.widths); got != test.want {
+				t.Fatalf("tableWidth(%v) = %d, want %d", test.widths, got, test.want)
+			}
+		})
+	}
+}
+
+func TestHeaderStyle(t *testing.T) {
+	styler := newTableStyler(&bytes.Buffer{}, true)
+	got := styler.header("Title")
+	want := styler.output.String("Title").Foreground(termenv.ANSICyan).Bold().String()
+
+	if got.text != "Title" || got.styled != want {
+		t.Fatalf("header() = %#v, want bold cyan %q", got, want)
 	}
 }
 
