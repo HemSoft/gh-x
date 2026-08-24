@@ -230,6 +230,7 @@ func TestQuitSavesState(t *testing.T) {
 
 func TestSettingsApplyHappyAndSadPaths(t *testing.T) {
 	m := newTestMonitorModel()
+	m.configPath = t.TempDir() + "/config.yml"
 	m.settings.open(m.cfg)
 	m.settings.repos.SetValue("owner/new\n\nowner/other")
 	m.settings.limit.SetValue("45")
