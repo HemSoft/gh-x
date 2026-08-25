@@ -13,12 +13,12 @@ and this project uses semantic versioning.
   pull request tables, including both sections of `gh x status`.
 - Added `gh x monitor`, a Bubble Tea dashboard across configured repositories
   with PR and issue sections, saved layout state, and per-section filters
-  defined in `src/cfg.yml`. Replaces `gh x pr list --watch`.
+  defined in the per-user `gh-x/config.yml` file.
 
 ### Changed
 
-- Removed the `pr list` watch flags (`--watch`, `--monitor`, `--interval`);
-  use `gh x monitor` instead.
+- Replaced the short-lived `pr list` watch flags (`--watch`, `--monitor`, and
+  `--interval`) with the dedicated `gh x monitor` command.
 - Moved all Go sources and tests under `src/`; build commands now target
   `./src`.
 - Condensed pull request tables with one-space column gaps, compact review
@@ -35,9 +35,6 @@ and this project uses semantic versioning.
   one-line notice, and never modify the global active account. User-scoped
   commands (`pr me`, `pr atm`) and review submission always run as the active
   account.
-- Added interactive, read-only `gh x pr list --watch` monitoring with a
-  `--monitor` alias, configurable refresh intervals, stable rows, and concise
-  refresh status and change summaries.
 - Added local Copilot and Codex CLI usage dashboards (`src/codex-dashboard`,
   `src/dashboard-hub`) with launcher scripts, a combined hub, and an optional
   Tailscale Serve installer for tailnet access.

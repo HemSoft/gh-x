@@ -1,41 +1,29 @@
 # Project TODO
 
-| Status | Priority | Task | Notes |
-|--------|----------|------|-------|
-| ✅ | High | Fix staticcheck finding | S1017 fix |
-| ✅ | High | Remove dead code | Deleted unreachable func |
-| ✅ | High | Raise test coverage to 70% | 56.2% → 77.8% |
-| ✅ | High | Reduce `executeList` complexity | 20 → 4 cyclomatic |
-| ✅ | Medium | Reduce complexity across codebase | All funcs ≤10 cyclomatic |
-| ✅ | High | CI quality gate workflow | 6 jobs, 16 gates |
-| ✅ | High | Initialize public GitHub repository | `HemSoft/gh-x` |
-| ✅ | High | Scaffold Go extension for `gh x list` | Initial structure |
-| ✅ | High | Install Go and validate scaffold | Go 1.26, all tests pass |
-| ✅ | High | Verify `gh x list` end-to-end | Tested against live repos |
-| ✅ | Medium | Add tests for `list` | Formatting, normalization |
-| ✅ | Medium | Document install and usage flows | README rewritten |
-| ✅ | Low | Prepare release packaging | Auto-release + 12 platforms |
-| ✅ | High | Design `gh x atm` | Multi-search GraphQL |
-| ✅ | High | Implement `gh x atm` | Full impl in `src/atm.go` |
-| ✅ | Medium | Add tests for `atm` | 591 lines in `src/atm_test.go` |
-| ✅ | Medium | CRAP score analysis | All functions < 30 CRAP |
-| ✅ | Medium | Mutation testing baseline | Gremlins configured in CI |
-| ✅ | Low | Markdown lint cleanup | Config + fixes applied |
+GitHub issues are the authoritative backlog. This file records the current
+repository-level work and quality policy without treating old measurements as
+permanent facts.
 
-## Progress
+## Current backlog
 
-**Completed: 19 / 19** (100%)
+| Issue | Work |
+| --- | --- |
+| [#22](https://github.com/HemSoft/gh-x/issues/22) | Refresh Go dependencies and automate dependency hygiene. |
+| [#23](https://github.com/HemSoft/gh-x/issues/23) | Split the PR-list implementation and tests by responsibility. |
 
-## Notes
+## Enforced quality gates
 
-- Renamed from `gh-extensions` to `gh-x` for correct
-  extension command resolution.
-- Wraps GitHub CLI for `gh` auth and repo context.
-- Auto-release creates a new patch on every `main` push.
-- CI quality gates: build, vet, staticcheck, deadcode,
-  govulncheck, gofmt, mod tidy, lint suppressions,
-  anti-patterns, coverage ≥70%, cyclomatic ≤10,
-  cognitive ≤15, CRAP <30, mutation ≥90%, markdown lint.
-- Quality tools: `staticcheck`, `gocyclo`, `gocognit`,
-  `deadcode`, `govulncheck`, `gremlins`.
-  Run `perfection audit` for a full scorecard.
+The CI workflow and local perfection audit enforce the same core checks:
+
+- build, `go vet`, race-enabled Go tests, and Node dashboard tests;
+- `gofmt`, module tidiness, staticcheck, gocritic, errcheck, dead-code checks,
+  govulncheck, and the repository's suppression and output policies;
+- at least 70% total coverage, cyclomatic complexity no higher than 10,
+  cognitive complexity no higher than 15, and every CRAP score below 30;
+- at least 90% mutation efficacy and a non-empty mutation result; and
+- Markdown lint.
+
+Analyzer and markdown-lint versions are pinned in
+`.github/quality-tools.env`. Run
+`.agents/skills/perfection/scripts/perfection-audit.ps1` for a current
+scorecard instead of relying on a result copied into this file.
