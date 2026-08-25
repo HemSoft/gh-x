@@ -8,7 +8,6 @@ permanent facts.
 
 | Issue | Work |
 | --- | --- |
-| [#22](https://github.com/HemSoft/gh-x/issues/22) | Refresh Go dependencies and automate dependency hygiene. |
 | [#23](https://github.com/HemSoft/gh-x/issues/23) | Split the PR-list implementation and tests by responsibility. |
 
 ## Enforced quality gates

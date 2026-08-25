@@ -1,15 +1,15 @@
 module github.com/HemSoft/gh-x
 
-go 1.26
+go 1.26.7
 
 require (
-	charm.land/bubbles/v2 v2.2.0
+	charm.land/bubbles/v2 v2.2.1
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/cli/go-gh/v2 v2.12.1
-	github.com/mattn/go-runewidth v0.0.27
+	github.com/cli/go-gh/v2 v2.13.0
+	github.com/mattn/go-runewidth v0.0.28
 	github.com/muesli/termenv v0.16.0
-	golang.org/x/term v0.30.0
+	golang.org/x/term v0.45.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
