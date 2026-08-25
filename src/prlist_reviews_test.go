@@ -58,9 +58,9 @@ func TestSupplementalApprovalsOverridesCountApprovals(t *testing.T) {
 		t.Fatalf("expected countApprovals fallback = 0, got %d", dp.Approvals)
 	}
 
-	// Supplemental data says there IS an approval (from reviews(states: APPROVED))
-	info := prSupplementalInfo{Approvals: 1}
-	dp.Approvals = info.Approvals
+	// Supplemental data says there IS an approval (from reviews(states: APPROVED)).
+	supplemental := map[int]prSupplementalInfo{28: {Approvals: 1}}
+	applySupplementalInfo(&dp, supplemental, 28, false)
 	if dp.Approvals != 1 {
 		t.Fatalf("expected supplemental override = 1, got %d", dp.Approvals)
 	}
