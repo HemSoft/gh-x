@@ -6,9 +6,7 @@ permanent facts.
 
 ## Current backlog
 
-| Issue | Work |
-| --- | --- |
-| [#23](https://github.com/HemSoft/gh-x/issues/23) | Split the PR-list implementation and tests by responsibility. |
+There are no open project issues.
 
 ## Enforced quality gates
 
