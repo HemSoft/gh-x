@@ -433,7 +433,9 @@ gh-x v0.1.0 © 2026 HemSoft Developments · gh extension install HemSoft/gh-x
 
 ## Local development
 
-Requires Go 1.26+.
+Requires Go 1.26.7 or newer. CI reads the exact patched version from
+`go.mod`; local builds with the default `GOTOOLCHAIN=auto` setting download it
+when the installed Go toolchain is older.
 
 ```bash
 # Build and install locally (one-time symlink setup)
@@ -451,6 +453,15 @@ A convenience script is provided for Windows:
 ```powershell
 .\build.ps1   # runs vet → test → build
 ```
+
+### Dependency updates
+
+Dependabot checks Go modules and GitHub Actions every Monday at 09:00 Eastern.
+Minor and patch updates are grouped by ecosystem, with at most two open version
+update pull requests per ecosystem. Major-version updates are intentionally
+deferred to dedicated migration pull requests. Compatibility-sensitive `v0`
+minor updates receive the same manual review as a major update; dependency pull
+requests are never auto-merged.
 
 ### Local usage dashboards
 
