@@ -143,6 +143,30 @@ func sufficientReviewEvidence(reviews []aiReviewNode, headRefOID string, evidenc
 	return hasCurrentHeadAIReview(reviews, headRefOID) || reviewWindowPredatesEvidence(reviews, evidenceAt)
 }
 
+// reviewEvidenceOrderAmbiguous reports whether independently fetched formal
+// and conversation evidence cannot be ordered. Equal or missing timestamps do
+// not prove which current-head result is newer.
+func reviewEvidenceOrderAmbiguous(reviews []aiReviewNode, headRefOID string, evidenceAt time.Time) bool {
+	if evidenceAt.IsZero() {
+		return false
+	}
+	var latestFormal time.Time
+	found := false
+	for _, review := range currentHeadReviewNodes(reviews, headRefOID) {
+		if !isAIReviewer(review.AuthorLogin) && review.AuthorType != "Bot" {
+			continue
+		}
+		found = true
+		if review.OccurredAt.IsZero() {
+			return true
+		}
+		if review.OccurredAt.After(latestFormal) {
+			latestFormal = review.OccurredAt
+		}
+	}
+	return found && latestFormal.Equal(evidenceAt)
+}
+
 func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, bool) {
 	login := strings.TrimSuffix(strings.ToLower(comment.AuthorLogin), "[bot]")
 	if login != "chatgpt-codex-connector" {
@@ -431,11 +455,16 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		len(prData.Reviews.Nodes),
 		sufficientReviewEvidence(formalReviewNodes, prData.HeadRefOID, latestCurrentHeadCodexAt),
 	)
+	evidenceOrderAmbiguous := reviewEvidenceOrderAmbiguous(
+		formalReviewNodes,
+		prData.HeadRefOID,
+		latestCurrentHeadCodexAt,
+	)
 	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
 		aiThreads,
 		prData.HeadRefOID,
-		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete),
+		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous),
 	)
 
 	return prData.Number, prSupplementalInfo{

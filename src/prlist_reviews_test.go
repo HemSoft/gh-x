@@ -742,6 +742,41 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 	})
 
+	t.Run("tied current-head formal and conversation evidence fails closed", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 593,
+			"headRefOid": "current-head",
+			"comments": {
+				"totalCount": 49,
+				"nodes": [{
+					"body": "Codex Review: Didn't find any major issues. Reviewed commit: current-he",
+					"createdAt": "2026-08-24T16:00:00Z",
+					"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+				}]
+			},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {
+				"totalCount": 159,
+				"nodes": [{
+					"state": "COMMENTED",
+					"submittedAt": "2026-08-24T16:00:00Z",
+					"commit": {"oid": "current-head"},
+					"author": {"login": "cubic-dev-ai[bot]", "__typename": "Bot"},
+					"comments": {"totalCount": 1}
+				}]
+			},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "?" || info.AIClean {
+			t.Fatalf("expected tied current-head evidence to fail closed, got AI=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
 	t.Run("truncated reviews without current-head AI evidence fail closed", func(t *testing.T) {
 		raw := []byte(`{
 			"number": 594,
@@ -889,6 +924,35 @@ func TestReviewWindowPredatesEvidence(t *testing.T) {
 	}
 	if reviewWindowPredatesEvidence(reviews, time.Time{}) {
 		t.Fatal("expected a missing evidence timestamp to fail closed")
+	}
+}
+
+func TestReviewEvidenceOrderAmbiguous(t *testing.T) {
+	evidenceAt := time.Date(2026, 8, 24, 16, 0, 0, 0, time.UTC)
+	head := "current-head"
+
+	tests := []struct {
+		name    string
+		reviews []aiReviewNode
+		want    bool
+	}{
+		{name: "no formal AI evidence", reviews: []aiReviewNode{{AuthorLogin: "human", CommitOID: head, OccurredAt: evidenceAt}}, want: false},
+		{name: "formal evidence is older", reviews: []aiReviewNode{{AuthorType: "Bot", CommitOID: head, OccurredAt: evidenceAt.Add(-time.Minute)}}, want: false},
+		{name: "formal evidence is newer", reviews: []aiReviewNode{{AuthorType: "Bot", CommitOID: head, OccurredAt: evidenceAt.Add(time.Minute)}}, want: false},
+		{name: "formal evidence is tied", reviews: []aiReviewNode{{AuthorType: "Bot", CommitOID: head, OccurredAt: evidenceAt}}, want: true},
+		{name: "formal evidence timestamp is missing", reviews: []aiReviewNode{{AuthorType: "Bot", CommitOID: head}}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reviewEvidenceOrderAmbiguous(tt.reviews, head, evidenceAt); got != tt.want {
+				t.Fatalf("reviewEvidenceOrderAmbiguous() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	if reviewEvidenceOrderAmbiguous([]aiReviewNode{{AuthorType: "Bot", CommitOID: head}}, head, time.Time{}) {
+		t.Fatal("expected absent conversation evidence to avoid a cross-connection ambiguity")
 	}
 }
 
