@@ -136,7 +136,7 @@ func reviewWindowPredatesEvidence(reviews []aiReviewNode, evidenceAt time.Time) 
 			oldest = review.OccurredAt
 		}
 	}
-	return !evidenceAt.Before(oldest)
+	return evidenceAt.After(oldest)
 }
 
 func sufficientReviewEvidence(reviews []aiReviewNode, headRefOID string, evidenceAt time.Time) bool {

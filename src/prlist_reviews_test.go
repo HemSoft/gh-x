@@ -881,6 +881,9 @@ func TestReviewWindowPredatesEvidence(t *testing.T) {
 	if reviewWindowPredatesEvidence(reviews, t0) {
 		t.Fatal("expected older evidence to leave the formal review boundary ambiguous")
 	}
+	if reviewWindowPredatesEvidence(reviews, t1) {
+		t.Fatal("expected equal timestamps across connections to remain ambiguous")
+	}
 	if reviewWindowPredatesEvidence([]aiReviewNode{{}}, t2) {
 		t.Fatal("expected a missing formal review timestamp to fail closed")
 	}
