@@ -104,6 +104,77 @@ func currentHeadReviewNodes(reviews []aiReviewNode, headRefOID string) []aiRevie
 	return current
 }
 
+// hasCurrentHeadAIReview reports whether the formal review window contains AI
+// evidence for the current head. Supplemental review queries fetch the newest
+// reviews, so once current-head AI evidence is present, any truncated reviews
+// are older and cannot change the latest current-head result.
+func hasCurrentHeadAIReview(reviews []aiReviewNode, headRefOID string) bool {
+	if headRefOID == "" {
+		return false
+	}
+	for _, review := range currentHeadReviewNodes(reviews, headRefOID) {
+		if isAIReviewer(review.AuthorLogin) || review.AuthorType == "Bot" {
+			return true
+		}
+	}
+	return false
+}
+
+// reviewWindowPredatesEvidence reports whether every omitted formal review is
+// known to be older than independently fetched evidence, such as a Codex
+// conversation receipt. A missing timestamp leaves the boundary ambiguous.
+func reviewWindowPredatesEvidence(reviews []aiReviewNode, evidenceAt time.Time) bool {
+	if evidenceAt.IsZero() || len(reviews) == 0 {
+		return false
+	}
+	oldest := reviews[0].OccurredAt
+	for _, review := range reviews {
+		if review.OccurredAt.IsZero() {
+			return false
+		}
+		if review.OccurredAt.Before(oldest) {
+			oldest = review.OccurredAt
+		}
+	}
+	return evidenceAt.After(oldest)
+}
+
+func sufficientReviewEvidence(reviews []aiReviewNode, headRefOID string, evidenceAt time.Time) bool {
+	return hasCurrentHeadAIReview(reviews, headRefOID) || reviewWindowPredatesEvidence(reviews, evidenceAt)
+}
+
+// reviewEvidenceOrderAmbiguous reports whether independently fetched formal
+// and conversation evidence cannot be ordered. Equal or missing timestamps do
+// not prove which current-head result is newer.
+func reviewEvidenceOrderAmbiguous(
+	reviews []aiReviewNode,
+	headRefOID string,
+	evidenceAt time.Time,
+	hasConversationEvidence bool,
+) bool {
+	if !hasConversationEvidence {
+		return false
+	}
+	if evidenceAt.IsZero() {
+		return true
+	}
+	var latestFormal time.Time
+	found := false
+	for _, review := range currentHeadReviewNodes(reviews, headRefOID) {
+		if !isAIReviewer(review.AuthorLogin) && review.AuthorType != "Bot" {
+			continue
+		}
+		found = true
+		if review.OccurredAt.IsZero() {
+			return true
+		}
+		if review.OccurredAt.After(latestFormal) {
+			latestFormal = review.OccurredAt
+		}
+	}
+	return found && latestFormal.Equal(evidenceAt)
+}
+
 func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, bool) {
 	login := strings.TrimSuffix(strings.ToLower(comment.AuthorLogin), "[bot]")
 	if login != "chatgpt-codex-connector" {
@@ -332,9 +403,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		return 0, prSupplementalInfo{}, false
 	}
 
-	var aiNodes []aiReviewNode
+	var formalReviewNodes []aiReviewNode
 	for _, r := range prData.Reviews.Nodes {
-		aiNodes = append(aiNodes, aiReviewNode{
+		formalReviewNodes = append(formalReviewNodes, aiReviewNode{
 			State:        r.State,
 			AuthorLogin:  r.Author.Login,
 			AuthorType:   r.Author.Typename,
@@ -343,7 +414,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			CommitOID:    r.Commit.OID,
 		})
 	}
+	aiNodes := append([]aiReviewNode(nil), formalReviewNodes...)
 	hasCurrentHeadCodexReview := false
+	var latestCurrentHeadCodexAt time.Time
 	for _, comment := range prData.Comments.Nodes {
 		if node, ok := codexReviewNode(aiReviewComment{
 			Body:        comment.Body,
@@ -353,6 +426,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		}, prData.HeadRefOID); ok {
 			aiNodes = append(aiNodes, node)
 			hasCurrentHeadCodexReview = true
+			if node.OccurredAt.After(latestCurrentHeadCodexAt) {
+				latestCurrentHeadCodexAt = node.OccurredAt
+			}
 		}
 	}
 	sortAIReviewsChronologically(aiNodes)
@@ -376,15 +452,28 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		approverLogins = append(approverLogins, r.Author.Login)
 	}
 
-	commentsTruncated := prData.Comments.TotalCount > len(prData.Comments.Nodes)
 	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
-	reviewsTruncated := prData.Reviews.TotalCount > len(prData.Reviews.Nodes)
-	commentsIncomplete := commentsTruncated && !hasCurrentHeadCodexReview
+	commentsIncomplete := connectionIncomplete(
+		prData.Comments.TotalCount,
+		len(prData.Comments.Nodes),
+		hasCurrentHeadCodexReview,
+	)
+	reviewsIncomplete := connectionIncomplete(
+		prData.Reviews.TotalCount,
+		len(prData.Reviews.Nodes),
+		sufficientReviewEvidence(formalReviewNodes, prData.HeadRefOID, latestCurrentHeadCodexAt),
+	)
+	evidenceOrderAmbiguous := reviewEvidenceOrderAmbiguous(
+		formalReviewNodes,
+		prData.HeadRefOID,
+		latestCurrentHeadCodexAt,
+		hasCurrentHeadCodexReview,
+	)
 	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
 		aiThreads,
 		prData.HeadRefOID,
-		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsTruncated),
+		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous),
 	)
 
 	return prData.Number, prSupplementalInfo{
@@ -415,6 +504,10 @@ func anyConnectionTruncated(truncated ...bool) bool {
 		}
 	}
 	return false
+}
+
+func connectionIncomplete(totalCount, fetchedCount int, sufficientEvidence bool) bool {
+	return totalCount > fetchedCount && !sufficientEvidence
 }
 
 func summarizeSupplementalReviews(
