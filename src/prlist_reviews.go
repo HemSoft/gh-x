@@ -104,6 +104,22 @@ func currentHeadReviewNodes(reviews []aiReviewNode, headRefOID string) []aiRevie
 	return current
 }
 
+// hasCurrentHeadAIReview reports whether the fetched review window contains AI
+// evidence for the current head. Supplemental review queries fetch the newest
+// reviews, so once current-head AI evidence is present, any truncated reviews
+// are older and cannot change the latest current-head result.
+func hasCurrentHeadAIReview(reviews []aiReviewNode, headRefOID string) bool {
+	if headRefOID == "" {
+		return false
+	}
+	for _, review := range currentHeadReviewNodes(reviews, headRefOID) {
+		if isAIReviewer(review.AuthorLogin) || review.AuthorType == "Bot" {
+			return true
+		}
+	}
+	return false
+}
+
 func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, bool) {
 	login := strings.TrimSuffix(strings.ToLower(comment.AuthorLogin), "[bot]")
 	if login != "chatgpt-codex-connector" {
@@ -376,15 +392,22 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		approverLogins = append(approverLogins, r.Author.Login)
 	}
 
-	commentsTruncated := prData.Comments.TotalCount > len(prData.Comments.Nodes)
 	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
-	reviewsTruncated := prData.Reviews.TotalCount > len(prData.Reviews.Nodes)
-	commentsIncomplete := commentsTruncated && !hasCurrentHeadCodexReview
+	commentsIncomplete := connectionIncomplete(
+		prData.Comments.TotalCount,
+		len(prData.Comments.Nodes),
+		hasCurrentHeadCodexReview,
+	)
+	reviewsIncomplete := connectionIncomplete(
+		prData.Reviews.TotalCount,
+		len(prData.Reviews.Nodes),
+		hasCurrentHeadAIReview(aiNodes, prData.HeadRefOID),
+	)
 	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
 		aiThreads,
 		prData.HeadRefOID,
-		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsTruncated),
+		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete),
 	)
 
 	return prData.Number, prSupplementalInfo{
@@ -415,6 +438,10 @@ func anyConnectionTruncated(truncated ...bool) bool {
 		}
 	}
 	return false
+}
+
+func connectionIncomplete(totalCount, fetchedCount int, sufficientEvidence bool) bool {
+	return totalCount > fetchedCount && !sufficientEvidence
 }
 
 func summarizeSupplementalReviews(

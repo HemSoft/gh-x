@@ -666,6 +666,74 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 	})
 
+	t.Run("more than 100 historical reviews keep complete current-head evidence", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 593,
+			"headRefOid": "current-head",
+			"comments": {
+				"totalCount": 49,
+				"nodes": [{
+					"body": "Codex Review: Didn't find any major issues. Reviewed commit: current-he",
+					"createdAt": "2026-08-24T16:00:00Z",
+					"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+				}]
+			},
+			"reviewThreads": {
+				"totalCount": 2,
+				"nodes": [
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "cubic-dev-ai[bot]", "__typename": "Bot"}}]}},
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "cubic-dev-ai[bot]", "__typename": "Bot"}}]}}
+				]
+			},
+			"reviews": {
+				"totalCount": 159,
+				"nodes": [{
+					"state": "COMMENTED",
+					"submittedAt": "2026-08-24T15:00:00Z",
+					"commit": {"oid": "old-head"},
+					"author": {"login": "cubic-dev-ai[bot]", "__typename": "Bot"},
+					"comments": {"totalCount": 1}
+				}]
+			},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "pass" || !info.AIClean {
+			t.Fatalf("expected complete current-head evidence to pass despite old review truncation, got AI=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
+	t.Run("truncated reviews without current-head AI evidence fail closed", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 594,
+			"headRefOid": "current-head",
+			"comments": {"totalCount": 0, "nodes": []},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {
+				"totalCount": 159,
+				"nodes": [{
+					"state": "APPROVED",
+					"commit": {"oid": "old-head"},
+					"author": {"login": "cubic-dev-ai[bot]", "__typename": "Bot"},
+					"comments": {"totalCount": 0}
+				}]
+			},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "?" || info.AIClean {
+			t.Fatalf("expected incomplete current-head evidence to fail closed, got AI=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
 	t.Run("truncated older conversation comments keep recent review evidence", func(t *testing.T) {
 		raw := []byte(`{
 			"number": 47,
@@ -741,6 +809,28 @@ func TestCountResolvedThreads(t *testing.T) {
 	}
 	if got := countResolvedThreads(nil); got != 0 {
 		t.Fatalf("expected 0 for nil, got %d", got)
+	}
+}
+
+func TestConnectionIncomplete(t *testing.T) {
+	tests := []struct {
+		name               string
+		totalCount         int
+		fetchedCount       int
+		sufficientEvidence bool
+		want               bool
+	}{
+		{name: "complete connection", totalCount: 100, fetchedCount: 100, want: false},
+		{name: "truncated without sufficient evidence", totalCount: 101, fetchedCount: 100, want: true},
+		{name: "truncated with sufficient evidence", totalCount: 159, fetchedCount: 100, sufficientEvidence: true, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := connectionIncomplete(tt.totalCount, tt.fetchedCount, tt.sufficientEvidence); got != tt.want {
+				t.Fatalf("connectionIncomplete() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
