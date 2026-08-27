@@ -146,9 +146,17 @@ func sufficientReviewEvidence(reviews []aiReviewNode, headRefOID string, evidenc
 // reviewEvidenceOrderAmbiguous reports whether independently fetched formal
 // and conversation evidence cannot be ordered. Equal or missing timestamps do
 // not prove which current-head result is newer.
-func reviewEvidenceOrderAmbiguous(reviews []aiReviewNode, headRefOID string, evidenceAt time.Time) bool {
-	if evidenceAt.IsZero() {
+func reviewEvidenceOrderAmbiguous(
+	reviews []aiReviewNode,
+	headRefOID string,
+	evidenceAt time.Time,
+	hasConversationEvidence bool,
+) bool {
+	if !hasConversationEvidence {
 		return false
+	}
+	if evidenceAt.IsZero() {
+		return true
 	}
 	var latestFormal time.Time
 	found := false
@@ -459,6 +467,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		formalReviewNodes,
 		prData.HeadRefOID,
 		latestCurrentHeadCodexAt,
+		hasCurrentHeadCodexReview,
 	)
 	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,

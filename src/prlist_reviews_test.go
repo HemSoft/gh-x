@@ -485,6 +485,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			"headRefOid": "682de6badb7404709e1183f4e8ed194c9ae6e34a",
 			"comments": {"nodes": [{
 				"body": "Codex Review: Didn't find any major issues. Nice work!\n\n**Reviewed commit:** 682de6badb",
+				"createdAt": "2026-07-18T20:00:00Z",
 				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
 			}]},
 			"reviewThreads": {"totalCount": 0, "nodes": []},
@@ -617,6 +618,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			"headRefOid": "682de6badb7404709e1183f4e8ed194c9ae6e34a",
 			"comments": {"nodes": [{
 				"body": "Codex Review: Found an issue that should be addressed.\n\n**Reviewed commit:** 682de6badb",
+				"createdAt": "2026-07-18T20:00:00Z",
 				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
 			}]},
 			"reviewThreads": {"totalCount": 0, "nodes": []},
@@ -641,6 +643,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 				"totalCount": 101,
 				"nodes": [{
 					"body": "Codex Review: Didn't find any major issues. Reviewed commit: current-he",
+					"createdAt": "2026-07-18T20:00:00Z",
 					"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
 				}]
 			},
@@ -777,6 +780,34 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 	})
 
+	t.Run("current-head conversation evidence without a timestamp fails closed", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 593,
+			"headRefOid": "current-head",
+			"comments": {"totalCount": 1, "nodes": [{
+				"body": "Codex Review: Didn't find any major issues. Reviewed commit: current-he",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"totalCount": 1, "nodes": [{
+				"state": "APPROVED",
+				"submittedAt": "2026-08-24T16:00:00Z",
+				"commit": {"oid": "current-head"},
+				"author": {"login": "cubic-dev-ai[bot]", "__typename": "Bot"},
+				"comments": {"totalCount": 0}
+			}]},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "?" || info.AIClean {
+			t.Fatalf("expected missing conversation evidence timestamp to fail closed, got AI=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
 	t.Run("truncated reviews without current-head AI evidence fail closed", func(t *testing.T) {
 		raw := []byte(`{
 			"number": 594,
@@ -812,6 +843,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 				"totalCount": 101,
 				"nodes": [{
 					"body": "Codex Review: Didn't find any major issues. Reviewed commit: current-he",
+					"createdAt": "2026-07-18T20:00:00Z",
 					"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
 				}]
 			},
@@ -945,14 +977,17 @@ func TestReviewEvidenceOrderAmbiguous(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := reviewEvidenceOrderAmbiguous(tt.reviews, head, evidenceAt); got != tt.want {
+			if got := reviewEvidenceOrderAmbiguous(tt.reviews, head, evidenceAt, true); got != tt.want {
 				t.Fatalf("reviewEvidenceOrderAmbiguous() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 
-	if reviewEvidenceOrderAmbiguous([]aiReviewNode{{AuthorType: "Bot", CommitOID: head}}, head, time.Time{}) {
+	if reviewEvidenceOrderAmbiguous([]aiReviewNode{{AuthorType: "Bot", CommitOID: head}}, head, time.Time{}, false) {
 		t.Fatal("expected absent conversation evidence to avoid a cross-connection ambiguity")
+	}
+	if !reviewEvidenceOrderAmbiguous(nil, head, time.Time{}, true) {
+		t.Fatal("expected present conversation evidence with a missing timestamp to fail closed")
 	}
 }
 
