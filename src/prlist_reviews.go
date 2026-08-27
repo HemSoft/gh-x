@@ -104,7 +104,7 @@ func currentHeadReviewNodes(reviews []aiReviewNode, headRefOID string) []aiRevie
 	return current
 }
 
-// hasCurrentHeadAIReview reports whether the fetched review window contains AI
+// hasCurrentHeadAIReview reports whether the formal review window contains AI
 // evidence for the current head. Supplemental review queries fetch the newest
 // reviews, so once current-head AI evidence is present, any truncated reviews
 // are older and cannot change the latest current-head result.
@@ -118,6 +118,29 @@ func hasCurrentHeadAIReview(reviews []aiReviewNode, headRefOID string) bool {
 		}
 	}
 	return false
+}
+
+// reviewWindowPredatesEvidence reports whether every omitted formal review is
+// known to be older than independently fetched evidence, such as a Codex
+// conversation receipt. A missing timestamp leaves the boundary ambiguous.
+func reviewWindowPredatesEvidence(reviews []aiReviewNode, evidenceAt time.Time) bool {
+	if evidenceAt.IsZero() || len(reviews) == 0 {
+		return false
+	}
+	oldest := reviews[0].OccurredAt
+	for _, review := range reviews {
+		if review.OccurredAt.IsZero() {
+			return false
+		}
+		if review.OccurredAt.Before(oldest) {
+			oldest = review.OccurredAt
+		}
+	}
+	return !evidenceAt.Before(oldest)
+}
+
+func sufficientReviewEvidence(reviews []aiReviewNode, headRefOID string, evidenceAt time.Time) bool {
+	return hasCurrentHeadAIReview(reviews, headRefOID) || reviewWindowPredatesEvidence(reviews, evidenceAt)
 }
 
 func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, bool) {
@@ -348,9 +371,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		return 0, prSupplementalInfo{}, false
 	}
 
-	var aiNodes []aiReviewNode
+	var formalReviewNodes []aiReviewNode
 	for _, r := range prData.Reviews.Nodes {
-		aiNodes = append(aiNodes, aiReviewNode{
+		formalReviewNodes = append(formalReviewNodes, aiReviewNode{
 			State:        r.State,
 			AuthorLogin:  r.Author.Login,
 			AuthorType:   r.Author.Typename,
@@ -359,7 +382,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			CommitOID:    r.Commit.OID,
 		})
 	}
+	aiNodes := append([]aiReviewNode(nil), formalReviewNodes...)
 	hasCurrentHeadCodexReview := false
+	var latestCurrentHeadCodexAt time.Time
 	for _, comment := range prData.Comments.Nodes {
 		if node, ok := codexReviewNode(aiReviewComment{
 			Body:        comment.Body,
@@ -369,6 +394,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		}, prData.HeadRefOID); ok {
 			aiNodes = append(aiNodes, node)
 			hasCurrentHeadCodexReview = true
+			if node.OccurredAt.After(latestCurrentHeadCodexAt) {
+				latestCurrentHeadCodexAt = node.OccurredAt
+			}
 		}
 	}
 	sortAIReviewsChronologically(aiNodes)
@@ -401,7 +429,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 	reviewsIncomplete := connectionIncomplete(
 		prData.Reviews.TotalCount,
 		len(prData.Reviews.Nodes),
-		hasCurrentHeadAIReview(aiNodes, prData.HeadRefOID),
+		sufficientReviewEvidence(formalReviewNodes, prData.HeadRefOID, latestCurrentHeadCodexAt),
 	)
 	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,

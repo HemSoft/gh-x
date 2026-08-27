@@ -707,6 +707,41 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 	})
 
+	t.Run("independent review and comment pagination fails closed when ordering is ambiguous", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 593,
+			"headRefOid": "current-head",
+			"comments": {
+				"totalCount": 101,
+				"nodes": [{
+					"body": "Codex Review: Didn't find any major issues. Reviewed commit: current-he",
+					"createdAt": "2026-08-24T14:00:00Z",
+					"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+				}]
+			},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {
+				"totalCount": 159,
+				"nodes": [{
+					"state": "COMMENTED",
+					"submittedAt": "2026-08-24T15:00:00Z",
+					"commit": {"oid": "old-head"},
+					"author": {"login": "cubic-dev-ai[bot]", "__typename": "Bot"},
+					"comments": {"totalCount": 1}
+				}]
+			},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		_, info, ok := parsePRSupplementalNode(raw)
+		if !ok {
+			t.Fatal("expected valid supplemental node")
+		}
+		if info.AIReview != "?" || info.AIClean {
+			t.Fatalf("expected ambiguous independent pagination to fail closed, got AI=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
 	t.Run("truncated reviews without current-head AI evidence fail closed", func(t *testing.T) {
 		raw := []byte(`{
 			"number": 594,
@@ -831,6 +866,26 @@ func TestConnectionIncomplete(t *testing.T) {
 				t.Fatalf("connectionIncomplete() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestReviewWindowPredatesEvidence(t *testing.T) {
+	t0 := time.Date(2026, 8, 24, 14, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Hour)
+	t2 := t1.Add(time.Hour)
+	reviews := []aiReviewNode{{OccurredAt: t2}, {OccurredAt: t1}}
+
+	if !reviewWindowPredatesEvidence(reviews, t2) {
+		t.Fatal("expected newer evidence to establish the formal review boundary")
+	}
+	if reviewWindowPredatesEvidence(reviews, t0) {
+		t.Fatal("expected older evidence to leave the formal review boundary ambiguous")
+	}
+	if reviewWindowPredatesEvidence([]aiReviewNode{{}}, t2) {
+		t.Fatal("expected a missing formal review timestamp to fail closed")
+	}
+	if reviewWindowPredatesEvidence(reviews, time.Time{}) {
+		t.Fatal("expected a missing evidence timestamp to fail closed")
 	}
 }
 
