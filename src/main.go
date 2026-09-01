@@ -544,7 +544,7 @@ Usage:
   gh x <command> [flags]
 
 Available Commands:
-  status     Show repository health, issues, and pull requests (alias: s)
+  status     Show repository health, issues, pull requests, and runs (alias: s)
   changelog  Show release notes for recent versions
   pr         Pull request commands (list, me, atm, review, changelog)
   issue      Issue commands (list)

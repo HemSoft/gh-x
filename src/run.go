@@ -50,6 +50,11 @@ type displayWorkflowRun struct {
 	Age      string
 }
 
+type workflowRunListResult struct {
+	Entries  []workflowRun
+	Rendered []displayWorkflowRun
+}
+
 const runJSONFields = "databaseId,displayTitle,workflowName,headBranch,event,status,conclusion,url,createdAt,startedAt,updatedAt"
 
 // executeRunListFunc is swapped in tests to avoid real API calls.
@@ -137,15 +142,25 @@ func buildRunListArgs(options runListOptions) []string {
 }
 
 func executeRunList(options runListOptions, stdout io.Writer, now time.Time) error {
+	result, err := fetchWorkflowRunList(options, now)
+	if err != nil {
+		return err
+	}
+
+	colorEnabled := term.FromEnv().IsColorEnabled()
+	return renderRunTable(stdout, result.Rendered, colorEnabled)
+}
+
+func fetchWorkflowRunList(options runListOptions, now time.Time) (workflowRunListResult, error) {
 	ghArgs := buildRunListArgs(options)
 	stdoutBuf, stderrBuf, err := ghExecFunc(ghArgs...)
 	if err != nil {
-		return fmt.Errorf("gh run list: %s: %w", stderrBuf.String(), err)
+		return workflowRunListResult{}, fmt.Errorf("gh run list: %s: %w", stderrBuf.String(), err)
 	}
 
 	var runs []workflowRun
 	if err := json.Unmarshal(stdoutBuf.Bytes(), &runs); err != nil {
-		return fmt.Errorf("parsing run list: %w", err)
+		return workflowRunListResult{}, fmt.Errorf("parsing run list: %w", err)
 	}
 
 	displayRuns := make([]displayWorkflowRun, len(runs))
@@ -153,8 +168,7 @@ func executeRunList(options runListOptions, stdout io.Writer, now time.Time) err
 		displayRuns[i] = buildDisplayWorkflowRun(r, now)
 	}
 
-	colorEnabled := term.FromEnv().IsColorEnabled()
-	return renderRunTable(stdout, displayRuns, colorEnabled)
+	return workflowRunListResult{Entries: runs, Rendered: displayRuns}, nil
 }
 
 func buildDisplayWorkflowRun(r workflowRun, now time.Time) displayWorkflowRun {
@@ -266,12 +280,24 @@ func renderRunTable(stdout io.Writer, runs []displayWorkflowRun, colorEnabled bo
 		return nil
 	}
 
+	renderWorkflowRunRows(stdout, runs, colorEnabled)
+
+	if colorEnabled {
+		cmd := "gh run view " + runs[0].ID
+		writeOSC52(stdout, cmd)
+		fmt.Fprintf(stdout, "\n→ %s  (copied — Ctrl+V to paste)\n", cmd)
+	}
+
+	return nil
+}
+
+func renderWorkflowRunRows(stdout io.Writer, runs []displayWorkflowRun, colorEnabled bool) {
 	styler := newTableStyler(stdout, colorEnabled)
 
 	headerLabels := []string{"", "Title", "Workflow", "Branch", "Event", "ID", "Elapsed", "Age"}
 	headers := make([]tableCell, len(headerLabels))
 	for i, label := range headerLabels {
-		headers[i] = styler.dim(label)
+		headers[i] = styler.header(label)
 	}
 
 	rows := make([][]tableCell, len(runs))
@@ -295,18 +321,10 @@ func renderRunTable(stdout io.Writer, runs []displayWorkflowRun, colorEnabled bo
 	colWidths = fitColumnsToTerminal(colWidths, flexibleCols, getTerminalWidth())
 	rows = truncateCells(rows, colWidths, flexibleCols)
 
-	writeRow(stdout, headers, colWidths)
+	writeTableHeader(stdout, styler, headers, colWidths)
 	for _, row := range rows {
 		writeRow(stdout, row, colWidths)
 	}
-
-	if colorEnabled {
-		cmd := "gh run view " + runs[0].ID
-		writeOSC52(stdout, cmd)
-		fmt.Fprintf(stdout, "\n→ %s  (copied — Ctrl+V to paste)\n", cmd)
-	}
-
-	return nil
 }
 
 func writeRunListUsage(w io.Writer) {

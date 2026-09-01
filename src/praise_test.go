@@ -51,6 +51,41 @@ func TestBacklogPraiseSelectionBoundaries(t *testing.T) {
 	}
 }
 
+func TestWorkflowPerfectionPraisePool(t *testing.T) {
+	if len(workflowPerfectionPraises) < 3 {
+		t.Fatalf("workflowPerfectionPraises has %d messages, want at least 3", len(workflowPerfectionPraises))
+	}
+	for _, want := range []string{
+		"✨ Five for five. Flawless.",
+		"✨ CI perfection: five straight successes.",
+	} {
+		if !containsString(workflowPerfectionPraises, want) {
+			t.Fatalf("workflowPerfectionPraises is missing %q", want)
+		}
+	}
+}
+
+func TestWorkflowPerfectionPraiseSelectionBoundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		index int
+		want  string
+	}{
+		{name: "first", index: 0, want: workflowPerfectionPraises[0]},
+		{name: "last", index: len(workflowPerfectionPraises) - 1, want: workflowPerfectionPraises[len(workflowPerfectionPraises)-1]},
+		{name: "negative falls back", index: -1, want: workflowPerfectionPraises[0]},
+		{name: "upper bound falls back", index: len(workflowPerfectionPraises), want: workflowPerfectionPraises[0]},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := workflowPerfectionPraiseAt(tc.index); got != tc.want {
+				t.Fatalf("workflowPerfectionPraiseAt(%d) = %q, want %q", tc.index, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOpenPullRequestBacklogEligibility(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -233,4 +268,25 @@ func useBacklogPraiseIndex(t *testing.T, index int) {
 		return index
 	}
 	t.Cleanup(func() { backlogPraiseIndex = original })
+}
+
+func useWorkflowPerfectionPraiseIndex(t *testing.T, index int) {
+	t.Helper()
+	original := workflowPerfectionPraiseIndex
+	workflowPerfectionPraiseIndex = func(limit int) int {
+		if limit != len(workflowPerfectionPraises) {
+			t.Fatalf("selector limit = %d, want %d", limit, len(workflowPerfectionPraises))
+		}
+		return index
+	}
+	t.Cleanup(func() { workflowPerfectionPraiseIndex = original })
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

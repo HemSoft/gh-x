@@ -145,6 +145,36 @@ func TestBuildRunListArgs(t *testing.T) {
 	}
 }
 
+func TestFetchWorkflowRunListPreservesOrder(t *testing.T) {
+	saved := ghExecFunc
+	t.Cleanup(func() { ghExecFunc = saved })
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		want := "run list --json " + runJSONFields + " --limit 5"
+		if got := strings.Join(args, " "); got != want {
+			t.Fatalf("gh arguments = %q, want %q", got, want)
+		}
+		return *bytes.NewBufferString(`[
+			{"databaseId":22,"displayTitle":"Newest","workflowName":"","headBranch":"main","event":"push","status":"completed","conclusion":"success","url":"https://example.com/22","createdAt":"2026-05-12T05:09:00Z","startedAt":"2026-05-12T05:09:00Z","updatedAt":"2026-05-12T05:09:30Z"},
+			{"databaseId":11,"displayTitle":"Older","workflowName":"CI","headBranch":"main","event":"push","status":"completed","conclusion":"failure","url":"https://example.com/11","createdAt":"2026-05-12T05:08:00Z","startedAt":"2026-05-12T05:08:00Z","updatedAt":"2026-05-12T05:08:30Z"}
+		]`), bytes.Buffer{}, nil
+	}
+
+	now := time.Date(2026, 5, 12, 5, 10, 0, 0, time.UTC)
+	result, err := fetchWorkflowRunList(runListOptions{limit: 5}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) != 2 || result.Entries[0].DatabaseID != 22 || result.Entries[1].DatabaseID != 11 {
+		t.Fatalf("raw run order changed: %#v", result.Entries)
+	}
+	if len(result.Rendered) != 2 || result.Rendered[0].ID != "22" || result.Rendered[1].ID != "11" {
+		t.Fatalf("display run order changed: %#v", result.Rendered)
+	}
+	if result.Rendered[0].Workflow != "" {
+		t.Fatalf("empty workflow name = %q, want empty", result.Rendered[0].Workflow)
+	}
+}
+
 func TestResolveRunStatus(t *testing.T) {
 	tests := []struct {
 		status     string
@@ -344,18 +374,21 @@ func TestRenderRunTableAlignment(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 lines (header + 2 rows), got %d", len(lines))
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 lines (rules + header + 2 rows), got %d", len(lines))
 	}
 
-	if !strings.Contains(lines[0], "Title") || !strings.Contains(lines[0], "Workflow") {
+	if !strings.Contains(lines[1], "Title") || !strings.Contains(lines[1], "Workflow") {
 		t.Fatal("expected header labels")
+	}
+	if strings.Trim(lines[0], "─") != "" || strings.Trim(lines[2], "─") != "" {
+		t.Fatal("expected full-width rules around the header")
 	}
 
 	// Verify Title column alignment (all ASCII status chars, consistent byte widths)
-	headerTitleIdx := strings.Index(lines[0], "Title")
-	row1TitleIdx := strings.Index(lines[1], "Short")
-	row2TitleIdx := strings.Index(lines[2], "Much")
+	headerTitleIdx := strings.Index(lines[1], "Title")
+	row1TitleIdx := strings.Index(lines[3], "Short")
+	row2TitleIdx := strings.Index(lines[4], "Much")
 	if headerTitleIdx != row1TitleIdx || headerTitleIdx != row2TitleIdx {
 		t.Fatalf("Title column misaligned: header=%d row1=%d row2=%d", headerTitleIdx, row1TitleIdx, row2TitleIdx)
 	}

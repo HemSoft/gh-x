@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -226,6 +227,20 @@ func TestFetchStatusDashboard(t *testing.T) {
 			Rendered: []displayPullRequest{{Number: 2, Title: "Open PR", State: "open"}},
 		}, nil
 	}
+	statusWorkflowRunListFunc = func(options runListOptions, now time.Time) (workflowRunListResult, error) {
+		if options.limit != statusWorkflowRunLimit || options.repo != "" || options.status != "" || options.workflow != "" || options.branch != "" || options.event != "" || options.user != "" {
+			t.Fatalf("unexpected run options: %#v", options)
+		}
+		if want := statusNowFunc(); !now.Equal(want) {
+			t.Fatalf("run fetch time = %s, want %s", now, want)
+		}
+		entries := successfulWorkflowRuns(statusWorkflowRunLimit)
+		rendered := make([]displayWorkflowRun, statusWorkflowRunLimit)
+		for i := range rendered {
+			rendered[i] = displayWorkflowRun{ID: strconv.Itoa(i + 1), Title: "Run"}
+		}
+		return workflowRunListResult{Entries: entries, Rendered: rendered}, nil
+	}
 
 	branchOutput := strings.Join([]string{
 		"refs/heads/feature/status\tfeature/status\torigin/main\t\t",
@@ -271,8 +286,11 @@ func TestFetchStatusDashboard(t *testing.T) {
 	if got.Branches.LocalCount != 3 || got.Branches.RemoteCount != 1 || got.Branches.DanglingCount != 1 {
 		t.Fatalf("unexpected branch inventory: %#v", got.Branches)
 	}
-	if got.CurrentStatus.Branch != "feature/status" || len(got.Issues) != 1 || len(got.PullRequests) != 1 {
+	if got.CurrentStatus.Branch != "feature/status" || len(got.Issues) != 1 || len(got.PullRequests) != 1 || len(got.WorkflowRuns) != statusWorkflowRunLimit {
 		t.Fatalf("unexpected dashboard data: %#v", got)
+	}
+	if !got.WorkflowRunsPerfect {
+		t.Fatal("five successful runs should produce a clean streak")
 	}
 	if statusCleanupCandidateCount(got.Worktrees) != 1 || !got.Worktrees[2].CleanupCandidate {
 		t.Fatalf("expected only old worktree to be a cleanup candidate: %#v", got.Worktrees)
@@ -288,6 +306,9 @@ func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
 	statusIssueListFunc = func(issueListOptions, time.Time) ([]displayIssue, error) { return nil, nil }
 	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
 		return pullRequestListResult{Entries: make([]pullRequest, statusListLimit)}, nil
+	}
+	statusWorkflowRunListFunc = func(runListOptions, time.Time) (workflowRunListResult, error) {
+		return workflowRunListResult{}, nil
 	}
 	installStatusDashboardGitFixture()
 
@@ -309,6 +330,9 @@ func TestFetchStatusDashboardKeepsLocalHealthWhenGitHubFails(t *testing.T) {
 	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
 		return pullRequestListResult{}, errors.New("pull requests offline")
 	}
+	statusWorkflowRunListFunc = func(runListOptions, time.Time) (workflowRunListResult, error) {
+		return workflowRunListResult{}, errors.New("workflow runs offline")
+	}
 	installStatusDashboardGitFixture()
 
 	dashboard, err := fetchStatusDashboard()
@@ -318,7 +342,7 @@ func TestFetchStatusDashboardKeepsLocalHealthWhenGitHubFails(t *testing.T) {
 	if dashboard.DefaultBranch != "main" || dashboard.Branches.LocalCount != 2 || len(dashboard.Worktrees) != 2 {
 		t.Fatalf("local health was not preserved: %#v", dashboard)
 	}
-	if dashboard.IssuesErr == nil || dashboard.PullRequestsErr == nil {
+	if dashboard.IssuesErr == nil || dashboard.PullRequestsErr == nil || dashboard.WorkflowRunsErr == nil {
 		t.Fatalf("GitHub section errors were not preserved: %#v", dashboard)
 	}
 	if statusCleanupCandidateCount(dashboard.Worktrees) != 0 {
@@ -362,6 +386,7 @@ func TestRenderStatusNoColor(t *testing.T) {
 		"Repository", "owner/repo", "Main", "synced with origin/main", "Current", "feature/status",
 		"3 local (1 dangling) · 2 remote", "3 total · 1 cleanup candidate",
 		"old — C:/repo.worktrees/old", "Open issues (1)", "#7", "Open pull requests (1)", "#2",
+		"Recent workflow runs (1)", "Status run", "808",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected %q in output:\n%s", want, output)
@@ -382,6 +407,9 @@ func TestRenderStatusColorHasLinksButNoClipboard(t *testing.T) {
 	if !strings.Contains(output, "\x1b]8;;https://github.com/owner/repo/issues/7") {
 		t.Fatal("expected clickable issue link")
 	}
+	if !strings.Contains(output, "\x1b]8;;https://github.com/owner/repo/actions/runs/808") {
+		t.Fatal("expected clickable workflow run link")
+	}
 	if strings.Contains(output, "\x1b]52;") || strings.Contains(output, "copied") {
 		t.Fatal("status must not copy embedded table commands to the clipboard")
 	}
@@ -398,19 +426,87 @@ func TestRenderStatusEmptyAndUnavailableSections(t *testing.T) {
 		if strings.Count(output, backlogPraises[0]) != 2 {
 			t.Fatalf("missing empty states:\n%s", output)
 		}
+		if !strings.Contains(output, "Recent workflow runs (0)") || !strings.Contains(output, "No workflow runs found.") {
+			t.Fatalf("missing empty workflow state:\n%s", output)
+		}
 	})
 
 	t.Run("unavailable", func(t *testing.T) {
 		var buf bytes.Buffer
-		dashboard := statusDashboard{IssuesErr: errors.New("offline\nextra"), PullRequestsErr: errors.New("unauthorized")}
+		dashboard := statusDashboard{IssuesErr: errors.New("offline\nextra"), PullRequestsErr: errors.New("unauthorized"), WorkflowRunsErr: errors.New("actions offline")}
 		if err := renderStatus(&buf, dashboard, false); err != nil {
 			t.Fatal(err)
 		}
 		output := buf.String()
-		if !strings.Contains(output, "Unavailable: offline extra") || !strings.Contains(output, "Unavailable: unauthorized") {
+		if !strings.Contains(output, "Unavailable: offline extra") || !strings.Contains(output, "Unavailable: unauthorized") || !strings.Contains(output, "Unavailable: actions offline") {
 			t.Fatalf("missing unavailable states:\n%s", output)
 		}
 	})
+
+	t.Run("workflow unavailable preserves issues and pull requests", func(t *testing.T) {
+		var buf bytes.Buffer
+		dashboard := sampleStatusDashboard()
+		dashboard.WorkflowRuns = nil
+		dashboard.WorkflowRunsErr = errors.New("actions offline")
+		if err := renderStatus(&buf, dashboard, false); err != nil {
+			t.Fatal(err)
+		}
+		output := buf.String()
+		for _, want := range []string{"#7", "#2", "Recent workflow runs", "Unavailable: actions offline"} {
+			if !strings.Contains(output, want) {
+				t.Fatalf("workflow failure suppressed %q:\n%s", want, output)
+			}
+		}
+	})
+}
+
+func TestPerfectWorkflowRunStreak(t *testing.T) {
+	failure := successfulWorkflowRuns(statusWorkflowRunLimit)
+	failure[2].Conclusion = "failure"
+	inProgress := successfulWorkflowRuns(statusWorkflowRunLimit)
+	inProgress[4].Status = "in_progress"
+	inProgress[4].Conclusion = ""
+	tests := []struct {
+		name string
+		runs []workflowRun
+		want bool
+	}{
+		{name: "five successes", runs: successfulWorkflowRuns(statusWorkflowRunLimit), want: true},
+		{name: "four successes", runs: successfulWorkflowRuns(statusWorkflowRunLimit - 1)},
+		{name: "one failure", runs: failure},
+		{name: "one in progress", runs: inProgress},
+		{name: "no runs"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isPerfectWorkflowRunStreak(tc.runs); got != tc.want {
+				t.Fatalf("isPerfectWorkflowRunStreak() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRenderStatusWorkflowRunSection(t *testing.T) {
+	useWorkflowPerfectionPraiseIndex(t, 1)
+	dashboard := statusDashboard{
+		WorkflowRuns:        []displayWorkflowRun{{Status: "✓", Title: "Perfect build", Branch: "main", Event: "push", ID: "123", URL: "https://example.com/123", Elapsed: "10s", Age: "1m"}},
+		WorkflowRunsPerfect: true,
+	}
+	var buf bytes.Buffer
+	if err := renderStatusWorkflowRunSection(&buf, newTableStyler(&buf, false), dashboard); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) < 7 || lines[0] != "Recent workflow runs (1)" {
+		t.Fatalf("unexpected workflow section:\n%s", buf.String())
+	}
+	if strings.Trim(lines[1], "─") != "" || strings.Trim(lines[3], "─") != "" {
+		t.Fatalf("missing bordered workflow header:\n%s", buf.String())
+	}
+	if !strings.Contains(lines[2], "Title") || !strings.Contains(lines[2], "Workflow") || !strings.Contains(buf.String(), workflowPerfectionPraises[1]) {
+		t.Fatalf("missing headers or perfection praise:\n%s", buf.String())
+	}
 }
 
 func TestRunStatusAliasesUseFetcher(t *testing.T) {
@@ -453,7 +549,7 @@ func TestRootUsageMentionsStatusAlias(t *testing.T) {
 		name string
 		want string
 	}{
-		{name: "command listing", want: "status     Show repository health, issues, and pull requests (alias: s)"},
+		{name: "command listing", want: "status     Show repository health, issues, pull requests, and runs (alias: s)"},
 		{name: "example", want: "gh x s"},
 	}
 
@@ -472,7 +568,7 @@ func TestRunStatusHelp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"gh x status", "branches", "worktrees", "open issues", "open pull requests"} {
+	for _, want := range []string{"gh x status", "branches", "worktrees", "open issues", "open pull requests", "workflow runs"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("expected %q in status usage, got %q", want, stderr.String())
 		}
@@ -494,6 +590,7 @@ func sampleStatusDashboard() statusDashboard {
 		},
 		Issues:       []displayIssue{{Number: 7, Title: "Status dashboard", Author: "alice", State: "open", Updated: "1m", URL: "https://github.com/owner/repo/issues/7"}},
 		PullRequests: []displayPullRequest{{Number: 2, Title: "Open PR", Author: "bob", State: "open", Review: "required", AIReview: "-", Checks: "pending", Comments: "-", Branch: "feature", Updated: "2m", URL: "https://github.com/owner/repo/pull/2"}},
+		WorkflowRuns: []displayWorkflowRun{{Status: "✓", Title: "Status run", Workflow: "CI", Branch: "main", Event: "push", ID: "808", URL: "https://github.com/owner/repo/actions/runs/808", Elapsed: "8s", Age: "1m"}},
 	}
 }
 
@@ -502,6 +599,7 @@ func saveStatusFuncs() func() {
 	savedCommand := statusCommandFunc
 	savedIssues := statusIssueListFunc
 	savedPullRequests := statusPullRequestListFunc
+	savedWorkflowRuns := statusWorkflowRunListFunc
 	savedRepoLabel := statusRepoLabelFunc
 	savedDefaultBranch := statusDefaultBranchFunc
 	savedNow := statusNowFunc
@@ -511,9 +609,18 @@ func saveStatusFuncs() func() {
 		statusCommandFunc = savedCommand
 		statusIssueListFunc = savedIssues
 		statusPullRequestListFunc = savedPullRequests
+		statusWorkflowRunListFunc = savedWorkflowRuns
 		statusRepoLabelFunc = savedRepoLabel
 		statusDefaultBranchFunc = savedDefaultBranch
 		statusNowFunc = savedNow
 		statusPathExistsFunc = savedPathExists
 	}
+}
+
+func successfulWorkflowRuns(count int) []workflowRun {
+	runs := make([]workflowRun, count)
+	for i := range runs {
+		runs[i] = workflowRun{Status: "completed", Conclusion: "success"}
+	}
+	return runs
 }

@@ -108,10 +108,15 @@ branch or detached commit known to be merged. Current, primary, locked, and
 default-branch worktrees are never suggested. Suggestions are informational;
 the command never deletes or prunes a worktree.
 
-Open issues and enriched open pull requests appear in separate tables below the
-header. Local Git status still renders when GitHub data is unavailable.
+Open issues, enriched open pull requests, and the five most recent workflow
+runs appear in separate tables below the header. Workflow runs keep the same
+status, title, workflow, branch, event, linked ID, elapsed-time, and age columns
+as `gh x run list`. Local Git status still renders when GitHub data is
+unavailable.
 When either unfiltered open-work section is empty, it prints one randomly
 selected celebration from the same pool used by the list commands.
+When all five recent workflow runs completed successfully, status prints one
+randomly selected perfection message from a workflow-specific pool.
 
 ## What `gh x pr list` adds
 
