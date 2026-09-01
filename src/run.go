@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -162,6 +163,12 @@ func fetchWorkflowRunList(options runListOptions, now time.Time) (workflowRunLis
 	if err := json.Unmarshal(stdoutBuf.Bytes(), &runs); err != nil {
 		return workflowRunListResult{}, fmt.Errorf("parsing run list: %w", err)
 	}
+	sort.Slice(runs, func(i, j int) bool {
+		if runs[i].CreatedAt.Equal(runs[j].CreatedAt) {
+			return runs[i].DatabaseID > runs[j].DatabaseID
+		}
+		return runs[i].CreatedAt.After(runs[j].CreatedAt)
+	})
 
 	displayRuns := make([]displayWorkflowRun, len(runs))
 	for i, r := range runs {

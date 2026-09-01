@@ -28,6 +28,8 @@ and this project uses semantic versioning.
 
 ### Fixed
 
+- Sorted workflow runs newest-first before rendering `gh x status` and
+  `gh x run list`, with deterministic ordering for equal timestamps.
 - Routed `gh x monitor` GraphQL requests by normalized GitHub host, so
   Enterprise and mixed-host configurations use host-specific endpoints while
   search qualifiers remain `OWNER/REPO`.

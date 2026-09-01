@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -145,7 +146,7 @@ func TestBuildRunListArgs(t *testing.T) {
 	}
 }
 
-func TestFetchWorkflowRunListPreservesOrder(t *testing.T) {
+func TestFetchWorkflowRunListSortsNewestFirst(t *testing.T) {
 	saved := ghExecFunc
 	t.Cleanup(func() { ghExecFunc = saved })
 	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
@@ -154,8 +155,9 @@ func TestFetchWorkflowRunListPreservesOrder(t *testing.T) {
 			t.Fatalf("gh arguments = %q, want %q", got, want)
 		}
 		return *bytes.NewBufferString(`[
-			{"databaseId":22,"displayTitle":"Newest","workflowName":"","headBranch":"main","event":"push","status":"completed","conclusion":"success","url":"https://example.com/22","createdAt":"2026-05-12T05:09:00Z","startedAt":"2026-05-12T05:09:00Z","updatedAt":"2026-05-12T05:09:30Z"},
-			{"databaseId":11,"displayTitle":"Older","workflowName":"CI","headBranch":"main","event":"push","status":"completed","conclusion":"failure","url":"https://example.com/11","createdAt":"2026-05-12T05:08:00Z","startedAt":"2026-05-12T05:08:00Z","updatedAt":"2026-05-12T05:08:30Z"}
+			{"databaseId":11,"displayTitle":"Older","workflowName":"CI","headBranch":"main","event":"push","status":"completed","conclusion":"failure","url":"https://example.com/11","createdAt":"2026-05-12T05:08:00Z","startedAt":"2026-05-12T05:08:00Z","updatedAt":"2026-05-12T05:08:30Z"},
+			{"databaseId":22,"displayTitle":"Newest lower ID","workflowName":"","headBranch":"main","event":"push","status":"completed","conclusion":"success","url":"https://example.com/22","createdAt":"2026-05-12T05:09:00Z","startedAt":"2026-05-12T05:09:00Z","updatedAt":"2026-05-12T05:09:30Z"},
+			{"databaseId":33,"displayTitle":"Newest higher ID","workflowName":"CI","headBranch":"main","event":"push","status":"completed","conclusion":"success","url":"https://example.com/33","createdAt":"2026-05-12T05:09:00Z","startedAt":"2026-05-12T05:09:00Z","updatedAt":"2026-05-12T05:09:40Z"}
 		]`), bytes.Buffer{}, nil
 	}
 
@@ -164,14 +166,20 @@ func TestFetchWorkflowRunListPreservesOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Entries) != 2 || result.Entries[0].DatabaseID != 22 || result.Entries[1].DatabaseID != 11 {
-		t.Fatalf("raw run order changed: %#v", result.Entries)
+	wantIDs := []int{33, 22, 11}
+	if len(result.Entries) != len(wantIDs) || len(result.Rendered) != len(wantIDs) {
+		t.Fatalf("run counts = raw %d, rendered %d, want %d", len(result.Entries), len(result.Rendered), len(wantIDs))
 	}
-	if len(result.Rendered) != 2 || result.Rendered[0].ID != "22" || result.Rendered[1].ID != "11" {
-		t.Fatalf("display run order changed: %#v", result.Rendered)
+	for i, wantID := range wantIDs {
+		if result.Entries[i].DatabaseID != wantID {
+			t.Fatalf("raw run %d ID = %d, want %d", i, result.Entries[i].DatabaseID, wantID)
+		}
+		if result.Rendered[i].ID != strconv.Itoa(wantID) {
+			t.Fatalf("rendered run %d ID = %q, want %d", i, result.Rendered[i].ID, wantID)
+		}
 	}
-	if result.Rendered[0].Workflow != "" {
-		t.Fatalf("empty workflow name = %q, want empty", result.Rendered[0].Workflow)
+	if result.Rendered[1].Workflow != "" {
+		t.Fatalf("empty workflow name = %q, want empty", result.Rendered[1].Workflow)
 	}
 }
 
