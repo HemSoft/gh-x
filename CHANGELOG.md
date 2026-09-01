@@ -9,6 +9,8 @@ and this project uses semantic versioning.
 
 ### Added
 
+- Added the five most recent workflow runs to `gh x status`, with bordered
+  headers and a rotating perfection message when all five runs succeed.
 - Added linked pull request numbers to issue tables and linked issue numbers to
   pull request tables, including both sections of `gh x status`.
 - Added `gh x monitor`, a Bubble Tea dashboard across configured repositories

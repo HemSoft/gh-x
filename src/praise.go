@@ -25,7 +25,16 @@ var backlogPraises = []string{
 	"✅ The queue is empty. Coffee tastes better now.",
 }
 
+var workflowPerfectionPraises = []string{
+	"✨ Five for five. Flawless.",
+	"✨ CI perfection: five straight successes.",
+	"✨ Not a blemish in sight. The last five runs are green.",
+	"✨ Five clean runs. The machines approve.",
+	"✨ A perfect five. Absolutely spotless.",
+}
+
 var backlogPraiseIndex = rand.IntN
+var workflowPerfectionPraiseIndex = rand.IntN
 
 func writeBacklogPraise(stdout io.Writer) {
 	fmt.Fprintln(stdout, backlogPraiseAt(backlogPraiseIndex(len(backlogPraises))))
@@ -36,6 +45,17 @@ func backlogPraiseAt(index int) string {
 		return backlogPraises[0]
 	}
 	return backlogPraises[index]
+}
+
+func writeWorkflowPerfectionPraise(stdout io.Writer) {
+	fmt.Fprintln(stdout, workflowPerfectionPraiseAt(workflowPerfectionPraiseIndex(len(workflowPerfectionPraises))))
+}
+
+func workflowPerfectionPraiseAt(index int) string {
+	if index < 0 || index >= len(workflowPerfectionPraises) {
+		return workflowPerfectionPraises[0]
+	}
+	return workflowPerfectionPraises[index]
 }
 
 func isOpenPullRequestBacklog(options listOptions) bool {

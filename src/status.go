@@ -67,23 +67,27 @@ type statusWorktree struct {
 }
 
 type statusDashboard struct {
-	Repository        string
-	DefaultBranch     string
-	DefaultStatus     statusSummary
-	DefaultCheckedOut bool
-	DefaultStatusErr  error
-	CurrentStatus     statusSummary
-	Branches          statusBranchInventory
-	Worktrees         []statusWorktree
-	Issues            []displayIssue
-	IssuesErr         error
-	PullRequests      []displayPullRequest
-	PullRequestsErr   error
+	Repository          string
+	DefaultBranch       string
+	DefaultStatus       statusSummary
+	DefaultCheckedOut   bool
+	DefaultStatusErr    error
+	CurrentStatus       statusSummary
+	Branches            statusBranchInventory
+	Worktrees           []statusWorktree
+	Issues              []displayIssue
+	IssuesErr           error
+	PullRequests        []displayPullRequest
+	PullRequestsErr     error
+	WorkflowRuns        []displayWorkflowRun
+	WorkflowRunsPerfect bool
+	WorkflowRunsErr     error
 }
 
 const (
-	statusListLimit    = 30
-	statusBranchFormat = "%(refname)%09%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(symref)"
+	statusListLimit        = 30
+	statusWorkflowRunLimit = 5
+	statusBranchFormat     = "%(refname)%09%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(symref)"
 )
 
 func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
@@ -127,6 +131,7 @@ var (
 	fetchStatusDashboardFunc  = fetchStatusDashboard
 	statusIssueListFunc       = fetchDisplayIssues
 	statusPullRequestListFunc = fetchPullRequestList
+	statusWorkflowRunListFunc = fetchWorkflowRunList
 	statusRepoLabelFunc       = resolveRepoLabel
 	statusDefaultBranchFunc   = fetchHostedDefaultBranch
 	statusNowFunc             = func() time.Time { return time.Now().UTC() }
@@ -181,6 +186,14 @@ func fetchStatusDashboard() (statusDashboard, error) {
 	dashboard.PullRequestsErr = prErr
 	if prErr == nil {
 		dashboard.PullRequests = prResult.Rendered
+	}
+
+	runOptions := runListOptions{limit: statusWorkflowRunLimit}
+	runResult, runErr := statusWorkflowRunListFunc(runOptions, now)
+	dashboard.WorkflowRunsErr = runErr
+	if runErr == nil {
+		dashboard.WorkflowRuns = runResult.Rendered
+		dashboard.WorkflowRunsPerfect = isPerfectWorkflowRunStreak(runResult.Entries)
 	}
 
 	merged, mergedKnown := fetchMergedStatusBranches(defaultBranch)
@@ -593,7 +606,22 @@ func renderStatus(stdout io.Writer, dashboard statusDashboard, colorEnabled bool
 	if err := renderStatusIssueSection(stdout, styler, dashboard); err != nil {
 		return err
 	}
-	return renderStatusPullRequestSection(stdout, styler, dashboard)
+	if err := renderStatusPullRequestSection(stdout, styler, dashboard); err != nil {
+		return err
+	}
+	return renderStatusWorkflowRunSection(stdout, styler, dashboard)
+}
+
+func isPerfectWorkflowRunStreak(runs []workflowRun) bool {
+	if len(runs) != statusWorkflowRunLimit {
+		return false
+	}
+	for _, run := range runs {
+		if run.Status != "completed" || run.Conclusion != "success" {
+			return false
+		}
+	}
+	return true
 }
 
 func hasWorkingChanges(summary statusSummary) bool {
@@ -835,6 +863,26 @@ func renderStatusPullRequestSection(stdout io.Writer, styler tableStyler, dashbo
 	return nil
 }
 
+func renderStatusWorkflowRunSection(stdout io.Writer, styler tableStyler, dashboard statusDashboard) error {
+	fmt.Fprintln(stdout)
+	if dashboard.WorkflowRunsErr != nil {
+		fmt.Fprintln(stdout, "Recent workflow runs")
+		fmt.Fprintln(stdout, styler.dim("Unavailable: "+conciseStatusError(dashboard.WorkflowRunsErr)).styled)
+		return nil
+	}
+	fmt.Fprintf(stdout, "Recent workflow runs (%d)\n", len(dashboard.WorkflowRuns))
+	if len(dashboard.WorkflowRuns) == 0 {
+		fmt.Fprintln(stdout, "No workflow runs found.")
+		return nil
+	}
+	renderWorkflowRunRows(stdout, dashboard.WorkflowRuns, styler.colorEnabled)
+	if dashboard.WorkflowRunsPerfect {
+		fmt.Fprintln(stdout)
+		writeWorkflowPerfectionPraise(stdout)
+	}
+	return nil
+}
+
 func statusSectionCount(count int) string {
 	if count >= statusListLimit {
 		return fmt.Sprintf("%d+", count)
@@ -854,5 +902,6 @@ func writeStatusUsage(w io.Writer) {
 const statusUsage = `Usage:
   gh x status
 
-Show repository health, branches, worktrees, open issues, and open pull requests.
+Show repository health, branches, worktrees, open issues, open pull requests,
+and the five most recent workflow runs.
 `
