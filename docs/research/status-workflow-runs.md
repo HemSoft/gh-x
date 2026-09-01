@@ -8,12 +8,17 @@ Add the five most recent GitHub Actions runs to `gh x status`. Give the section 
 as the issue and pull request sections. When all five fetched runs completed successfully, print a short, fun
 perfection message.
 
-## What the repository does today
+## Pre-implementation baseline
+
+The behavior in this section describes commit `900fa846`, before issue #46 was
+implemented. Its source links resolve against the updated tree after merge, so
+the statements below record what those locations did at the start of the work.
 
 ### Status fetch and error boundaries
 
-`statusDashboard` has data and independent error fields for issues and pull requests, but no workflow-run fields
-yet. See [`src/status.go:69-82`](../../src/status.go#L69-L82).
+Before implementation, `statusDashboard` had data and independent error fields
+for issues and pull requests, but no workflow-run fields. See
+[`src/status.go:69-82`](../../src/status.go#L69-L82).
 
 `fetchStatusDashboard` gathers local Git state first. It then uses one captured `now` value to fetch 30 open
 issues and 30 open pull requests. GitHub failures stay on the dashboard instead of failing the whole command.
@@ -53,8 +58,10 @@ The repository already has nearly all of the needed workflow-run behavior in `sr
 - `resolveRunStatus` maps raw status and conclusion values to the existing glyphs. Completed `success` is `✓`;
   failure, timeout, and startup failure are `X`; cancelled and action-required runs are `!`; skipped and neutral
   runs are dimmed. See [`src/run.go:174-198`](../../src/run.go#L174-L198).
-- `renderRunTable` already fits the title, workflow, and branch columns to the terminal and keeps run IDs clickable.
-  See [`src/run.go:263-301`](../../src/run.go#L263-L301).
+- Before implementation, `renderRunTable` fit the title, workflow, and branch
+  columns to the terminal and kept run IDs clickable, but used faint labels and
+  `writeRow` instead of the shared bordered header. See
+  [`src/run.go:263-301`](../../src/run.go#L263-L301).
 
 Focused tests cover arguments, status mapping, display conversion, terminal alignment, clickable run IDs, and
 clipboard behavior. See [`src/run_test.go:98-177`](../../src/run_test.go#L98-L177) and
