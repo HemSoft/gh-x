@@ -1,0 +1,38 @@
+[
+  {
+    "number": 42,
+    "title": "Exercise CLI behavior fixture",
+    "author": {
+      "login": "octocat",
+      "name": "Octo Cat"
+    },
+    "state": "OPEN",
+    "isDraft": false,
+    "reviewDecision": "APPROVED",
+    "statusCheckRollup": [
+      {
+        "__typename": "CheckRun",
+        "name": "Quality Gate",
+        "workflowName": "CI Quality Gates",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "startedAt": "2026-09-03T11:58:00Z",
+        "completedAt": "2026-09-03T12:00:00Z"
+      }
+    ],
+    "updatedAt": "2026-09-03T12:00:00Z",
+    "headRefName": "test/fixture",
+    "baseRefName": "main",
+    "url": "https://github.com/HemSoft/gh-x/pull/42",
+    "latestReviews": [
+      {
+        "state": "APPROVED",
+        "author": {
+          "login": "reviewer",
+          "name": "Reviewer"
+        }
+      }
+    ],
+    "mergeable": "MERGEABLE"
+  }
+]

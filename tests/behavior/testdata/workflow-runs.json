@@ -1,0 +1,15 @@
+[
+  {
+    "databaseId": 12345,
+    "displayTitle": "Behavior fixture run",
+    "workflowName": "CI Quality Gates",
+    "headBranch": "main",
+    "event": "push",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://github.com/HemSoft/gh-x/actions/runs/12345",
+    "createdAt": "2026-09-03T11:58:00Z",
+    "startedAt": "2026-09-03T11:58:30Z",
+    "updatedAt": "2026-09-03T12:00:00Z"
+  }
+]

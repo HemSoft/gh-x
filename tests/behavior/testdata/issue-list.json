@@ -1,0 +1,19 @@
+[
+  {
+    "number": 50,
+    "title": "Behavior fixture issue",
+    "author": {
+      "login": "octocat",
+      "name": "Octo Cat"
+    },
+    "state": "OPEN",
+    "labels": [
+      {
+        "name": "enhancement"
+      }
+    ],
+    "assignees": [],
+    "updatedAt": "2026-09-03T12:00:00Z",
+    "url": "https://github.com/HemSoft/gh-x/issues/50"
+  }
+]

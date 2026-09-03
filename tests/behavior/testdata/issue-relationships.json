@@ -1,0 +1,18 @@
+{
+  "data": {
+    "repository": {
+      "issue50": {
+        "number": 50,
+        "closedByPullRequestsReferences": {
+          "totalCount": 1,
+          "nodes": [
+            {
+              "number": 53,
+              "url": "https://github.com/HemSoft/gh-x/pull/53"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

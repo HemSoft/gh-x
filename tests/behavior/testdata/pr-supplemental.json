@@ -1,0 +1,41 @@
+{
+  "data": {
+    "repository": {
+      "pr42": {
+        "number": 42,
+        "headRefOid": "fixture-head",
+        "closingIssuesReferences": {
+          "totalCount": 1,
+          "nodes": [
+            {
+              "number": 50,
+              "url": "https://github.com/HemSoft/gh-x/issues/50"
+            }
+          ]
+        },
+        "comments": {
+          "totalCount": 0,
+          "nodes": []
+        },
+        "reviewThreads": {
+          "totalCount": 0,
+          "nodes": []
+        },
+        "reviews": {
+          "totalCount": 0,
+          "nodes": []
+        },
+        "approvedReviews": {
+          "nodes": [
+            {
+              "author": {
+                "login": "reviewer",
+                "__typename": "User"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}
