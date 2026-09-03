@@ -157,6 +157,7 @@ func runCLI(t *testing.T, workingDirectory, scenario string, args ...string) cli
 		"CLICOLOR":        "0",
 		"GH_FORCE_TTY":    "0",
 		"GH_PATH":         fakeGH,
+		"GH_REPO":         "HemSoft/gh-x",
 		"NO_COLOR":        "1",
 		"TERM":            "dumb",
 		fakeGHFixtureEnv:  filepath.Join(repositoryRoot, "tests", "behavior", "testdata"),
