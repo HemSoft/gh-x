@@ -1,0 +1,12 @@
+[
+  {
+    "type": "required_status_checks",
+    "parameters": {
+      "required_status_checks": [
+        {
+          "context": "Quality Gate"
+        }
+      ]
+    }
+  }
+]
