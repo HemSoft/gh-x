@@ -1,17 +1,13 @@
 name: CI Quality Gates
 
-# Runs on every PR targeting main — on open, push, and reopen.
-# Copilot code review must be enabled separately in repo settings:
-#   Settings → Copilot → Code Review → Enable for all PRs
-# Branch protection must require:
-#   - "Quality Gate" status check to pass
-#   - All review conversations resolved
-#   - Copilot review approval
+# Runs on every PR targeting main on open, push, reopen, and retarget.
+# The active repository ruleset is versioned in .github/rulesets/main.json.
+# Keep the final "Quality Gate" job name stable because the ruleset requires it.
 
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
   workflow_call:
 
 permissions:
@@ -86,6 +82,9 @@ jobs:
             diff go.sum.bak go.sum || true
             exit 1
           fi
+
+      - name: Validate main ruleset
+        run: python3 .github/scripts/validate-main-ruleset.py
 
       - name: Install lint tools
         run: bash .github/scripts/install-quality-tools.sh lint
