@@ -258,11 +258,26 @@ func runGit(t *testing.T, directory string, args ...string) {
 }
 
 func findRepositoryRoot() (string, error) {
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", errors.New("resolve behavior test source path")
+	directory, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve behavior test working directory: %w", err)
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..")), nil
+
+	for {
+		_, err := os.Stat(filepath.Join(directory, "go.mod"))
+		if err == nil {
+			return directory, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect behavior test working directory: %w", err)
+		}
+
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return "", errors.New("locate repository root from behavior test working directory")
+		}
+		directory = parent
+	}
 }
 
 func executableName(name string) string {

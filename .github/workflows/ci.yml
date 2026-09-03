@@ -44,7 +44,7 @@ jobs:
           go test -race -count=1 -coverprofile=coverage.out "${packages[@]}"
 
       - name: Test CLI behavior
-        run: go test -race -count=1 ./tests/behavior
+        run: go test -trimpath -race -count=1 ./tests/behavior
 
       - name: Test Node dashboards
         run: node --test src/codex-dashboard/*.test.mjs src/dashboard-hub/*.test.mjs
