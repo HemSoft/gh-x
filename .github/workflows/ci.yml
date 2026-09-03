@@ -38,7 +38,7 @@ jobs:
         run: go vet ./...
 
       - name: Test Go packages (race detection enabled)
-        run: go test -race -count=1 -coverprofile=coverage.out ./src
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
 
       - name: Test CLI behavior
         run: go test -race -count=1 ./tests/behavior
