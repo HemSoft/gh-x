@@ -38,7 +38,9 @@ jobs:
         run: go vet ./...
 
       - name: Test Go packages (race detection enabled)
-        run: go test -race -count=1 -coverprofile=coverage.out ./...
+        run: |
+          mapfile -t packages < <(go list ./... | grep -v '/tests/behavior$')
+          go test -race -count=1 -coverprofile=coverage.out "${packages[@]}"
 
       - name: Test CLI behavior
         run: go test -race -count=1 ./tests/behavior
