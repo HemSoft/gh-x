@@ -39,7 +39,8 @@ jobs:
 
       - name: Test Go packages (race detection enabled)
         run: |
-          mapfile -t packages < <(go list ./... | grep -v '/tests/behavior$')
+          go list ./... | grep -v '/tests/behavior$' > "$RUNNER_TEMP/go-packages.list"
+          mapfile -t packages < "$RUNNER_TEMP/go-packages.list"
           go test -race -count=1 -coverprofile=coverage.out "${packages[@]}"
 
       - name: Test CLI behavior
