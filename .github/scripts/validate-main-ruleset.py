@@ -41,6 +41,7 @@ require(parameters.get("do_not_enforce_on_create") is False, "checks must apply 
 
 pull_request_trigger = "  pull_request:\n    branches: [main]\n    types: [opened, synchronize, reopened, edited]"
 require(pull_request_trigger in workflow, "CI must run when pull requests target or retarget main")
+require("  push:\n    branches: [main]" in workflow, "CI must report status for the main branch badge")
 require("  gate:\n    name: Quality Gate" in workflow, "CI must publish the Quality Gate check")
 
 print("main ruleset and CI workflow are consistent")
