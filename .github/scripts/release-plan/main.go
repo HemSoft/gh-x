@@ -281,15 +281,16 @@ func hasBreakingFooter(body string) bool {
 		return false
 	}
 	lines := strings.Split(normalized, "\n")
+	footerStart := -1
 	for index, line := range lines {
 		if !footerToken.MatchString(line) {
 			continue
 		}
 		if index == 0 || strings.TrimSpace(lines[index-1]) == "" {
-			return breakingFooter.MatchString(strings.Join(lines[index:], "\n"))
+			footerStart = index
 		}
 	}
-	return false
+	return footerStart >= 0 && breakingFooter.MatchString(strings.Join(lines[footerStart:], "\n"))
 }
 
 func nextVersion(latest, bump string) (string, error) {
