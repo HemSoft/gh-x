@@ -42,6 +42,7 @@ jobs:
           fi
 
           latest=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
           range_start="${latest:-$(git hash-object -t tree /dev/null)}"
           releasable=false
           while IFS= read -r path; do
@@ -72,20 +73,23 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         id: version
         run: |
-          commit_msg=$(git log -1 --format='%s')
-          echo "Commit: $commit_msg"
+          latest="${{ steps.check.outputs.latest }}"
+          if [ -n "$latest" ]; then
+            commit_messages=$(git log --format='%s%n%b' "${latest}..HEAD")
+          else
+            commit_messages=$(git log --format='%s%n%b' HEAD)
+          fi
 
           # Conventional commits: feat: → minor, fix:/refactor:/chore: → patch
           # BREAKING CHANGE or !: → major
-          if echo "$commit_msg" | grep -qiE 'BREAKING[ -]CHANGE|^[a-z]+(\(.+\))?!:'; then
+          if grep -qiE 'BREAKING[ -]CHANGE|^[a-z]+(\(.+\))?!:' <<< "$commit_messages"; then
             bump="major"
-          elif echo "$commit_msg" | grep -qE '^feat(\(.+\))?:'; then
+          elif grep -qE '^feat(\(.+\))?:' <<< "$commit_messages"; then
             bump="minor"
           else
             bump="patch"
           fi
 
-          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
           if [ -z "$latest" ]; then
             latest="v0.0.0"
           fi
@@ -144,7 +148,7 @@ jobs:
         id: notes
         run: |
           tag="${{ steps.version.outputs.tag }}"
-          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          latest="${{ steps.check.outputs.latest }}"
           date=$(date -u +%Y-%m-%d)
 
           # Collect commit subjects since last tag

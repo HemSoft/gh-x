@@ -65,6 +65,10 @@ require(
     "auto-release must inspect every unreleased change",
 )
 require(
+    "git log --format='%s%n%b' \"${latest}..HEAD\"" in auto_release,
+    "auto-release must derive the version bump from every unreleased commit",
+)
+require(
     "current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')" in auto_release,
     "auto-release must reject superseded CI results",
 )
