@@ -210,6 +210,7 @@ func TestStatusDefaultBranchStates(t *testing.T) {
 func TestFetchStatusDashboard(t *testing.T) {
 	defer saveStatusFuncs()()
 	statusRepoLabelFunc = func(string) string { return "owner/repo" }
+	statusRepoURLFunc = func(string) (string, error) { return "https://github.com/owner/repo", nil }
 	statusPathExistsFunc = func(string) bool { return true }
 	statusNowFunc = func() time.Time { return time.Date(2026, 8, 12, 16, 0, 0, 0, time.UTC) }
 	statusIssueListFunc = func(options issueListOptions, _ time.Time) ([]displayIssue, error) {
@@ -276,11 +277,11 @@ func TestFetchStatusDashboard(t *testing.T) {
 		}
 	}
 
-	got, err := fetchStatusDashboard()
+	got, err := fetchStatusDashboard(true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Repository != "owner/repo" || got.DefaultBranch != "main" || !got.DefaultCheckedOut {
+	if got.Repository != "owner/repo" || got.RepositoryURL != "https://github.com/owner/repo" || got.DefaultBranch != "main" || !got.DefaultCheckedOut {
 		t.Fatalf("unexpected dashboard identity: %#v", got)
 	}
 	if got.Branches.LocalCount != 3 || got.Branches.RemoteCount != 1 || got.Branches.DanglingCount != 1 {
@@ -312,7 +313,7 @@ func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
 	}
 	installStatusDashboardGitFixture()
 
-	dashboard, err := fetchStatusDashboard()
+	dashboard, err := fetchStatusDashboard(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,8 +335,9 @@ func TestFetchStatusDashboardKeepsLocalHealthWhenGitHubFails(t *testing.T) {
 		return workflowRunListResult{}, errors.New("workflow runs offline")
 	}
 	installStatusDashboardGitFixture()
+	statusRepoURLFunc = func(string) (string, error) { return "", errors.New("repository URL offline") }
 
-	dashboard, err := fetchStatusDashboard()
+	dashboard, err := fetchStatusDashboard(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,10 +350,14 @@ func TestFetchStatusDashboardKeepsLocalHealthWhenGitHubFails(t *testing.T) {
 	if statusCleanupCandidateCount(dashboard.Worktrees) != 0 {
 		t.Fatal("unavailable PR data must suppress cleanup candidates")
 	}
+	if dashboard.RepositoryURL != "" {
+		t.Fatalf("repository URL = %q, want empty fallback", dashboard.RepositoryURL)
+	}
 }
 
 func installStatusDashboardGitFixture() {
 	statusPathExistsFunc = func(string) bool { return true }
+	statusRepoURLFunc = func(string) (string, error) { return "https://github.com/owner/repo", nil }
 	statusCommandFunc = func(name string, args ...string) (string, error) {
 		key := name + " " + strings.Join(args, " ")
 		switch key {
@@ -372,6 +378,31 @@ func installStatusDashboardGitFixture() {
 		default:
 			return "", fmt.Errorf("unexpected command: %s", key)
 		}
+	}
+}
+
+func TestFetchStatusDashboardSkipsRepositoryURLWithoutColor(t *testing.T) {
+	defer saveStatusFuncs()()
+	statusRepoLabelFunc = func(string) string { return "owner/repo" }
+	statusIssueListFunc = func(issueListOptions, time.Time) ([]displayIssue, error) { return nil, nil }
+	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
+		return pullRequestListResult{}, nil
+	}
+	statusWorkflowRunListFunc = func(runListOptions, time.Time) (workflowRunListResult, error) {
+		return workflowRunListResult{}, nil
+	}
+	installStatusDashboardGitFixture()
+	statusRepoURLFunc = func(string) (string, error) {
+		t.Fatal("plain output must not resolve a repository URL")
+		return "", nil
+	}
+
+	dashboard, err := fetchStatusDashboard(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.Repository != "owner/repo" || dashboard.RepositoryURL != "" {
+		t.Fatalf("unexpected repository identity: %#v", dashboard)
 	}
 }
 
@@ -404,6 +435,9 @@ func TestRenderStatusColorHasLinksButNoClipboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := buf.String()
+	if !strings.Contains(output, "\x1b]8;;https://github.com/owner/repo\x1b\\") {
+		t.Fatal("expected clickable repository link")
+	}
 	if !strings.Contains(output, "\x1b]8;;https://github.com/owner/repo/issues/7") {
 		t.Fatal("expected clickable issue link")
 	}
@@ -412,6 +446,32 @@ func TestRenderStatusColorHasLinksButNoClipboard(t *testing.T) {
 	}
 	if strings.Contains(output, "\x1b]52;") || strings.Contains(output, "copied") {
 		t.Fatal("status must not copy embedded table commands to the clipboard")
+	}
+}
+
+func TestStatusRepositoryCellLinksOnlyAvailableURLs(t *testing.T) {
+	tests := []struct {
+		name       string
+		repository string
+		url        string
+		wantText   string
+		wantLink   bool
+	}{
+		{name: "linked repository", repository: "owner/repo", url: "https://github.com/owner/repo", wantText: "owner/repo", wantLink: true},
+		{name: "missing URL", repository: "owner/repo", wantText: "owner/repo"},
+		{name: "unavailable repository", url: "https://github.com/owner/repo", wantText: "unavailable"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cell := statusRepositoryCell(newTableStyler(&bytes.Buffer{}, true), test.repository, test.url)
+			if cell.text != test.wantText {
+				t.Fatalf("cell text = %q, want %q", cell.text, test.wantText)
+			}
+			if got := strings.Contains(cell.styled, "\x1b]8;;"); got != test.wantLink {
+				t.Fatalf("cell link present = %t, want %t", got, test.wantLink)
+			}
+		})
 	}
 }
 
@@ -512,7 +572,7 @@ func TestRenderStatusWorkflowRunSection(t *testing.T) {
 func TestRunStatusAliasesUseFetcher(t *testing.T) {
 	useBacklogPraiseIndex(t, 0)
 	defer saveStatusFuncs()()
-	fetchStatusDashboardFunc = func() (statusDashboard, error) {
+	fetchStatusDashboardFunc = func(bool) (statusDashboard, error) {
 		return statusDashboard{Repository: "owner/repo"}, nil
 	}
 
@@ -578,6 +638,7 @@ func TestRunStatusHelp(t *testing.T) {
 func sampleStatusDashboard() statusDashboard {
 	return statusDashboard{
 		Repository:        "owner/repo",
+		RepositoryURL:     "https://github.com/owner/repo",
 		DefaultBranch:     "main",
 		DefaultStatus:     statusSummary{Branch: "main", Upstream: "origin/main"},
 		DefaultCheckedOut: true,
@@ -601,6 +662,7 @@ func saveStatusFuncs() func() {
 	savedPullRequests := statusPullRequestListFunc
 	savedWorkflowRuns := statusWorkflowRunListFunc
 	savedRepoLabel := statusRepoLabelFunc
+	savedRepoURL := statusRepoURLFunc
 	savedDefaultBranch := statusDefaultBranchFunc
 	savedNow := statusNowFunc
 	savedPathExists := statusPathExistsFunc
@@ -611,6 +673,7 @@ func saveStatusFuncs() func() {
 		statusPullRequestListFunc = savedPullRequests
 		statusWorkflowRunListFunc = savedWorkflowRuns
 		statusRepoLabelFunc = savedRepoLabel
+		statusRepoURLFunc = savedRepoURL
 		statusDefaultBranchFunc = savedDefaultBranch
 		statusNowFunc = savedNow
 		statusPathExistsFunc = savedPathExists

@@ -68,6 +68,7 @@ type statusWorktree struct {
 
 type statusDashboard struct {
 	Repository          string
+	RepositoryURL       string
 	DefaultBranch       string
 	DefaultStatus       statusSummary
 	DefaultCheckedOut   bool
@@ -98,12 +99,13 @@ func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 
-	dashboard, err := fetchStatusDashboardFunc()
+	colorEnabled := term.FromEnv().IsColorEnabled()
+	dashboard, err := fetchStatusDashboardFunc(colorEnabled)
 	if err != nil {
 		return err
 	}
 
-	return renderStatus(stdout, dashboard, term.FromEnv().IsColorEnabled())
+	return renderStatus(stdout, dashboard, colorEnabled)
 }
 
 func parseStatusArgs(args []string, stderr io.Writer) error {
@@ -133,12 +135,13 @@ var (
 	statusPullRequestListFunc = fetchPullRequestList
 	statusWorkflowRunListFunc = fetchWorkflowRunList
 	statusRepoLabelFunc       = resolveRepoLabel
+	statusRepoURLFunc         = resolveRepoURL
 	statusDefaultBranchFunc   = fetchHostedDefaultBranch
 	statusNowFunc             = func() time.Time { return time.Now().UTC() }
 	statusPathExistsFunc      = statusPathExists
 )
 
-func fetchStatusDashboard() (statusDashboard, error) {
+func fetchStatusDashboard(colorEnabled bool) (statusDashboard, error) {
 	output, err := statusCommandFunc("git", "status", "--porcelain=v2", "--branch")
 	if err != nil {
 		return statusDashboard{}, fmt.Errorf("git status: %w", err)
@@ -167,8 +170,10 @@ func fetchStatusDashboard() (statusDashboard, error) {
 		defaultBranch = statusDefaultBranchFunc()
 	}
 
+	repository, repositoryURL := resolveStatusRepository(colorEnabled)
 	dashboard := statusDashboard{
-		Repository:    statusRepoLabelFunc(""),
+		Repository:    repository,
+		RepositoryURL: repositoryURL,
 		DefaultBranch: defaultBranch,
 		CurrentStatus: parseGitStatus(output),
 		Branches:      branches,
@@ -201,6 +206,15 @@ func fetchStatusDashboard() (statusDashboard, error) {
 	pullRequestsKnown := prErr == nil && len(prResult.Entries) < prOptions.limit
 	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, defaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
 	return dashboard, nil
+}
+
+func resolveStatusRepository(colorEnabled bool) (string, string) {
+	repository := statusRepoLabelFunc("")
+	if !colorEnabled || repository == "" {
+		return repository, ""
+	}
+	repositoryURL, _ := statusRepoURLFunc("")
+	return repository, repositoryURL
 }
 
 var statusCommandFunc = runStatusCommand
@@ -667,7 +681,7 @@ const (
 
 func renderStatusHeader(stdout io.Writer, styler tableStyler, dashboard statusDashboard) {
 	rows := [][]tableCell{
-		{styler.dim("Repository"), statusRepositoryCell(styler, dashboard.Repository)},
+		{styler.dim("Repository"), statusRepositoryCell(styler, dashboard.Repository, dashboard.RepositoryURL)},
 		{styler.dim(statusDefaultBranchLabel(dashboard.DefaultBranch)), statusDefaultBranchCell(styler, dashboard)},
 	}
 	if dashboard.CurrentStatus.Branch != dashboard.DefaultBranch || dashboard.DefaultStatusErr != nil {
@@ -685,11 +699,11 @@ func renderStatusHeader(stdout io.Writer, styler tableStyler, dashboard statusDa
 	renderStatusCleanupCandidates(stdout, styler, dashboard.Worktrees)
 }
 
-func statusRepositoryCell(styler tableStyler, repository string) tableCell {
+func statusRepositoryCell(styler tableStyler, repository, repositoryURL string) tableCell {
 	if repository == "" {
 		return statusHeaderValue(styler, "unavailable", statusUnavailable)
 	}
-	return statusHeaderValue(styler, repository, statusHealthy)
+	return styler.linkCell(repository, repositoryURL, termenv.ANSIGreen)
 }
 
 func statusDefaultBranchLabel(branch string) string {
