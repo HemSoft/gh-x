@@ -1,6 +1,6 @@
 name: CI Quality Gates
 
-# Runs on every PR targeting main on open, push, reopen, and retarget.
+# Runs on every PR targeting main and every push to main.
 # The active repository ruleset is versioned in .github/rulesets/main.json.
 # Keep the final "Quality Gate" job name stable because the ruleset requires it.
 
@@ -8,6 +8,8 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
   workflow_call:
 
 permissions:
@@ -84,7 +86,9 @@ jobs:
           fi
 
       - name: Validate main ruleset
-        run: python3 .github/scripts/validate-main-ruleset.py
+        run: |
+          go test ./.github/scripts/...
+          go run .github/scripts/validate-main-ruleset.go
 
       - name: Install lint tools
         run: bash .github/scripts/install-quality-tools.sh lint
