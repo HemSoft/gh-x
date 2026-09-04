@@ -25,7 +25,16 @@ jobs:
 
       - name: Check whether release is needed
         id: check
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
+          current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+          if [[ "$RELEASE_SHA" != "$current_main" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "A newer main commit superseded $RELEASE_SHA — skipping auto-release"
+            exit 0
+          fi
+
           if git tag --points-at HEAD | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "HEAD already has a release tag — skipping auto-release"
@@ -155,6 +164,7 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           tag="${{ steps.version.outputs.tag }}"
           if gh release view "$tag" >/dev/null 2>&1; then
@@ -163,5 +173,6 @@ jobs:
           else
             gh release create "$tag" dist/* \
               --title "$tag" \
+              --target "$RELEASE_SHA" \
               --notes-file release-notes.md
           fi

@@ -57,5 +57,10 @@ require(
     "auto-release must require a successful push-triggered CI run",
 )
 require("git diff --name-only HEAD^ HEAD" in auto_release, "auto-release must inspect merge commit changes")
+require(
+    "current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')" in auto_release,
+    "auto-release must reject superseded CI results",
+)
+require('--target "$RELEASE_SHA"' in auto_release, "auto-release must tag the exact validated commit")
 
 print("main ruleset and CI workflow are consistent")
