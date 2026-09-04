@@ -277,7 +277,7 @@ func TestFetchStatusDashboard(t *testing.T) {
 		}
 	}
 
-	got, err := fetchStatusDashboard()
+	got, err := fetchStatusDashboard(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
 	}
 	installStatusDashboardGitFixture()
 
-	dashboard, err := fetchStatusDashboard()
+	dashboard, err := fetchStatusDashboard(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestFetchStatusDashboardKeepsLocalHealthWhenGitHubFails(t *testing.T) {
 	installStatusDashboardGitFixture()
 	statusRepoURLFunc = func(string) (string, error) { return "", errors.New("repository URL offline") }
 
-	dashboard, err := fetchStatusDashboard()
+	dashboard, err := fetchStatusDashboard(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,6 +378,31 @@ func installStatusDashboardGitFixture() {
 		default:
 			return "", fmt.Errorf("unexpected command: %s", key)
 		}
+	}
+}
+
+func TestFetchStatusDashboardSkipsRepositoryURLWithoutColor(t *testing.T) {
+	defer saveStatusFuncs()()
+	statusRepoLabelFunc = func(string) string { return "owner/repo" }
+	statusIssueListFunc = func(issueListOptions, time.Time) ([]displayIssue, error) { return nil, nil }
+	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
+		return pullRequestListResult{}, nil
+	}
+	statusWorkflowRunListFunc = func(runListOptions, time.Time) (workflowRunListResult, error) {
+		return workflowRunListResult{}, nil
+	}
+	installStatusDashboardGitFixture()
+	statusRepoURLFunc = func(string) (string, error) {
+		t.Fatal("plain output must not resolve a repository URL")
+		return "", nil
+	}
+
+	dashboard, err := fetchStatusDashboard(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.Repository != "owner/repo" || dashboard.RepositoryURL != "" {
+		t.Fatalf("unexpected repository identity: %#v", dashboard)
 	}
 }
 
@@ -547,7 +572,7 @@ func TestRenderStatusWorkflowRunSection(t *testing.T) {
 func TestRunStatusAliasesUseFetcher(t *testing.T) {
 	useBacklogPraiseIndex(t, 0)
 	defer saveStatusFuncs()()
-	fetchStatusDashboardFunc = func() (statusDashboard, error) {
+	fetchStatusDashboardFunc = func(bool) (statusDashboard, error) {
 		return statusDashboard{Repository: "owner/repo"}, nil
 	}
 

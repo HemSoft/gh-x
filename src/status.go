@@ -99,12 +99,13 @@ func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 
-	dashboard, err := fetchStatusDashboardFunc()
+	colorEnabled := term.FromEnv().IsColorEnabled()
+	dashboard, err := fetchStatusDashboardFunc(colorEnabled)
 	if err != nil {
 		return err
 	}
 
-	return renderStatus(stdout, dashboard, term.FromEnv().IsColorEnabled())
+	return renderStatus(stdout, dashboard, colorEnabled)
 }
 
 func parseStatusArgs(args []string, stderr io.Writer) error {
@@ -140,7 +141,7 @@ var (
 	statusPathExistsFunc      = statusPathExists
 )
 
-func fetchStatusDashboard() (statusDashboard, error) {
+func fetchStatusDashboard(colorEnabled bool) (statusDashboard, error) {
 	output, err := statusCommandFunc("git", "status", "--porcelain=v2", "--branch")
 	if err != nil {
 		return statusDashboard{}, fmt.Errorf("git status: %w", err)
@@ -169,11 +170,7 @@ func fetchStatusDashboard() (statusDashboard, error) {
 		defaultBranch = statusDefaultBranchFunc()
 	}
 
-	repository := statusRepoLabelFunc("")
-	repositoryURL := ""
-	if repository != "" {
-		repositoryURL, _ = statusRepoURLFunc("")
-	}
+	repository, repositoryURL := resolveStatusRepository(colorEnabled)
 	dashboard := statusDashboard{
 		Repository:    repository,
 		RepositoryURL: repositoryURL,
@@ -209,6 +206,15 @@ func fetchStatusDashboard() (statusDashboard, error) {
 	pullRequestsKnown := prErr == nil && len(prResult.Entries) < prOptions.limit
 	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, defaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
 	return dashboard, nil
+}
+
+func resolveStatusRepository(colorEnabled bool) (string, string) {
+	repository := statusRepoLabelFunc("")
+	if !colorEnabled || repository == "" {
+		return repository, ""
+	}
+	repositoryURL, _ := statusRepoURLFunc("")
+	return repository, repositoryURL
 }
 
 var statusCommandFunc = runStatusCommand
