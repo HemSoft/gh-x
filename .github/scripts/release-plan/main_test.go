@@ -30,6 +30,9 @@ func TestClassifyBumpUsesSubjectsForConventionalTypes(t *testing.T) {
 		{name: "feature subject", subjects: []string{"feat(cli): add filtering"}, want: "minor"},
 		{name: "breaking subject", subjects: []string{"fix(api)!: remove old field"}, want: "major"},
 		{name: "breaking footer", subjects: []string{"fix: parse input"}, bodies: []string{"Details.\n\nBREAKING CHANGE: input is now strict"}, want: "major"},
+		{name: "breaking example in body", subjects: []string{"docs: explain migration"}, bodies: []string{"Examples:\nBREAKING CHANGE: input is now strict\nUse --strict to migrate."}, want: "patch"},
+		{name: "breaking prose before footer", subjects: []string{"fix: parse input"}, bodies: []string{"BREAKING CHANGE: this sentence is illustrative.\n\nRefs: #52"}, want: "patch"},
+		{name: "breaking token in footer block", subjects: []string{"fix: parse input"}, bodies: []string{"Details.\n\nRefs: #52\nBREAKING-CHANGE: input is now strict"}, want: "major"},
 		{name: "major wins", subjects: []string{"feat: add filtering", "refactor!: replace protocol"}, want: "major"},
 	}
 
@@ -72,6 +75,7 @@ func TestNextVersion(t *testing.T) {
 		{latest: "v1.2.3", bump: "patch", want: "v1.2.4"},
 		{latest: "v1.2.3", bump: "minor", want: "v1.3.0"},
 		{latest: "v1.2.3", bump: "major", want: "v2.0.0"},
+		{latest: "v999999999999999999999999999999.2.3", bump: "major", want: "v1000000000000000000000000000000.0.0"},
 	} {
 		if got, err := nextVersion(test.latest, test.bump); err != nil || got != test.want {
 			t.Fatalf("nextVersion(%q, %q) = %q, %v; want %q", test.latest, test.bump, got, err, test.want)

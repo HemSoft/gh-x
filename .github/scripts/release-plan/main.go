@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -18,7 +18,9 @@ var (
 	semverTag       = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 	breakingSubject = regexp.MustCompile(`^[a-z][a-z0-9-]*(?:\([^\r\n()]+\))?!:`)
 	featureSubject  = regexp.MustCompile(`^feat(?:\([^\r\n()]+\))?:`)
-	breakingFooter  = regexp.MustCompile(`(?m)^BREAKING(?: CHANGE|-CHANGE):`)
+	footerSeparator = regexp.MustCompile(`\n[\t ]*\n+`)
+	footerToken     = regexp.MustCompile(`^(?:BREAKING CHANGE|[A-Za-z0-9-]+)(?:: | #)`)
+	breakingFooter  = regexp.MustCompile(`(?m)^BREAKING(?: CHANGE|-CHANGE): `)
 )
 
 func main() {
@@ -232,7 +234,7 @@ func classifyBump(subjects, bodies []string) string {
 		}
 	}
 	for _, body := range bodies {
-		if breakingFooter.MatchString(body) {
+		if hasBreakingFooter(body) {
 			return "major"
 		}
 	}
@@ -244,6 +246,17 @@ func classifyBump(subjects, bodies []string) string {
 	return "patch"
 }
 
+func hasBreakingFooter(body string) bool {
+	normalized := strings.ReplaceAll(strings.TrimSpace(body), "\r\n", "\n")
+	if normalized == "" {
+		return false
+	}
+	sections := footerSeparator.Split(normalized, -1)
+	footerSection := strings.TrimSpace(sections[len(sections)-1])
+	firstLine, _, _ := strings.Cut(footerSection, "\n")
+	return footerToken.MatchString(firstLine) && breakingFooter.MatchString(footerSection)
+}
+
 func nextVersion(latest, bump string) (string, error) {
 	if latest == "" {
 		latest = "v0.0.0"
@@ -252,22 +265,33 @@ func nextVersion(latest, bump string) (string, error) {
 	if matches == nil {
 		return "", fmt.Errorf("could not parse latest tag %q", latest)
 	}
-	major, _ := strconv.Atoi(matches[1])
-	minor, _ := strconv.Atoi(matches[2])
-	patch, _ := strconv.Atoi(matches[3])
+	major, ok := new(big.Int).SetString(matches[1], 10)
+	if !ok {
+		return "", fmt.Errorf("could not parse major version in %q", latest)
+	}
+	minor, ok := new(big.Int).SetString(matches[2], 10)
+	if !ok {
+		return "", fmt.Errorf("could not parse minor version in %q", latest)
+	}
+	patch, ok := new(big.Int).SetString(matches[3], 10)
+	if !ok {
+		return "", fmt.Errorf("could not parse patch version in %q", latest)
+	}
+	one := big.NewInt(1)
 	switch bump {
 	case "major":
-		major++
-		minor, patch = 0, 0
+		major.Add(major, one)
+		minor.SetInt64(0)
+		patch.SetInt64(0)
 	case "minor":
-		minor++
-		patch = 0
+		minor.Add(minor, one)
+		patch.SetInt64(0)
 	case "patch":
-		patch++
+		patch.Add(patch, one)
 	default:
 		return "", fmt.Errorf("unknown bump %q", bump)
 	}
-	return fmt.Sprintf("v%d.%d.%d", major, minor, patch), nil
+	return fmt.Sprintf("v%s.%s.%s", major.String(), minor.String(), patch.String()), nil
 }
 
 func createReleaseArgs(tag, sha string, assets []string) []string {
