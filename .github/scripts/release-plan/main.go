@@ -18,7 +18,6 @@ var (
 	semverTag       = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 	breakingSubject = regexp.MustCompile(`^[a-z][a-z0-9-]*(?:\([^\r\n()]+\))?!:`)
 	featureSubject  = regexp.MustCompile(`^feat(?:\([^\r\n()]+\))?:`)
-	footerSeparator = regexp.MustCompile(`\n[\t ]*\n+`)
 	footerToken     = regexp.MustCompile(`^(?:BREAKING CHANGE|[A-Za-z0-9-]+)(?:: | #)`)
 	breakingFooter  = regexp.MustCompile(`(?m)^BREAKING(?: CHANGE|-CHANGE): `)
 )
@@ -281,10 +280,16 @@ func hasBreakingFooter(body string) bool {
 	if normalized == "" {
 		return false
 	}
-	sections := footerSeparator.Split(normalized, -1)
-	footerSection := sections[len(sections)-1]
-	firstLine, _, _ := strings.Cut(footerSection, "\n")
-	return footerToken.MatchString(firstLine) && breakingFooter.MatchString(footerSection)
+	lines := strings.Split(normalized, "\n")
+	for index, line := range lines {
+		if !footerToken.MatchString(line) {
+			continue
+		}
+		if index == 0 || strings.TrimSpace(lines[index-1]) == "" {
+			return breakingFooter.MatchString(strings.Join(lines[index:], "\n"))
+		}
+	}
+	return false
 }
 
 func nextVersion(latest, bump string) (string, error) {

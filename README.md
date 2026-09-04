@@ -521,12 +521,14 @@ Neither route is exposed to the LAN or public internet. The hub reads Codex stat
 
 ## Releases
 
-Every qualifying push to `main` runs the reusable CI quality workflow. After
-all gates pass, the release workflow reads the latest commit subject and
-chooses the next semantic version:
+Every qualifying push to `main` runs the CI quality workflow. After all gates
+pass, the release workflow examines every commit since the latest reachable
+semantic-version tag and applies the highest required bump. The next version
+starts from the highest semantic-version tag anywhere in the repository, so a
+tag on another history cannot be reused:
 
-- Subjects using `type!:` or `type(scope)!:`, and subjects containing
-  `BREAKING CHANGE` or `BREAKING-CHANGE`, produce a major release.
+- Subjects using `type!:` or `type(scope)!:`, or commit bodies with a
+  `BREAKING CHANGE:` or `BREAKING-CHANGE:` footer, produce a major release.
 - `feat:` and scoped `feat(scope):` subjects produce a minor release.
 - Every other subject produces a patch release.
 
