@@ -252,7 +252,7 @@ func parseCommitLog(data []byte) ([]string, []string, error) {
 	bodies := make([]string, 0, len(parts)/2)
 	for i := 0; i < len(parts); i += 2 {
 		subjects = append(subjects, strings.TrimSpace(string(parts[i])))
-		bodies = append(bodies, strings.TrimSpace(string(parts[i+1])))
+		bodies = append(bodies, strings.TrimRight(string(parts[i+1]), "\r\n"))
 	}
 	return subjects, bodies, nil
 }

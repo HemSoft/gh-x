@@ -19,6 +19,16 @@ func TestParseCommitLogPreservesEmptyBodies(t *testing.T) {
 	}
 }
 
+func TestParseCommitLogPreservesIndentedBreakingExample(t *testing.T) {
+	subjects, bodies, err := parseCommitLog([]byte("docs: explain migration\x00    BREAKING CHANGE: illustrative text\x00"))
+	if err != nil {
+		t.Fatalf("parseCommitLog() error = %v", err)
+	}
+	if got := classifyBump(subjects, bodies); got != "patch" {
+		t.Fatalf("classifyBump() after parse = %q, want patch", got)
+	}
+}
+
 func TestClassifyBumpUsesSubjectsForConventionalTypes(t *testing.T) {
 	tests := []struct {
 		name     string
