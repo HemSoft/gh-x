@@ -123,29 +123,21 @@ func main() {
 
 	check := namedStep(releaseJob, "Check whether release is needed")
 	require(check.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release check must receive the validated SHA through env")
-	require(containsAll(check.Run,
-		"git ls-remote origin refs/heads/main",
-		"$RELEASE_SHA\" != \"$current_main",
-		"git tag --merged HEAD",
-		"git diff --no-renames --name-only \"$range_start\" HEAD",
-	), "release check must reject stale runs and inspect every unreleased path")
+	require(strings.TrimSpace(check.Run) == "go run ./.github/scripts/release-plan check", "release check must use the tested release-plan command")
 
 	version := namedStep(releaseJob, "Determine next version")
 	require(version.Env["LATEST_TAG"] == "${{ steps.check.outputs.latest }}", "version step must receive the latest tag through env")
-	require(containsAll(version.Run,
-		"latest=\"$LATEST_TAG\"",
-		"git log --format='%s%n%b' \"${latest}..HEAD\"",
-		"BREAKING[ -]CHANGE",
-		"^feat",
-	), "version step must classify every unreleased commit")
+	require(strings.TrimSpace(version.Run) == "go run ./.github/scripts/release-plan version", "version step must use the tested release-plan command")
 
 	notes := namedStep(releaseJob, "Generate release notes")
 	require(notes.Env["LATEST_TAG"] == "${{ steps.check.outputs.latest }}", "release notes must receive the latest tag through env")
-	require(strings.Contains(notes.Run, "latest=\"$LATEST_TAG\""), "release notes must use the validated tag range")
+	require(notes.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "release notes must receive the calculated release tag through env")
+	require(strings.TrimSpace(notes.Run) == "go run ./.github/scripts/release-plan notes", "release notes must use the tested release-plan command")
 
 	create := namedStep(releaseJob, "Create release")
 	require(create.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release creation must receive the validated SHA through env")
-	require(strings.Contains(create.Run, "--target \"$RELEASE_SHA\""), "release must tag the exact validated commit")
+	require(create.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "release creation must receive the calculated release tag through env")
+	require(strings.TrimSpace(create.Run) == "go run ./.github/scripts/release-plan create", "release creation must use the tested release-plan command")
 
 	fmt.Fprintln(os.Stdout, "main ruleset and release workflows are consistent")
 }
@@ -184,15 +176,6 @@ func namedStep(job workflowJob, name string) workflowStep {
 
 func equal[T comparable](actual []T, expected ...T) bool {
 	return reflect.DeepEqual(actual, expected)
-}
-
-func containsAll(value string, fragments ...string) bool {
-	for _, fragment := range fragments {
-		if !strings.Contains(value, fragment) {
-			return false
-		}
-	}
-	return true
 }
 
 func require(condition bool, message string) {

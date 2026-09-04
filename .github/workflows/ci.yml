@@ -86,7 +86,9 @@ jobs:
           fi
 
       - name: Validate main ruleset
-        run: go run .github/scripts/validate-main-ruleset.go
+        run: |
+          go test ./.github/scripts/...
+          go run .github/scripts/validate-main-ruleset.go
 
       - name: Install lint tools
         run: bash .github/scripts/install-quality-tools.sh lint

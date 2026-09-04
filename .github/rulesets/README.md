@@ -12,6 +12,7 @@ the check to pass on the pull request's current head.
 Run the local consistency check before applying the configuration:
 
 ```bash
+go test ./.github/scripts/...
 go run .github/scripts/validate-main-ruleset.go
 ```
 

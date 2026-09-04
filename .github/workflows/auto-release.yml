@@ -23,47 +23,15 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
       - name: Check whether release is needed
         id: check
         env:
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
-          if [[ "$RELEASE_SHA" != "$current_main" ]]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "A newer main commit superseded $RELEASE_SHA — skipping auto-release"
-            exit 0
-          fi
-
-          if git tag --points-at HEAD | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "HEAD already has a release tag — skipping auto-release"
-            exit 0
-          fi
-
-          latest=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
-          echo "latest=$latest" >> "$GITHUB_OUTPUT"
-          range_start="${latest:-$(git hash-object -t tree /dev/null)}"
-          releasable=false
-          while IFS= read -r path; do
-            case "$path" in
-              *.md|.agents/*|LICENSE) ;;
-              *) releasable=true; break ;;
-            esac
-          done < <(git diff --no-renames --name-only "$range_start" HEAD)
-
-          if [[ "$releasable" == "false" ]]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Only documentation or agent metadata changed — skipping auto-release"
-            exit 0
-          fi
-
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-go@v6
-        if: steps.check.outputs.skip == 'false'
-        with:
-          go-version-file: go.mod
+        run: go run ./.github/scripts/release-plan check
 
       - name: Run tests
         if: steps.check.outputs.skip == 'false'
@@ -74,44 +42,7 @@ jobs:
         id: version
         env:
           LATEST_TAG: ${{ steps.check.outputs.latest }}
-        run: |
-          latest="$LATEST_TAG"
-          if [ -n "$latest" ]; then
-            commit_messages=$(git log --format='%s%n%b' "${latest}..HEAD")
-          else
-            commit_messages=$(git log --format='%s%n%b' HEAD)
-          fi
-
-          # Conventional commits: feat: → minor, fix:/refactor:/chore: → patch
-          # BREAKING CHANGE or !: → major
-          if grep -qiE 'BREAKING[ -]CHANGE|^[a-z]+(\(.+\))?!:' <<< "$commit_messages"; then
-            bump="major"
-          elif grep -qE '^feat(\(.+\))?:' <<< "$commit_messages"; then
-            bump="minor"
-          else
-            bump="patch"
-          fi
-
-          if [ -z "$latest" ]; then
-            latest="v0.0.0"
-          fi
-          if [[ "$latest" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            major="${BASH_REMATCH[1]}"
-            minor="${BASH_REMATCH[2]}"
-            patch="${BASH_REMATCH[3]}"
-          else
-            echo "::error::Could not parse latest tag: $latest"
-            exit 1
-          fi
-
-          case "$bump" in
-            major) next="v$((major + 1)).0.0" ;;
-            minor) next="v${major}.$((minor + 1)).0" ;;
-            patch) next="v${major}.${minor}.$((patch + 1))" ;;
-          esac
-
-          echo "tag=$next" >> "$GITHUB_OUTPUT"
-          echo "Auto-releasing as $next ($bump bump, previous: $latest)"
+        run: go run ./.github/scripts/release-plan version
 
       - name: Build cross-platform binaries
         if: steps.check.outputs.skip == 'false'
@@ -150,39 +81,13 @@ jobs:
         id: notes
         env:
           LATEST_TAG: ${{ steps.check.outputs.latest }}
-        run: |
-          tag="${{ steps.version.outputs.tag }}"
-          latest="$LATEST_TAG"
-          date=$(date -u +%Y-%m-%d)
-
-          # Collect commit subjects since last tag
-          if [ -n "$latest" ]; then
-            subjects=$(git log --format='- %s' "${latest}..HEAD" --no-merges)
-          else
-            subjects=$(git log --format='- %s' --no-merges)
-          fi
-
-          # Build notes: date header + bullet list
-          notes="${date}"$'\n\n'"${subjects}"
-
-          # Write to file (avoids escaping issues in shell)
-          echo "$notes" > release-notes.md
-          echo "Generated release notes for $tag"
-          cat release-notes.md
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: go run ./.github/scripts/release-plan notes
 
       - name: Create release
         if: steps.check.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          tag="${{ steps.version.outputs.tag }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists — uploading assets with --clobber"
-            gh release upload "$tag" dist/* --clobber
-          else
-            gh release create "$tag" dist/* \
-              --title "$tag" \
-              --target "$RELEASE_SHA" \
-              --notes-file release-notes.md
-          fi
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: go run ./.github/scripts/release-plan create
