@@ -56,7 +56,14 @@ require(
     in auto_release,
     "auto-release must require a successful push-triggered CI run",
 )
-require("git diff --name-only HEAD^ HEAD" in auto_release, "auto-release must inspect merge commit changes")
+require(
+    "git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname" in auto_release,
+    "auto-release must locate the latest reachable release",
+)
+require(
+    'git diff --name-only "$range_start" HEAD' in auto_release,
+    "auto-release must inspect every unreleased change",
+)
 require(
     "current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')" in auto_release,
     "auto-release must reject superseded CI results",
