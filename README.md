@@ -1,15 +1,13 @@
 # gh-x
 
-[![CI Quality Gates][ci-badge]][ci-workflow]
-[![Latest release][release-badge]][releases]
-[![License: MIT][license-badge]][license]
+[![CI status][ci]][ci-runs] [![Latest release][release]][releases] [![MIT license][license]][license-file]
 
-[ci-badge]: https://github.com/HemSoft/gh-x/actions/workflows/ci.yml/badge.svg?branch=main
-[ci-workflow]: https://github.com/HemSoft/gh-x/actions/workflows/ci.yml
-[release-badge]: https://img.shields.io/github/v/release/HemSoft/gh-x
+[ci]: https://github.com/HemSoft/gh-x/actions/workflows/ci.yml/badge.svg?branch=main
+[ci-runs]: https://github.com/HemSoft/gh-x/actions/workflows/ci.yml
+[release]: https://img.shields.io/github/v/release/HemSoft/gh-x
 [releases]: https://github.com/HemSoft/gh-x/releases
-[license-badge]: https://img.shields.io/github/license/HemSoft/gh-x
-[license]: LICENSE
+[license]: https://img.shields.io/github/license/HemSoft/gh-x
+[license-file]: LICENSE
 
 A GitHub CLI extension that supercharges `gh pr list` with a richer,
 color-coded table view — approvals, AI reviewer status, check details,
