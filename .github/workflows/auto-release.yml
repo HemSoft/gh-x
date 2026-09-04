@@ -1,13 +1,10 @@
 name: Auto Release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI Quality Gates"]
+    types: [completed]
     branches: [main]
-    paths-ignore:
-      - "*.md"
-      - "**/*.md"
-      - ".agents/**"
-      - "LICENSE"
 
 concurrency:
   group: auto-release
@@ -17,30 +14,39 @@ permissions:
   contents: write
 
 jobs:
-  # Calling the local reusable workflow validates the same commit that
-  # triggered this release. The release job cannot start unless it passes.
-  quality:
-    permissions:
-      contents: read
-    uses: ./.github/workflows/ci.yml
-
   release:
-    needs: quality
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Skip if HEAD already tagged
+      - name: Check whether release is needed
         id: check
         run: |
           if git tag --points-at HEAD | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "HEAD already has a release tag — skipping auto-release"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          releasable=false
+          while IFS= read -r path; do
+            case "$path" in
+              *.md|.agents/*|LICENSE) ;;
+              *) releasable=true; break ;;
+            esac
+          done < <(git diff --name-only HEAD^ HEAD)
+
+          if [[ "$releasable" == "false" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Only documentation or agent metadata changed — skipping auto-release"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@v6
         if: steps.check.outputs.skip == 'false'

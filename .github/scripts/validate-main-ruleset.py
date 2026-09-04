@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 RULESET_PATH = ROOT / ".github" / "rulesets" / "main.json"
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "ci.yml"
+AUTO_RELEASE_PATH = ROOT / ".github" / "workflows" / "auto-release.yml"
 
 
 def require(condition: bool, message: str) -> None:
@@ -17,6 +18,7 @@ def require(condition: bool, message: str) -> None:
 
 ruleset = json.loads(RULESET_PATH.read_text(encoding="utf-8"))
 workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+auto_release = AUTO_RELEASE_PATH.read_text(encoding="utf-8")
 
 require(ruleset.get("name") == "main-quality-gate", "unexpected ruleset name")
 require(ruleset.get("target") == "branch", "ruleset must target branches")
@@ -43,5 +45,17 @@ pull_request_trigger = "  pull_request:\n    branches: [main]\n    types: [opene
 require(pull_request_trigger in workflow, "CI must run when pull requests target or retarget main")
 require("  push:\n    branches: [main]" in workflow, "CI must report status for the main branch badge")
 require("  gate:\n    name: Quality Gate" in workflow, "CI must publish the Quality Gate check")
+require(
+    '  workflow_run:\n    workflows: ["CI Quality Gates"]\n    types: [completed]\n    branches: [main]'
+    in auto_release,
+    "auto-release must follow completed main-branch CI runs",
+)
+require("uses: ./.github/workflows/ci.yml" not in auto_release, "auto-release must not duplicate the CI suite")
+require(
+    "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'"
+    in auto_release,
+    "auto-release must require a successful push-triggered CI run",
+)
+require("git diff --name-only HEAD^ HEAD" in auto_release, "auto-release must inspect merge commit changes")
 
 print("main ruleset and CI workflow are consistent")
