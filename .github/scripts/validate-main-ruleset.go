@@ -127,6 +127,7 @@ func main() {
 
 	version := namedStep(releaseJob, "Determine next version")
 	require(version.Env["LATEST_TAG"] == "${{ steps.check.outputs.latest }}", "version step must receive the latest tag through env")
+	require(version.Env["VERSION_BASE_TAG"] == "${{ steps.check.outputs.version_base }}", "version step must reserve versions across all semantic tags")
 	require(strings.TrimSpace(version.Run) == "go run ./.github/scripts/release-plan version", "version step must use the tested release-plan command")
 
 	notes := namedStep(releaseJob, "Generate release notes")

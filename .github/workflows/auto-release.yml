@@ -42,6 +42,7 @@ jobs:
         id: version
         env:
           LATEST_TAG: ${{ steps.check.outputs.latest }}
+          VERSION_BASE_TAG: ${{ steps.check.outputs.version_base }}
         run: go run ./.github/scripts/release-plan version
 
       - name: Build cross-platform binaries

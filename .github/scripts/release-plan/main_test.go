@@ -32,6 +32,7 @@ func TestClassifyBumpUsesSubjectsForConventionalTypes(t *testing.T) {
 		{name: "breaking footer", subjects: []string{"fix: parse input"}, bodies: []string{"Details.\n\nBREAKING CHANGE: input is now strict"}, want: "major"},
 		{name: "breaking example in body", subjects: []string{"docs: explain migration"}, bodies: []string{"Examples:\nBREAKING CHANGE: input is now strict\nUse --strict to migrate."}, want: "patch"},
 		{name: "breaking prose before footer", subjects: []string{"fix: parse input"}, bodies: []string{"BREAKING CHANGE: this sentence is illustrative.\n\nRefs: #52"}, want: "patch"},
+		{name: "indented breaking example", subjects: []string{"docs: explain migration"}, bodies: []string{"Example:\n\n    BREAKING CHANGE: illustrative text"}, want: "patch"},
 		{name: "breaking token in footer block", subjects: []string{"fix: parse input"}, bodies: []string{"Details.\n\nRefs: #52\nBREAKING-CHANGE: input is now strict"}, want: "major"},
 		{name: "major wins", subjects: []string{"feat: add filtering", "refactor!: replace protocol"}, want: "major"},
 	}
@@ -42,6 +43,13 @@ func TestClassifyBumpUsesSubjectsForConventionalTypes(t *testing.T) {
 				t.Fatalf("classifyBump() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestFirstSemanticTagSkipsNonSemanticTags(t *testing.T) {
+	tags := []string{"vnext", "v999999999999999999999999999999.2.3", "v2.0.0"}
+	if got, want := firstSemanticTag(tags), "v999999999999999999999999999999.2.3"; got != want {
+		t.Fatalf("firstSemanticTag() = %q, want %q", got, want)
 	}
 }
 

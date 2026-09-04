@@ -80,6 +80,10 @@ func runCheck() error {
 	if err != nil {
 		return err
 	}
+	versionBase, err := latestSemanticTag()
+	if err != nil {
+		return err
+	}
 	rangeStart := latest
 	if rangeStart == "" {
 		rangeStart, err = gitOutputWithInput("", "hash-object", "-t", "tree", "--stdin")
@@ -93,20 +97,24 @@ func runCheck() error {
 	}
 	if !releaseNeeded(nonEmptyLines(changed)) {
 		fmt.Fprintln(os.Stdout, "Only documentation or agent metadata changed - skipping auto-release")
-		return writeOutputs(map[string]string{"latest": latest, "skip": "true"})
+		return writeOutputs(map[string]string{"latest": latest, "skip": "true", "version_base": versionBase})
 	}
 
-	return writeOutputs(map[string]string{"latest": latest, "skip": "false"})
+	return writeOutputs(map[string]string{"latest": latest, "skip": "false", "version_base": versionBase})
 }
 
 func runVersion() error {
 	latest := os.Getenv("LATEST_TAG")
+	versionBase := os.Getenv("VERSION_BASE_TAG")
 	rangeSpec := "HEAD"
 	if latest != "" {
 		if !semverTag.MatchString(latest) {
 			return fmt.Errorf("could not parse latest tag %q", latest)
 		}
 		rangeSpec = latest + "..HEAD"
+	}
+	if versionBase != "" && !semverTag.MatchString(versionBase) {
+		return fmt.Errorf("could not parse version base tag %q", versionBase)
 	}
 
 	logData, err := gitBytes("log", "-z", "--format=%s%x00%b", rangeSpec)
@@ -118,14 +126,14 @@ func runVersion() error {
 		return err
 	}
 	bump := classifyBump(subjects, bodies)
-	next, err := nextVersion(latest, bump)
+	next, err := nextVersion(versionBase, bump)
 	if err != nil {
 		return err
 	}
 	if err := writeOutputs(map[string]string{"tag": next}); err != nil {
 		return err
 	}
-	previous := latest
+	previous := versionBase
 	if previous == "" {
 		previous = "v0.0.0"
 	}
@@ -178,6 +186,16 @@ func runCreate() error {
 
 	view := exec.Command("gh", "release", "view", releaseTag, "--json", "tagName")
 	if err := view.Run(); err == nil {
+		if err := runCommand("git", "fetch", "--force", "--tags", "origin"); err != nil {
+			return err
+		}
+		tagSHA, err := gitOutput("rev-list", "-n", "1", releaseTag)
+		if err != nil {
+			return err
+		}
+		if tagSHA != releaseSHA {
+			return fmt.Errorf("release %s targets %s, not validated SHA %s", releaseTag, tagSHA, releaseSHA)
+		}
 		fmt.Fprintf(os.Stdout, "Release %s already exists - uploading assets with --clobber\n", releaseTag)
 		return runCommand("gh", append([]string{"release", "upload", releaseTag}, append(assets, "--clobber")...)...)
 	} else if _, ok := err.(*exec.ExitError); !ok {
@@ -192,12 +210,24 @@ func latestReachableTag() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, tag := range nonEmptyLines(tags) {
+	return firstSemanticTag(nonEmptyLines(tags)), nil
+}
+
+func latestSemanticTag() (string, error) {
+	tags, err := gitOutput("tag", "--list", "v*", "--sort=-v:refname")
+	if err != nil {
+		return "", err
+	}
+	return firstSemanticTag(nonEmptyLines(tags)), nil
+}
+
+func firstSemanticTag(tags []string) string {
+	for _, tag := range tags {
 		if semverTag.MatchString(tag) {
-			return tag, nil
+			return tag
 		}
 	}
-	return "", nil
+	return ""
 }
 
 func releaseNeeded(paths []string) bool {
@@ -247,12 +277,12 @@ func classifyBump(subjects, bodies []string) string {
 }
 
 func hasBreakingFooter(body string) bool {
-	normalized := strings.ReplaceAll(strings.TrimSpace(body), "\r\n", "\n")
+	normalized := strings.ReplaceAll(strings.TrimRight(body, " \t\r\n"), "\r\n", "\n")
 	if normalized == "" {
 		return false
 	}
 	sections := footerSeparator.Split(normalized, -1)
-	footerSection := strings.TrimSpace(sections[len(sections)-1])
+	footerSection := sections[len(sections)-1]
 	firstLine, _, _ := strings.Cut(footerSection, "\n")
 	return footerToken.MatchString(firstLine) && breakingFooter.MatchString(footerSection)
 }
@@ -318,7 +348,7 @@ func writeOutputs(values map[string]string) error {
 		return fmt.Errorf("open GITHUB_OUTPUT: %w", err)
 	}
 	defer file.Close()
-	for _, key := range []string{"latest", "skip", "tag"} {
+	for _, key := range []string{"latest", "skip", "tag", "version_base"} {
 		if value, ok := values[key]; ok {
 			if _, err := fmt.Fprintf(file, "%s=%s\n", key, value); err != nil {
 				return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
