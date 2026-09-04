@@ -41,8 +41,14 @@ type requiredStatusCheck struct {
 }
 
 type workflow struct {
-	On   workflowTriggers       `yaml:"on"`
-	Jobs map[string]workflowJob `yaml:"jobs"`
+	On          workflowTriggers       `yaml:"on"`
+	Concurrency *workflowConcurrency   `yaml:"concurrency"`
+	Jobs        map[string]workflowJob `yaml:"jobs"`
+}
+
+type workflowConcurrency struct {
+	Group            string `yaml:"group"`
+	CancelInProgress bool   `yaml:"cancel-in-progress"`
 }
 
 type workflowTriggers struct {
@@ -63,10 +69,11 @@ type workflowRunEvent struct {
 }
 
 type workflowJob struct {
-	Name  string         `yaml:"name"`
-	If    string         `yaml:"if"`
-	Uses  string         `yaml:"uses"`
-	Steps []workflowStep `yaml:"steps"`
+	Name        string              `yaml:"name"`
+	If          string              `yaml:"if"`
+	Uses        string              `yaml:"uses"`
+	Concurrency workflowConcurrency `yaml:"concurrency"`
+	Steps       []workflowStep      `yaml:"steps"`
 }
 
 type workflowStep struct {
@@ -111,12 +118,15 @@ func main() {
 	require(equal(autoRelease.On.WorkflowRun.Workflows, "CI Quality Gates"), "auto-release must follow CI Quality Gates")
 	require(equal(autoRelease.On.WorkflowRun.Types, "completed"), "auto-release must follow completed CI runs")
 	require(equal(autoRelease.On.WorkflowRun.Branches, "main"), "auto-release must follow main-branch CI runs")
+	require(autoRelease.Concurrency == nil, "auto-release concurrency must not include skipped workflow runs")
 	releaseJob, ok := autoRelease.Jobs["release"]
 	require(ok, "auto-release must define the release job")
 	require(
 		releaseJob.If == "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'",
 		"auto-release must require a successful push-triggered CI run",
 	)
+	require(releaseJob.Concurrency.Group == "auto-release", "eligible releases must share one concurrency group")
+	require(!releaseJob.Concurrency.CancelInProgress, "an active release must not be cancelled")
 	for _, job := range autoRelease.Jobs {
 		require(job.Uses != "./.github/workflows/ci.yml", "auto-release must not duplicate the CI suite")
 	}
