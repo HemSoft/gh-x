@@ -50,7 +50,7 @@ jobs:
               *.md|.agents/*|LICENSE) ;;
               *) releasable=true; break ;;
             esac
-          done < <(git diff --name-only "$range_start" HEAD)
+          done < <(git diff --no-renames --name-only "$range_start" HEAD)
 
           if [[ "$releasable" == "false" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -72,8 +72,10 @@ jobs:
       - name: Determine next version
         if: steps.check.outputs.skip == 'false'
         id: version
+        env:
+          LATEST_TAG: ${{ steps.check.outputs.latest }}
         run: |
-          latest="${{ steps.check.outputs.latest }}"
+          latest="$LATEST_TAG"
           if [ -n "$latest" ]; then
             commit_messages=$(git log --format='%s%n%b' "${latest}..HEAD")
           else
@@ -146,9 +148,11 @@ jobs:
       - name: Generate release notes
         if: steps.check.outputs.skip == 'false'
         id: notes
+        env:
+          LATEST_TAG: ${{ steps.check.outputs.latest }}
         run: |
           tag="${{ steps.version.outputs.tag }}"
-          latest="${{ steps.check.outputs.latest }}"
+          latest="$LATEST_TAG"
           date=$(date -u +%Y-%m-%d)
 
           # Collect commit subjects since last tag

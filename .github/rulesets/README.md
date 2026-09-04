@@ -12,7 +12,7 @@ the check to pass on the pull request's current head.
 Run the local consistency check before applying the configuration:
 
 ```bash
-python3 .github/scripts/validate-main-ruleset.py
+go run .github/scripts/validate-main-ruleset.go
 ```
 
 Create the ruleset when it does not exist:
