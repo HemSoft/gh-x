@@ -42,7 +42,7 @@ func TestClassifyBumpUsesSubjectsForConventionalTypes(t *testing.T) {
 		{name: "breaking footer", subjects: []string{"fix: parse input"}, bodies: []string{"Details.\n\nBREAKING CHANGE: input is now strict"}, want: "major"},
 		{name: "breaking example in body", subjects: []string{"docs: explain migration"}, bodies: []string{"Examples:\nBREAKING CHANGE: input is now strict\nUse --strict to migrate."}, want: "patch"},
 		{name: "breaking prose before footer", subjects: []string{"fix: parse input"}, bodies: []string{"Discussion:\nBREAKING CHANGE: this sentence is illustrative.\n\nRefs: #52"}, want: "patch"},
-		{name: "blank-separated breaking prose before footer", subjects: []string{"fix: parse input"}, bodies: []string{"Discussion:\n\nBREAKING CHANGE: this sentence is illustrative.\n\nRefs: #52"}, want: "patch"},
+		{name: "breaking footer followed by later trailer", subjects: []string{"fix: parse input"}, bodies: []string{"Details.\n\nBREAKING CHANGE: remove legacy mode\n\nRefs: #52"}, want: "major"},
 		{name: "indented breaking example", subjects: []string{"docs: explain migration"}, bodies: []string{"Example:\n\n    BREAKING CHANGE: illustrative text"}, want: "patch"},
 		{name: "breaking token in footer block", subjects: []string{"fix: parse input"}, bodies: []string{"Details.\n\nRefs: #52\nBREAKING-CHANGE: input is now strict"}, want: "major"},
 		{name: "multi-paragraph breaking footer", subjects: []string{"fix: parse input"}, bodies: []string{"Details.\n\nBREAKING CHANGE: remove legacy mode\n\nUse --new-mode instead."}, want: "major"},
