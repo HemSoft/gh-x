@@ -68,6 +68,7 @@ type statusWorktree struct {
 
 type statusDashboard struct {
 	Repository          string
+	RepositoryURL       string
 	DefaultBranch       string
 	DefaultStatus       statusSummary
 	DefaultCheckedOut   bool
@@ -133,6 +134,7 @@ var (
 	statusPullRequestListFunc = fetchPullRequestList
 	statusWorkflowRunListFunc = fetchWorkflowRunList
 	statusRepoLabelFunc       = resolveRepoLabel
+	statusRepoURLFunc         = resolveRepoURL
 	statusDefaultBranchFunc   = fetchHostedDefaultBranch
 	statusNowFunc             = func() time.Time { return time.Now().UTC() }
 	statusPathExistsFunc      = statusPathExists
@@ -167,8 +169,14 @@ func fetchStatusDashboard() (statusDashboard, error) {
 		defaultBranch = statusDefaultBranchFunc()
 	}
 
+	repository := statusRepoLabelFunc("")
+	repositoryURL := ""
+	if repository != "" {
+		repositoryURL, _ = statusRepoURLFunc("")
+	}
 	dashboard := statusDashboard{
-		Repository:    statusRepoLabelFunc(""),
+		Repository:    repository,
+		RepositoryURL: repositoryURL,
 		DefaultBranch: defaultBranch,
 		CurrentStatus: parseGitStatus(output),
 		Branches:      branches,
@@ -667,7 +675,7 @@ const (
 
 func renderStatusHeader(stdout io.Writer, styler tableStyler, dashboard statusDashboard) {
 	rows := [][]tableCell{
-		{styler.dim("Repository"), statusRepositoryCell(styler, dashboard.Repository)},
+		{styler.dim("Repository"), statusRepositoryCell(styler, dashboard.Repository, dashboard.RepositoryURL)},
 		{styler.dim(statusDefaultBranchLabel(dashboard.DefaultBranch)), statusDefaultBranchCell(styler, dashboard)},
 	}
 	if dashboard.CurrentStatus.Branch != dashboard.DefaultBranch || dashboard.DefaultStatusErr != nil {
@@ -685,11 +693,11 @@ func renderStatusHeader(stdout io.Writer, styler tableStyler, dashboard statusDa
 	renderStatusCleanupCandidates(stdout, styler, dashboard.Worktrees)
 }
 
-func statusRepositoryCell(styler tableStyler, repository string) tableCell {
+func statusRepositoryCell(styler tableStyler, repository, repositoryURL string) tableCell {
 	if repository == "" {
 		return statusHeaderValue(styler, "unavailable", statusUnavailable)
 	}
-	return statusHeaderValue(styler, repository, statusHealthy)
+	return styler.linkCell(repository, repositoryURL, termenv.ANSIGreen)
 }
 
 func statusDefaultBranchLabel(branch string) string {
