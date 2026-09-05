@@ -533,7 +533,9 @@ tag on another history cannot be reused:
 - Every other subject produces a patch release.
 
 The workflow skips a commit that already has a semantic-version tag. Changes
-limited to Markdown, `.agents/**`, or `LICENSE` do not start a release. Each
+limited to Markdown, `.agents/**`, `.github/**`, or `LICENSE` do not start a
+release. GitHub Releases is the authoritative version history; `CHANGELOG.md`
+links the latest release and CI rejects a stale `Unreleased` comparison. Each
 created release includes prebuilt binaries for the supported operating systems
 and architectures.
 

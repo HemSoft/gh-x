@@ -60,6 +60,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -89,6 +91,9 @@ jobs:
         run: |
           go test ./.github/scripts/...
           go run .github/scripts/validate-main-ruleset.go
+
+      - name: Validate changelog release links
+        run: go run ./.github/scripts/changelog-check
 
       - name: Install lint tools
         run: bash .github/scripts/install-quality-tools.sh lint

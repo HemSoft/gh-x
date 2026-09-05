@@ -231,7 +231,7 @@ func firstSemanticTag(tags []string) string {
 
 func releaseNeeded(paths []string) bool {
 	for _, path := range paths {
-		if strings.HasSuffix(path, ".md") || strings.HasPrefix(path, ".agents/") || path == "LICENSE" {
+		if strings.HasSuffix(path, ".md") || strings.HasPrefix(path, ".agents/") || strings.HasPrefix(path, ".github/") || path == "LICENSE" {
 			continue
 		}
 		return true

@@ -72,6 +72,7 @@ func TestReleaseNeededExaminesEveryPath(t *testing.T) {
 		want  bool
 	}{
 		{name: "documentation only", paths: []string{"README.md", ".agents/skills/example/SKILL.md", "LICENSE"}, want: false},
+		{name: "repository automation only", paths: []string{".github/workflows/ci.yml", ".github/scripts/changelog-check/main.go"}, want: false},
 		{name: "source change", paths: []string{"README.md", "src/main.go"}, want: true},
 		{name: "rename source endpoint", paths: []string{"docs/old.md", "src/new.go"}, want: true},
 	}
