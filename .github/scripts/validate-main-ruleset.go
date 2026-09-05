@@ -80,7 +80,7 @@ type workflowJob struct {
 }
 
 type workflowStrategy struct {
-	FailFast bool `yaml:"fail-fast"`
+	FailFast *bool `yaml:"fail-fast"`
 	Matrix   struct {
 		Include []map[string]string `yaml:"include"`
 	} `yaml:"matrix"`
@@ -133,7 +133,7 @@ func main() {
 		"contents":        "read",
 		"security-events": "write",
 	}), "CodeQL must use least-privilege permissions")
-	require(!security.Strategy.FailFast, "CodeQL must analyze every configured language")
+	require(security.Strategy.FailFast != nil && !*security.Strategy.FailFast, "CodeQL must explicitly disable matrix fail-fast")
 	require(reflect.DeepEqual(security.Strategy.Matrix.Include, []map[string]string{
 		{"language": "go", "build-mode": "autobuild"},
 		{"language": "javascript-typescript", "build-mode": "none"},
@@ -158,8 +158,11 @@ func main() {
 	gate := ci.Jobs["gate"]
 	require(gate.Name == "Quality Gate", "CI must publish the Quality Gate check")
 	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review"), "Quality Gate must depend on every build, quality, and security job")
-	require(strings.Contains(namedStep(gate, "Evaluate all gates").Run, "needs.security-analysis.result"), "Quality Gate must reject failed CodeQL analysis")
-	require(strings.Contains(namedStep(gate, "Evaluate all gates").Run, "needs.dependency-review.result"), "Quality Gate must reject failed dependency review")
+	gateRun := namedStep(gate, "Evaluate all gates").Run
+	require(strings.Contains(gateRun, `"${{ needs.security-analysis.result }}" != "success"`), "Quality Gate must reject failed CodeQL analysis")
+	require(strings.Contains(gateRun, `"${{ needs.dependency-review.result }}" != "success"`), "Quality Gate must reject failed dependency review")
+	require(strings.Contains(gateRun, "::error::One or more quality gates failed"), "Quality Gate must report a failed dependency")
+	require(strings.Contains(gateRun, "exit 1"), "Quality Gate must fail when a dependency is unsuccessful")
 
 	require(equal(autoRelease.On.WorkflowRun.Workflows, "CI Quality Gates"), "auto-release must follow CI Quality Gates")
 	require(equal(autoRelease.On.WorkflowRun.Types, "completed"), "auto-release must follow completed CI runs")
