@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -8,6 +11,48 @@ import {
 } from "./codex-adapter.mjs";
 
 const now = () => new Date("2026-08-18T16:30:00.000Z");
+
+test("reads Unicode separators inside JSON strings without splitting records", async (t) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "codex-jsonl-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const filePath = path.join(directory, "rollout.jsonl");
+    const prompt = `${"x".repeat(65_535)}\u2028line separator\u2029paragraph separator`;
+    for (const [separator, trailingNewline] of [["\n", true], ["\r\n", true], ["\n", false]]) {
+        const records = [
+            JSON.stringify(event("2026-08-18T16:29:40.000Z", "event_msg", "task_started")),
+            "",
+            JSON.stringify(userMessage("2026-08-18T16:29:41.000Z", prompt)),
+            JSON.stringify(toolCall("2026-08-18T16:29:42.000Z", "shell_command")),
+        ];
+        await writeFile(filePath, records.join(separator) + (trailingNewline ? separator : ""));
+        const adapter = createCodexAdapter({
+            now,
+            sqliteModuleLoader: fakeSqliteLoader(() => [snapshotRow(filePath)]),
+        });
+        const snapshot = await adapter.getSnapshot();
+        assert.equal(snapshot.available, true, snapshot.diagnostics.message);
+        assert.equal(snapshot.sessions.length, 1);
+        assert.equal(snapshot.sessions[0].summary, prompt);
+        assert.equal(snapshot.totals.requests, 1);
+        assert.equal(snapshot.totals.toolCalls, 1);
+    }
+});
+
+test("reports genuinely malformed JSONL instead of silently dropping records", async (t) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "codex-jsonl-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const filePath = path.join(directory, "rollout.jsonl");
+    for (const suffix of ["\n", ""]) {
+        await writeFile(filePath, `${JSON.stringify(userMessage("2026-08-18T16:29:41.000Z", "valid"))}\n{"timestamp":${suffix}`);
+        const adapter = createCodexAdapter({
+            now,
+            sqliteModuleLoader: fakeSqliteLoader(() => [snapshotRow(filePath)]),
+        });
+        const snapshot = await adapter.getSnapshot();
+        assert.equal(snapshot.available, false);
+        assert.equal(snapshot.diagnostics.code, "codex_rollout_invalid");
+    }
+});
 
 test("derives project names from Windows and POSIX paths", () => {
     const cases = [
