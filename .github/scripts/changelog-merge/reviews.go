@@ -41,7 +41,7 @@ type reviewState struct {
 const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid comments(last:100){nodes{body createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}`
 
 var zeroCubicIssues = regexp.MustCompile(`(?i)\b0 issues found\b|\bno issues found\b`)
-var reviewedCommit = regexp.MustCompile("\\*\\*Reviewed commit:\\*\\*\\s*`?([0-9a-f]{10,40})\\b`?")
+var reviewedCommit = regexp.MustCompile("(?i)(?:\\*\\*)?Reviewed commit:(?:\\*\\*)?\\s*`?([0-9a-f]{10,40})\\b`?")
 
 func fetchReviewState(gh command, cfg config, number string) (reviewState, error) {
 	var response struct {
@@ -67,7 +67,7 @@ func reviewReady(state reviewState, head string) (bool, bool, error) {
 		return false, false, errors.New("review evidence truncated; manual review required")
 	}
 	if ambiguousCodexReview(state, head) {
-		return false, true, errors.New("current-head Codex review lacks a submission timestamp")
+		return false, true, errors.New("current-head Codex evidence lacks a timestamp")
 	}
 	for _, comment := range state.Comments.Nodes {
 		if codexActor(comment.Author.Login) && strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") && strings.Contains(comment.Body, "`"+head[:7]+"`") && strings.Contains(comment.Body, "**Running**") {
@@ -99,8 +99,7 @@ func wasRequested(state reviewState, reviewer, head string) bool {
 }
 
 func codexEvidence(state reviewState, head string) (time.Time, time.Time, bool) {
-	clean, requested := codexCommentEvidence(state, head)
-	var latest time.Time
+	clean, latest, requested := codexCommentEvidence(state, head)
 	for _, item := range state.Reviews.Nodes {
 		if !codexActor(item.Author.Login) || item.Commit.OID != head {
 			continue
@@ -116,8 +115,8 @@ func codexEvidence(state reviewState, head string) (time.Time, time.Time, bool) 
 	return clean, latest, requested
 }
 
-func codexCommentEvidence(state reviewState, head string) (time.Time, bool) {
-	var clean time.Time
+func codexCommentEvidence(state reviewState, head string) (time.Time, time.Time, bool) {
+	var clean, latest time.Time
 	requested := wasRequested(state, "codex", head)
 	for _, comment := range state.Comments.Nodes {
 		if !codexActor(comment.Author.Login) {
@@ -126,16 +125,17 @@ func codexCommentEvidence(state reviewState, head string) (time.Time, bool) {
 		if strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") && strings.Contains(comment.Body, "`"+head[:7]+"`") {
 			requested = true
 		}
-		match := reviewedCommit.FindStringSubmatch(comment.Body)
-		if len(match) != 2 || !strings.HasPrefix(head, match[1]) {
+		if !receiptMatches(comment, head) {
 			continue
 		}
 		requested = true
-		if strings.Contains(comment.Body, "Codex Review: Didn't find any major issues.") && comment.CreatedAt.After(clean) {
-			clean = comment.CreatedAt
+		if cleanCodexComment(comment.Body) {
+			clean = laterTime(clean, comment.CreatedAt)
+		} else {
+			latest = laterTime(latest, comment.CreatedAt)
 		}
 	}
-	return clean, requested
+	return clean, latest, requested
 }
 
 type checkRun struct {
@@ -232,7 +232,33 @@ func ambiguousCodexReview(state reviewState, head string) bool {
 			return true
 		}
 	}
+	for _, comment := range state.Comments.Nodes {
+		if receiptMatches(comment, head) && comment.CreatedAt.IsZero() {
+			return true
+		}
+	}
 	return false
+}
+
+func receiptMatches(comment reviewComment, head string) bool {
+	if !codexActor(comment.Author.Login) {
+		return false
+	}
+	match := reviewedCommit.FindStringSubmatch(comment.Body)
+	return len(match) == 2 && strings.HasPrefix(head, strings.ToLower(match[1]))
+}
+
+func cleanCodexComment(body string) bool {
+	first, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
+	first = strings.ToLower(strings.TrimLeft(strings.ReplaceAll(first, "**", ""), "# "))
+	return strings.HasPrefix(first, "codex review: didn't find any major issues") || strings.HasPrefix(first, "codex review: did not find any major issues")
+}
+
+func laterTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // API filtering can retain reruns from different check suites for one context.

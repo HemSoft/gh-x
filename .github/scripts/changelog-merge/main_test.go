@@ -481,3 +481,44 @@ func TestCubicFallbackMustFollowSelectedCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexCommentFindingsSupersedeEarlierCleanEvidence(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		delta   time.Duration
+		missing bool
+		ready   bool
+	}{
+		{"later finding", time.Minute, false, false},
+		{"tied finding", 0, false, false},
+		{"earlier finding", -time.Minute, false, true},
+		{"ambiguous finding", 0, true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			state := cleanState()
+			negative := reviewComment{Author: actor{"chatgpt-codex-connector"}, CreatedAt: state.Comments.Nodes[0].CreatedAt.Add(tt.delta), Body: "Codex Review: Found an issue that should be addressed.\n\n**Reviewed commit:** " + testHead[:10]}
+			if tt.missing {
+				negative.CreatedAt = time.Time{}
+			}
+			for _, comments := range [][]reviewComment{{state.Comments.Nodes[0], negative}, {negative, state.Comments.Nodes[0]}} {
+				state.Comments.Nodes = comments
+				ready, requested, err := reviewReady(state, testHead)
+				if ready != tt.ready || !requested || (err != nil) != tt.missing {
+					t.Fatalf("got %v,%v,%v", ready, requested, err)
+				}
+			}
+		})
+	}
+}
+
+func TestCodexCleanReceiptVariants(t *testing.T) {
+	state := cleanState()
+	state.Comments.Nodes[0].Body = "Codex Review: Did not find any major issues.\n\nReviewed commit: " + testHead
+	ready, _, err := reviewReady(state, testHead)
+	if !ready || err != nil {
+		t.Fatalf("supported alternate receipt: %v,%v", ready, err)
+	}
+	if cleanCodexComment("Codex Review: Found an issue.\nQuoted: Codex Review: Didn't find any major issues.") {
+		t.Fatal("quoted clean text must not clear findings")
+	}
+}
