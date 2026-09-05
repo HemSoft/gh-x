@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -72,7 +73,6 @@ func TestReleaseNeededExaminesEveryPath(t *testing.T) {
 		want  bool
 	}{
 		{name: "documentation only", paths: []string{"README.md", ".agents/skills/example/SKILL.md", "LICENSE"}, want: false},
-		{name: "repository automation only", paths: []string{".github/workflows/ci.yml", ".github/scripts/changelog-check/main.go"}, want: false},
 		{name: "source change", paths: []string{"README.md", "src/main.go"}, want: true},
 		{name: "rename source endpoint", paths: []string{"docs/old.md", "src/new.go"}, want: true},
 	}
@@ -83,6 +83,54 @@ func TestReleaseNeededExaminesEveryPath(t *testing.T) {
 				t.Fatalf("releaseNeeded() = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestUpdateChangelog(t *testing.T) {
+	contents := `# Changelog
+
+## [Unreleased]
+
+See changes since the latest release.
+
+## [1.2.3] - 2026-09-04
+
+- Previous release.
+
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.3
+`
+	notes := "2026-09-05\n\n- Added the next release.\n"
+
+	updated, changed, err := updateChangelog(contents, "v1.2.4", notes)
+	if err != nil {
+		t.Fatalf("updateChangelog() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("updateChangelog() changed = false, want true")
+	}
+	for _, want := range []string{
+		"## [1.2.4] - 2026-09-05\n\n- Added the next release.",
+		"[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.4...HEAD",
+		"[1.2.4]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.4",
+	} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("updated changelog does not contain %q:\n%s", want, updated)
+		}
+	}
+
+	second, changed, err := updateChangelog(updated, "v1.2.4", notes)
+	if err != nil || changed || second != updated {
+		t.Fatalf("second update = changed %t, error %v; want unchanged", changed, err)
+	}
+}
+
+func TestUpdateChangelogRejectsInvalidReleaseNotes(t *testing.T) {
+	contents := "## [Unreleased]\n\n## [1.2.3] - 2026-09-04\n\n[Unreleased]: old\n"
+	for _, notes := range []string{"not-a-date\n\n- Change\n", "2026-09-05\n\n"} {
+		if _, _, err := updateChangelog(contents, "v1.2.4", notes); err == nil {
+			t.Fatalf("updateChangelog(%q) error = nil, want error", notes)
+		}
 	}
 }
 

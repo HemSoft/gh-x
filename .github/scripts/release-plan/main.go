@@ -24,7 +24,7 @@ var (
 
 func main() {
 	if len(os.Args) != 2 {
-		fail("usage: release-plan <check|version|notes|create>")
+		fail("usage: release-plan <check|version|notes|create|changelog>")
 	}
 
 	var err error
@@ -37,6 +37,8 @@ func main() {
 		err = runNotes()
 	case "create":
 		err = runCreate()
+	case "changelog":
+		err = runChangelog()
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
@@ -204,6 +206,84 @@ func runCreate() error {
 	return runCommand("gh", createReleaseArgs(releaseTag, releaseSHA, assets)...)
 }
 
+func runChangelog() error {
+	releaseTag := os.Getenv("RELEASE_TAG")
+	if !semverTag.MatchString(releaseTag) {
+		return fmt.Errorf("invalid RELEASE_TAG %q", releaseTag)
+	}
+	notes, err := os.ReadFile("release-notes.md")
+	if err != nil {
+		return fmt.Errorf("read release notes: %w", err)
+	}
+	contents, err := os.ReadFile("CHANGELOG.md")
+	if err != nil {
+		return fmt.Errorf("read changelog: %w", err)
+	}
+
+	updated, changed, err := updateChangelog(string(contents), releaseTag, string(notes))
+	if err != nil {
+		return err
+	}
+	if !changed {
+		fmt.Fprintf(os.Stdout, "CHANGELOG.md already records %s\n", releaseTag)
+		return nil
+	}
+	if err := os.WriteFile("CHANGELOG.md", []byte(updated), 0o644); err != nil {
+		return fmt.Errorf("write changelog: %w", err)
+	}
+	fmt.Fprintf(os.Stdout, "Recorded %s in CHANGELOG.md\n", releaseTag)
+	return nil
+}
+
+func updateChangelog(contents, releaseTag, notes string) (string, bool, error) {
+	version := strings.TrimPrefix(releaseTag, "v")
+	headingPrefix := "## [" + version + "] - "
+	versionLink := "[" + version + "]: https://github.com/HemSoft/gh-x/releases/tag/" + releaseTag
+	expectedUnreleased := "[Unreleased]: https://github.com/HemSoft/gh-x/compare/" + releaseTag + "...HEAD"
+	if strings.Contains(contents, headingPrefix) {
+		if strings.Contains(contents, versionLink) && strings.Contains(contents, expectedUnreleased) {
+			return contents, false, nil
+		}
+		return "", false, fmt.Errorf("CHANGELOG.md contains an incomplete section for %s", releaseTag)
+	}
+
+	releaseDate, body, err := parseReleaseNotes(notes)
+	if err != nil {
+		return "", false, err
+	}
+	unreleasedStart := strings.Index(contents, "## [Unreleased]")
+	if unreleasedStart < 0 {
+		return "", false, errors.New("CHANGELOG.md has no Unreleased section")
+	}
+	nextHeadingOffset := strings.Index(contents[unreleasedStart+len("## [Unreleased]"):], "\n## ")
+	if nextHeadingOffset < 0 {
+		return "", false, errors.New("CHANGELOG.md has no section after Unreleased")
+	}
+	insertAt := unreleasedStart + len("## [Unreleased]") + nextHeadingOffset
+	entry := "\n## [" + version + "] - " + releaseDate + "\n\n" + body + "\n"
+	updated := contents[:insertAt] + entry + contents[insertAt:]
+
+	unreleasedMatch := regexp.MustCompile(`(?m)^\[Unreleased\]: \S+$`).FindString(updated)
+	if unreleasedMatch == "" {
+		return "", false, errors.New("CHANGELOG.md has no Unreleased comparison link")
+	}
+	updated = strings.Replace(updated, unreleasedMatch, expectedUnreleased+"\n"+versionLink, 1)
+	return updated, true, nil
+}
+
+func parseReleaseNotes(notes string) (string, string, error) {
+	normalized := strings.ReplaceAll(notes, "\r\n", "\n")
+	parts := strings.SplitN(normalized, "\n", 2)
+	if len(parts) != 2 || !regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`).MatchString(parts[0]) {
+		return "", "", errors.New("release notes must start with a YYYY-MM-DD date")
+	}
+	body := strings.TrimSpace(parts[1])
+	if body == "" {
+		return "", "", errors.New("release notes have no entries")
+	}
+	return parts[0], body, nil
+}
+
 func latestReachableTag() (string, error) {
 	tags, err := gitOutput("tag", "--merged", "HEAD", "--list", "v*", "--sort=-v:refname")
 	if err != nil {
@@ -231,7 +311,7 @@ func firstSemanticTag(tags []string) string {
 
 func releaseNeeded(paths []string) bool {
 	for _, path := range paths {
-		if strings.HasSuffix(path, ".md") || strings.HasPrefix(path, ".agents/") || strings.HasPrefix(path, ".github/") || path == "LICENSE" {
+		if strings.HasSuffix(path, ".md") || strings.HasPrefix(path, ".agents/") || path == "LICENSE" {
 			continue
 		}
 		return true

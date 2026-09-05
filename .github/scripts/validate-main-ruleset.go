@@ -199,6 +199,16 @@ func main() {
 	require(create.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "release creation must receive the calculated release tag through env")
 	require(strings.TrimSpace(create.Run) == "go run ./.github/scripts/release-plan create", "release creation must use the tested release-plan command")
 
+	changelog := namedStep(releaseJob, "Update changelog")
+	require(changelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "changelog update must receive the calculated release tag")
+	require(strings.TrimSpace(changelog.Run) == "go run ./.github/scripts/release-plan changelog", "release workflow must use the tested changelog updater")
+
+	mergeChangelog := namedStep(releaseJob, "Merge changelog update through CI")
+	require(mergeChangelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "changelog pull request must receive the calculated release tag")
+	require(strings.Contains(mergeChangelog.Run, "gh workflow run ci.yml --ref \"$branch\""), "changelog pull request must run CI on its exact branch")
+	require(strings.Contains(mergeChangelog.Run, "gh run watch \"$run_id\" --exit-status"), "changelog pull request must wait for successful CI")
+	require(strings.Contains(mergeChangelog.Run, "gh pr merge \"$pr_url\" --squash --delete-branch"), "changelog update must merge through a pull request")
+
 	fmt.Fprintln(os.Stdout, "main ruleset and release workflows are consistent")
 }
 
