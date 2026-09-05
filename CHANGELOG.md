@@ -12,6 +12,11 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+## [0.11.7] - 2026-09-05
+
+- fix: preserve Unicode separators in Codex rollout JSONL (#75)
+- docs: record v0.11.6 release (#74)
+
 ## [0.11.6] - 2026-09-05
 
 - chore: pin GitHub Actions dependencies to immutable commits (#73)
@@ -91,7 +96,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.11.6...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.11.7...HEAD
+[0.11.7]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.7
 [0.11.6]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.6
 [0.11.5]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.5
 [0.11.4]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.4
