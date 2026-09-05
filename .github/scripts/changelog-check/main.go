@@ -7,13 +7,14 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const repositoryURL = "https://github.com/HemSoft/gh-x"
 
 var (
 	semverTag        = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-	publishedHeading = regexp.MustCompile(`(?m)^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$`)
+	publishedHeading = regexp.MustCompile(`(?m)^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - ([0-9]{4}-[0-9]{2}-[0-9]{2})$`)
 	versionLink      = regexp.MustCompile(`(?m)^\[([0-9]+\.[0-9]+\.[0-9]+)\]: (\S+)$`)
 	unreleasedLink   = regexp.MustCompile(`(?m)^\[Unreleased\]: (\S+)$`)
 )
@@ -58,10 +59,25 @@ func validateChangelog(contents string, tags []string) error {
 
 	latestVersion := strings.TrimPrefix(latest, "v")
 	headings := publishedHeading.FindAllStringSubmatch(contents, -1)
+	if err := validatePublishedHeadings(headings); err != nil {
+		return err
+	}
 	if !containsVersion(headings, latestVersion) {
 		return fmt.Errorf("CHANGELOG.md has no published section for latest release %s", latest)
 	}
+	return validateVersionLinks(contents, tags, headings, latestVersion)
+}
 
+func validatePublishedHeadings(headings [][]string) error {
+	for _, heading := range headings {
+		if _, err := time.Parse("2006-01-02", heading[2]); err != nil {
+			return fmt.Errorf("published changelog section %s has invalid date %q", heading[1], heading[2])
+		}
+	}
+	return nil
+}
+
+func validateVersionLinks(contents string, tags []string, headings [][]string, latestVersion string) error {
 	tagSet := make(map[string]bool, len(tags))
 	for _, tag := range tags {
 		tagSet[tag] = true
@@ -89,7 +105,7 @@ func validateChangelog(contents string, tags []string) error {
 	}
 
 	if _, ok := linkByVersion[latestVersion]; !ok {
-		return fmt.Errorf("latest release %s has no version link", latest)
+		return fmt.Errorf("latest release v%s has no version link", latestVersion)
 	}
 
 	return nil
