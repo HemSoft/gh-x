@@ -30,9 +30,14 @@ type rulesetRule struct {
 }
 
 type rulesetParameters struct {
-	RequiredStatusChecks []requiredStatusCheck `json:"required_status_checks"`
-	Strict               *bool                 `json:"strict_required_status_checks_policy"`
-	EnforceOnCreate      *bool                 `json:"do_not_enforce_on_create"`
+	RequiredStatusChecks           []requiredStatusCheck `json:"required_status_checks"`
+	Strict                         *bool                 `json:"strict_required_status_checks_policy"`
+	EnforceOnCreate                *bool                 `json:"do_not_enforce_on_create"`
+	RequiredApprovingReviewCount   *int                  `json:"required_approving_review_count"`
+	DismissStaleReviewsOnPush      *bool                 `json:"dismiss_stale_reviews_on_push"`
+	RequireCodeOwnerReview         *bool                 `json:"require_code_owner_review"`
+	RequireLastPushApproval        *bool                 `json:"require_last_push_approval"`
+	RequiredReviewThreadResolution *bool                 `json:"required_review_thread_resolution"`
 }
 
 type requiredStatusCheck struct {
@@ -101,27 +106,9 @@ func main() {
 	ci := loadWorkflow(".github/workflows/ci.yml")
 	autoRelease := loadWorkflow(".github/workflows/auto-release.yml")
 
-	require(configuredRuleset.Name == "main-quality-gate", "unexpected ruleset name")
-	require(configuredRuleset.Target == "branch", "ruleset must target branches")
-	require(configuredRuleset.Enforcement == "active", "ruleset must be active")
-	require(len(configuredRuleset.BypassActors) == 0, "ruleset must not have bypass actors")
-	require(equal(configuredRuleset.Conditions.RefName.Include, "refs/heads/main"), "ruleset must target only main")
-	require(len(configuredRuleset.Conditions.RefName.Exclude) == 0, "ruleset must not exclude refs")
-
-	requiredRules := make([]rulesetRule, 0, 1)
-	for _, rule := range configuredRuleset.Rules {
-		if rule.Type == "required_status_checks" {
-			requiredRules = append(requiredRules, rule)
-		}
+	if err := validateRuleset(configuredRuleset); err != nil {
+		fail(err.Error())
 	}
-	require(len(requiredRules) == 1, "ruleset must define one required-status-check rule")
-	parameters := requiredRules[0].Parameters
-	require(
-		reflect.DeepEqual(parameters.RequiredStatusChecks, []requiredStatusCheck{{Context: "Quality Gate", IntegrationID: 15368}}),
-		"ruleset must require Quality Gate from GitHub Actions",
-	)
-	require(parameters.Strict != nil && !*parameters.Strict, "strict mode must remain disabled")
-	require(parameters.EnforceOnCreate != nil && !*parameters.EnforceOnCreate, "checks must apply to new refs")
 
 	require(equal(ci.On.PullRequest.Branches, "main"), "CI must target pull requests to main")
 	require(equal(ci.On.PullRequest.Types, "opened", "synchronize", "reopened", "edited"), "CI pull-request events changed")
@@ -200,6 +187,75 @@ func main() {
 	require(strings.TrimSpace(create.Run) == "go run ./.github/scripts/release-plan create", "release creation must use the tested release-plan command")
 
 	fmt.Fprintln(os.Stdout, "main ruleset and release workflows are consistent")
+}
+
+type rulesetValidation struct {
+	valid   bool
+	message string
+}
+
+func validateRuleset(configuredRuleset ruleset) error {
+	requiredStatusRules := rulesOfType(configuredRuleset, "required_status_checks")
+	pullRequestRules := rulesOfType(configuredRuleset, "pull_request")
+	if err := firstRulesetError(
+		rulesetValidation{configuredRuleset.Name == "main-quality-gate", "unexpected ruleset name"},
+		rulesetValidation{configuredRuleset.Target == "branch", "ruleset must target branches"},
+		rulesetValidation{configuredRuleset.Enforcement == "active", "ruleset must be active"},
+		rulesetValidation{len(configuredRuleset.BypassActors) == 0, "ruleset must not have bypass actors"},
+		rulesetValidation{equal(configuredRuleset.Conditions.RefName.Include, "refs/heads/main"), "ruleset must target only main"},
+		rulesetValidation{len(configuredRuleset.Conditions.RefName.Exclude) == 0, "ruleset must not exclude refs"},
+		rulesetValidation{len(requiredStatusRules) == 1, "ruleset must define one required-status-check rule"},
+		rulesetValidation{len(pullRequestRules) == 1, "ruleset must define one pull-request rule"},
+		rulesetValidation{len(configuredRuleset.Rules) == 2, "ruleset must define only status-check and pull-request rules"},
+	); err != nil {
+		return err
+	}
+	if err := validateRequiredStatusRule(requiredStatusRules[0]); err != nil {
+		return err
+	}
+	return validatePullRequestRule(pullRequestRules[0])
+}
+
+func rulesOfType(configuredRuleset ruleset, ruleType string) []rulesetRule {
+	matching := make([]rulesetRule, 0, 1)
+	for _, rule := range configuredRuleset.Rules {
+		if rule.Type == ruleType {
+			matching = append(matching, rule)
+		}
+	}
+	return matching
+}
+
+func validateRequiredStatusRule(rule rulesetRule) error {
+	parameters := rule.Parameters
+	return firstRulesetError(
+		rulesetValidation{
+			reflect.DeepEqual(parameters.RequiredStatusChecks, []requiredStatusCheck{{Context: "Quality Gate", IntegrationID: 15368}}),
+			"ruleset must require Quality Gate from GitHub Actions",
+		},
+		rulesetValidation{parameters.Strict != nil && !*parameters.Strict, "strict mode must remain disabled"},
+		rulesetValidation{parameters.EnforceOnCreate != nil && !*parameters.EnforceOnCreate, "checks must apply to new refs"},
+	)
+}
+
+func validatePullRequestRule(rule rulesetRule) error {
+	parameters := rule.Parameters
+	return firstRulesetError(
+		rulesetValidation{parameters.RequiredApprovingReviewCount != nil && *parameters.RequiredApprovingReviewCount == 0, "pull requests must require exactly zero approving reviews"},
+		rulesetValidation{parameters.DismissStaleReviewsOnPush != nil && !*parameters.DismissStaleReviewsOnPush, "stale-review dismissal must remain disabled"},
+		rulesetValidation{parameters.RequireCodeOwnerReview != nil && !*parameters.RequireCodeOwnerReview, "code-owner review must remain disabled"},
+		rulesetValidation{parameters.RequireLastPushApproval != nil && !*parameters.RequireLastPushApproval, "last-push approval must remain disabled"},
+		rulesetValidation{parameters.RequiredReviewThreadResolution != nil && *parameters.RequiredReviewThreadResolution, "pull requests must require resolved review threads"},
+	)
+}
+
+func firstRulesetError(validations ...rulesetValidation) error {
+	for _, validation := range validations {
+		if !validation.valid {
+			return fmt.Errorf("%s", validation.message)
+		}
+	}
+	return nil
 }
 
 func loadJSON(path string, target any) {

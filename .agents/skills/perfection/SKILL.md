@@ -349,11 +349,15 @@ All jobs feed into a single **Quality Gate** status check required by branch pro
 
 The CI workflow (`.github/workflows/ci.yml`) is the single source of truth for enforcement. This skill document describes the same gates for local use. When running `audit`, `coverage`, `crap`, `mutate`, `simplify`, or `harden`, use the same thresholds and tools as CI.
 
-### Branch Protection (repo ruleset ID: 16258786)
+### Main ruleset
 
-- **Required status check**: "Quality Gate" must pass
-- **All review conversations must be resolved** before merge
-- **Stale reviews are dismissed** on new pushes
+- Changes to `main` must arrive through a pull request.
+- The `Quality Gate` status check must pass.
+- All review conversations must be resolved before merge.
+- No approving reviews are required by the ruleset.
+- Stale approvals are not dismissed after new pushes.
+- Code-owner review and approval of the last push are not required.
+- No actor can bypass the ruleset.
 
 ### Copilot Code Review
 
