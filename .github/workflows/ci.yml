@@ -387,13 +387,41 @@ jobs:
             exit 1
           fi
 
+  # Privileged reviewer requests run trusted default-branch code, never PR code.
+  changelog-review:
+    name: Changelog AI Review
+    if: startsWith(github.head_ref || github.ref_name, 'chore/changelog-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    concurrency:
+      group: changelog-review-${{ github.head_ref || github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      checks: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      - name: Require eligible changelog and current-head reviews
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGELOG_BRANCH: ${{ github.head_ref || github.ref_name }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: go run ./.github/scripts/changelog-merge review
+
   # ── Final Gate ─────────────────────────────────────────────────
   # Single required status check for branch protection
   gate:
     name: Quality Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [build-and-test, lint, quality, mutation, security-analysis, dependency-review]
+    needs: [build-and-test, lint, quality, mutation, security-analysis, dependency-review, changelog-review]
     steps:
       - name: Evaluate all gates
         run: |
@@ -403,6 +431,7 @@ jobs:
           echo "Mutation:     ${{ needs.mutation.result }}"
           echo "CodeQL:       ${{ needs.security-analysis.result }}"
           echo "Dependencies: ${{ needs.dependency-review.result }}"
+          echo "Changelog AI: ${{ needs.changelog-review.result }}"
 
           if [[ "${{ needs.build-and-test.result }}" != "success" || \
                 "${{ needs.lint.result }}" != "success" || \
@@ -411,6 +440,10 @@ jobs:
                 "${{ needs.security-analysis.result }}" != "success" || \
                 "${{ needs.dependency-review.result }}" != "success" ]]; then
             echo "::error::One or more quality gates failed"
+            exit 1
+          fi
+          if [[ "${{ needs.changelog-review.result }}" != "success" && "${{ needs.changelog-review.result }}" != "skipped" ]]; then
+            echo "::error::Changelog review gate did not pass"
             exit 1
           fi
           echo "All quality gates passed ✅"
