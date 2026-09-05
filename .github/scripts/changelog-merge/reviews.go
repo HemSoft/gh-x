@@ -165,7 +165,7 @@ func inspectCubic(gh command, cfg config, state reviewState) (bool, bool, error)
 	found := false
 	for _, check := range checks {
 		found = true
-		ready, err := cubicReady(check, state, cfg.head)
+		ready, err := cubicReady(check, cfg.head)
 		if err != nil || !ready {
 			return ready, true, err
 		}
@@ -183,7 +183,7 @@ func hasCubicReview(state reviewState, head string) bool {
 	return false
 }
 
-func cubicReady(check checkRun, state reviewState, head string) (bool, error) {
+func cubicReady(check checkRun, head string) (bool, error) {
 	if check.HeadSHA != head {
 		return false, errors.New("cubic check does not match expected head")
 	}
@@ -201,29 +201,7 @@ func cubicReady(check checkRun, state reviewState, head string) (bool, error) {
 	if zeroCubicIssues.MatchString(text) {
 		return true, nil
 	}
-	return cubicFallback(check, state, head), nil
-}
-
-func cubicFallback(check checkRun, state reviewState, head string) bool {
-	if check.StartedAt.IsZero() {
-		return false
-	}
-	for i := len(state.Reviews.Nodes) - 1; i >= 0; i-- {
-		item := state.Reviews.Nodes[i]
-		if !cubicActor(item.Author.Login) || item.Commit.OID != head {
-			continue
-		}
-		if !item.SubmittedAt.After(check.StartedAt) || item.State == "DISMISSED" {
-			return false
-		}
-		_, summary, found := strings.Cut(item.Body, "<!-- cubic:review-summary:start -->")
-		if !found {
-			return false
-		}
-		summary, _, found = strings.Cut(summary, "<!-- cubic:review-summary:end -->")
-		return found && (strings.Contains(summary, "All reported issues were addressed") || zeroCubicIssues.MatchString(summary))
-	}
-	return false
+	return false, nil
 }
 
 func ambiguousCodexReview(state reviewState, head string) bool {

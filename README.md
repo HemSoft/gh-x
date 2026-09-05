@@ -542,8 +542,9 @@ The normal Quality Gate includes a changelog AI-review job for that branch
 namespace, on both PR and manually dispatched CI runs, using a read-only token.
 The trusted release workflow requests missing reviews once per reviewer and
 commit. The CI job requires a clean
-current-head Codex receipt and resolved conversations, and waits for Cubic
-to finish or explicitly skip its review. Missing, stale, truncated, or failed review evidence leaves
+current-head Codex receipt and resolved conversations. Cubic's latest check must
+report zero issues or explicitly skip review; a separate review comment cannot
+override findings in that check. Missing, stale, truncated, or failed review evidence leaves
 the gate blocked. Other PRs keep the existing quality gates.
 
 Repository auto-merge must be enabled. The release workflow waits for the PR

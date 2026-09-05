@@ -153,19 +153,11 @@ func TestCubicEvidence(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			check := checkRun{Status: tt.status, Conclusion: tt.conclusion, HeadSHA: testHead}
 			check.Output.Summary = tt.summary
-			ready, err := cubicReady(check, cleanState(), testHead)
+			ready, err := cubicReady(check, testHead)
 			if ready != tt.ready || (err != nil) != tt.wantError {
 				t.Fatalf("got %v,%v", ready, err)
 			}
 		})
-	}
-	s := cleanState()
-	r := review{SubmittedAt: time.Date(2026, 9, 5, 12, 1, 0, 0, time.UTC), Author: actor{"cubic-dev-ai"}, Body: "<!-- cubic:review-summary:start -->All reported issues were addressed<!-- cubic:review-summary:end --><!-- cubic:review-post:delivery-test:" + testHead + ":run-id -->"}
-	r.Commit.OID = testHead
-	s.Reviews.Nodes = []review{r}
-	ready, err := cubicReady(checkRun{StartedAt: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC), HeadSHA: testHead, Status: "completed", Conclusion: "success"}, s, testHead)
-	if err != nil || !ready {
-		t.Fatalf("resolved findings: %v,%v", ready, err)
 	}
 }
 
@@ -450,35 +442,20 @@ func TestCompletionCannotOrderRerunsWithMissingStart(t *testing.T) {
 	}
 }
 
-func TestCubicFallbackMustFollowSelectedCheck(t *testing.T) {
-	started := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
-	for _, tt := range []struct {
-		name, summary, extra string
-		submitted            time.Time
-		ready                bool
-	}{
-		{"new clean", "No issues found", "", started.Add(time.Second), true},
-		{"older clean", "No issues found", "", started.Add(-time.Second), false},
-		{"tied clean", "No issues found", "", started, false},
-		{"missing timestamp", "No issues found", "", time.Time{}, false},
-		{"quoted clean phrase", "5 issues found", "No issues found", started.Add(time.Second), false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			s := cleanState()
-			r := review{Author: actor{"cubic-dev-ai"}, State: "COMMENTED", SubmittedAt: tt.submitted, Body: "<!-- cubic:review-summary:start -->" + tt.summary + "<!-- cubic:review-summary:end -->" + tt.extra}
-			r.Commit.OID = testHead
-			s.Reviews.Nodes = []review{r}
-			check := checkRun{StartedAt: started, HeadSHA: testHead, Status: "completed", Conclusion: "success"}
-			check.Output.Summary = "1 issue found"
-			ready, err := cubicReady(check, s, testHead)
-			if err != nil || ready != tt.ready {
-				t.Fatalf("got %v,%v, want %v", ready, err, tt.ready)
-			}
-			check.StartedAt = time.Time{}
-			if cubicFallback(check, s, testHead) {
-				t.Fatal("missing check start must not reuse a review")
-			}
-		})
+func TestCubicCommentsCannotOverrideCheckFindings(t *testing.T) {
+	state := cleanState()
+	r := review{Author: actor{"cubic-dev-ai"}, State: "COMMENTED", SubmittedAt: time.Now(), Body: "<!-- cubic:review-summary:start -->No issues found<!-- cubic:review-summary:end -->"}
+	r.Commit.OID = testHead
+	state.Reviews.Nodes = []review{r}
+	check := checkRun{Name: "cubic review", StartedAt: r.SubmittedAt.Add(-time.Minute), HeadSHA: testHead, Status: "completed", Conclusion: "success"}
+	check.App.Slug = "cubic-dev-ai"
+	check.Output.Summary = "1 issue found"
+	gh := func(...string) ([]byte, error) {
+		return encode(t, map[string]any{"total_count": 1, "check_runs": []checkRun{check}}), nil
+	}
+	ready, requested, err := inspectCubic(gh, testConfig, state)
+	if ready || !requested || err != nil {
+		t.Fatalf("a clean comment must not override check findings: %v,%v,%v", ready, requested, err)
 	}
 }
 
