@@ -591,7 +591,7 @@ func TestNewFindingBeforeQueuePreventsAutoMerge(t *testing.T) {
 			check.Name = cubicReviewCheckName
 			check.App.Slug = "cubic-dev-ai"
 			check.Output.Summary = "0 issues found"
-			if strings.Contains(joined, "check_name=") {
+			if strings.Contains(joined, "check_name=Changelog") {
 				gatePassed = true
 				check.App.Slug = "github-actions"
 				check.Name = "Changelog AI Review"
@@ -659,5 +659,17 @@ func TestExpiredReviewDoesNotPollOrRequest(t *testing.T) {
 	}
 	if err := waitForReview(ctx, gh, testConfig, "12", true); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled review, got %v", err)
+	}
+}
+
+func TestCubicLookupFiltersBeforePagination(t *testing.T) {
+	gh := func(args ...string) ([]byte, error) {
+		if !strings.Contains(strings.Join(args, " "), "&check_name=cubic%20%C2%B7%20AI%20code%20reviewer") {
+			t.Fatal("Cubic lookup must exclude unrelated contexts before pagination")
+		}
+		return []byte(`{"total_count":0,"check_runs":[]}`), nil
+	}
+	if _, _, err := inspectCubic(gh, testConfig, cleanState()); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -153,7 +153,7 @@ func inspectCubic(gh command, cfg config, state reviewState) (bool, bool, error)
 		TotalCount int        `json:"total_count"`
 		CheckRuns  []checkRun `json:"check_runs"`
 	}
-	if err := readJSON(gh, &response, "api", "repos/"+cfg.repo+"/commits/"+cfg.head+"/check-runs?per_page=100&filter=latest"); err != nil {
+	if err := readJSON(gh, &response, "api", "repos/"+cfg.repo+"/commits/"+cfg.head+"/check-runs?per_page=100&filter=latest&check_name=cubic%20%C2%B7%20AI%20code%20reviewer"); err != nil {
 		return false, false, err
 	}
 	if response.TotalCount > len(response.CheckRuns) {
