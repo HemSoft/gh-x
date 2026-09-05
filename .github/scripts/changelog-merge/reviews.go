@@ -201,13 +201,29 @@ func cubicReady(check checkRun, state reviewState, head string) (bool, error) {
 	if zeroCubicIssues.MatchString(text) {
 		return true, nil
 	}
+	return cubicFallback(check, state, head), nil
+}
+
+func cubicFallback(check checkRun, state reviewState, head string) bool {
+	if check.StartedAt.IsZero() {
+		return false
+	}
 	for i := len(state.Reviews.Nodes) - 1; i >= 0; i-- {
 		item := state.Reviews.Nodes[i]
-		if cubicActor(item.Author.Login) && item.Commit.OID == head {
-			return strings.Contains(item.Body, "All reported issues were addressed") || strings.Contains(item.Body, "No issues found"), nil
+		if !cubicActor(item.Author.Login) || item.Commit.OID != head {
+			continue
 		}
+		if !item.SubmittedAt.After(check.StartedAt) || item.State == "DISMISSED" {
+			return false
+		}
+		_, summary, found := strings.Cut(item.Body, "<!-- cubic:review-summary:start -->")
+		if !found {
+			return false
+		}
+		summary, _, found = strings.Cut(summary, "<!-- cubic:review-summary:end -->")
+		return found && (strings.Contains(summary, "All reported issues were addressed") || zeroCubicIssues.MatchString(summary))
 	}
-	return false, nil
+	return false
 }
 
 func ambiguousCodexReview(state reviewState, head string) bool {
