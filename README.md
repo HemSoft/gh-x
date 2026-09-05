@@ -547,7 +547,11 @@ report zero issues or explicitly skip review; a separate review comment cannot
 override findings in that check. Missing, stale, truncated, or failed review evidence leaves
 the gate blocked. Other PRs keep the existing quality gates.
 
-Repository auto-merge must be enabled. The release workflow waits for the PR
+Repository auto-merge must be enabled. The release workflow rechecks reviews
+immediately before queueing and every 30 seconds while queued. Changed or
+unavailable evidence, a changed head, or an expired monitoring deadline causes
+it to withdraw auto-merge. A withdrawal failure is reported explicitly.
+The release workflow waits for the PR
 to actually merge before deleting its exact head branch and dispatching CI
 on main. It does not bypass branch protection. A failed release run resumes that update
 from the existing GitHub Release and current `main`, even when `main` has

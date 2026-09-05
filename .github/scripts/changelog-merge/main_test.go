@@ -499,3 +499,107 @@ func TestCodexCleanReceiptVariants(t *testing.T) {
 		t.Fatal("quoted clean text must not clear findings")
 	}
 }
+
+func TestQueuedAutoMergeIsWithdrawnWhenReviewChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		dirty, expire, disableFails bool
+	}{
+		{"new finding", true, false, false},
+		{"monitor deadline", false, true, false},
+		{"withdrawal failure", true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.expire {
+				cancel()
+			}
+			disabled := false
+			gh := func(args ...string) ([]byte, error) {
+				joined := strings.Join(args, " ")
+				switch {
+				case args[0] == "pr":
+					if !strings.Contains(joined, "--disable-auto") {
+						t.Fatalf("unexpected mutation: %v", args)
+					}
+					disabled = true
+					if tc.disableFails {
+						return nil, errors.New("API unavailable")
+					}
+					return nil, nil
+				case args[1] == "graphql":
+					state := cleanState()
+					if tc.dirty {
+						state.Comments.Nodes[0].Body = "Codex Review: Found an issue.\n**Reviewed commit:** " + testHead
+					}
+					return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": state}}}), nil
+				case strings.Contains(joined, "/files?"):
+					return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
+				case strings.Contains(joined, "check-runs?"):
+					check := checkRun{HeadSHA: testHead, Status: "completed", Conclusion: "success"}
+					check.App.Slug = "cubic-dev-ai"
+					check.Output.Summary = "0 issues found"
+					return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
+				default:
+					return encode(t, validPR()), nil
+				}
+			}
+			err := waitForMerge(ctx, gh, testConfig, "12")
+			if err == nil || !disabled {
+				t.Fatalf("queued merge must be withdrawn: %v,%v", disabled, err)
+			}
+			if tc.disableFails && !strings.Contains(err.Error(), "could not disable") {
+				t.Fatalf("withdrawal failure must be explicit: %v", err)
+			}
+		})
+	}
+}
+
+func TestOnlyWithdrawalSurvivesMonitorCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if commandContext(ctx, []string{"pr", "merge", "12", "--disable-auto"}).Err() != nil {
+		t.Fatal("withdrawal needs its cleanup window")
+	}
+	if commandContext(ctx, []string{"pr", "merge", "12", "--auto"}).Err() == nil {
+		t.Fatal("normal commands must retain the deadline")
+	}
+}
+
+func TestNewFindingBeforeQueuePreventsAutoMerge(t *testing.T) {
+	gatePassed := false
+	gh := func(args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case args[0] == "pr" && args[1] == "list":
+			return []byte(`[{"number":12}]`), nil
+		case args[0] == "pr":
+			t.Fatalf("dirty evidence must prevent mutation: %v", args)
+		case args[1] == "graphql":
+			state := cleanState()
+			if gatePassed {
+				state.Comments.Nodes[0].Body = "Codex Review: Found an issue.\n**Reviewed commit:** " + testHead
+			}
+			return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": state}}}), nil
+		case strings.Contains(joined, "/files?"):
+			return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
+		case strings.Contains(joined, "check-runs?"):
+			check := checkRun{HeadSHA: testHead, Status: "completed", Conclusion: "success"}
+			check.App.Slug = "cubic-dev-ai"
+			check.Output.Summary = "0 issues found"
+			if strings.Contains(joined, "check_name=") {
+				gatePassed = true
+				check.App.Slug = "github-actions"
+				check.Name = "Changelog AI Review"
+			}
+			return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
+		default:
+			return encode(t, validPR()), nil
+		}
+		return nil, nil
+	}
+	if err := run(context.Background(), testConfig, []string{"enable"}, gh); err == nil {
+		t.Fatal("finding during gate wait must block enabling auto-merge")
+	}
+}

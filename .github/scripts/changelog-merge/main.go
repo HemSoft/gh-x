@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -53,7 +54,7 @@ func main() {
 
 func ghCommand(ctx context.Context) command {
 	return func(args ...string) ([]byte, error) {
-		callCtx, cancel := context.WithTimeout(ctx, time.Minute)
+		callCtx, cancel := context.WithTimeout(commandContext(ctx, args), time.Minute)
 		defer cancel()
 		output, err := exec.CommandContext(callCtx, "gh", args...).CombinedOutput()
 		if err != nil {
@@ -90,11 +91,11 @@ func run(ctx context.Context, cfg config, args []string, gh command) error {
 	if err := waitForReviewGate(ctx, gh, cfg); err != nil {
 		return err
 	}
-	if err := inspectEligibility(gh, cfg, number); err != nil {
+	if err := requireCurrentReviews(gh, cfg, number); err != nil {
 		return err
 	}
 	if _, err := gh("pr", "merge", number, "--repo", cfg.repo, "--auto", "--squash", "--match-head-commit", cfg.head); err != nil {
-		return err
+		return withdrawAutoMerge(gh, cfg, number, err)
 	}
 	return waitForMerge(ctx, gh, cfg, number)
 }
@@ -142,7 +143,7 @@ func eligible(cfg config, pr pullRequest, files []changedFile) error {
 }
 
 func pause(ctx context.Context) error {
-	timer := time.NewTimer(10 * time.Second)
+	timer := time.NewTimer(30 * time.Second)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -156,10 +157,10 @@ func waitForMerge(ctx context.Context, gh command, cfg config, number string) er
 	for {
 		var pr pullRequest
 		if err := readJSON(gh, &pr, "api", "repos/"+cfg.repo+"/pulls/"+number); err != nil {
-			return err
+			return withdrawAutoMerge(gh, cfg, number, err)
 		}
 		if pr.Head.SHA != cfg.head {
-			return errors.New("head changed while waiting for auto-merge; new head must pass its own Quality Gate")
+			return withdrawAutoMerge(gh, cfg, number, errors.New("head changed while waiting for auto-merge"))
 		}
 		if pr.Merged {
 			return nil
@@ -167,10 +168,39 @@ func waitForMerge(ctx context.Context, gh command, cfg config, number string) er
 		if pr.State != "open" {
 			return errors.New("changelog PR closed without merging")
 		}
+		if err := requireCurrentReviews(gh, cfg, number); err != nil {
+			return withdrawAutoMerge(gh, cfg, number, err)
+		}
 		if err := pause(ctx); err != nil {
-			return fmt.Errorf("PR #%s has not merged; native auto-merge remains subject to its required gates: %w", number, err)
+			return withdrawAutoMerge(gh, cfg, number, err)
 		}
 	}
+}
+
+func requireCurrentReviews(gh command, cfg config, number string) error {
+	ready, err := pollReview(gh, cfg, number, nil, false)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return errors.New("current-head review evidence is no longer clean")
+	}
+	return nil
+}
+
+func withdrawAutoMerge(gh command, cfg config, number string, reason error) error {
+	if _, err := gh("pr", "merge", number, "--repo", cfg.repo, "--disable-auto"); err != nil {
+		return fmt.Errorf("auto-merge guard failed: %v; could not disable auto-merge: %w", reason, err)
+	}
+	return fmt.Errorf("auto-merge disabled: %w", reason)
+}
+
+// Withdrawal must retain a bounded cleanup window after the monitor times out.
+func commandContext(ctx context.Context, args []string) context.Context {
+	if len(args) > 2 && args[0] == "pr" && args[1] == "merge" && slices.Contains(args, "--disable-auto") {
+		return context.WithoutCancel(ctx)
+	}
+	return ctx
 }
 
 func waitForReview(ctx context.Context, gh command, cfg config, number string, allowRequests bool) error {
