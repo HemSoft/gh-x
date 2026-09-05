@@ -139,6 +139,54 @@ jobs:
           source .github/quality-tools.env
           npx --yes "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}" '**/*.md' '#node_modules' '#.agents' '#.github/agents'
 
+  # ── Security Analysis ─────────────────────────────────────────
+  security-analysis:
+    name: CodeQL Analysis (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Analyze with CodeQL
+        uses: github/codeql-action/analyze@v4
+
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v6
+
+      - name: Review dependency changes
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high
+
+      - name: Skip dependency review outside pull requests
+        if: github.event_name != 'pull_request'
+        run: echo "Dependency review applies only to pull requests."
+
   # ── Quality Gates ──────────────────────────────────────────────
   quality:
     name: Quality Gates
@@ -337,7 +385,7 @@ jobs:
     name: Quality Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [build-and-test, lint, quality, mutation]
+    needs: [build-and-test, lint, quality, mutation, security-analysis, dependency-review]
     steps:
       - name: Evaluate all gates
         run: |
@@ -345,11 +393,15 @@ jobs:
           echo "Lint:         ${{ needs.lint.result }}"
           echo "Quality:      ${{ needs.quality.result }}"
           echo "Mutation:     ${{ needs.mutation.result }}"
+          echo "CodeQL:       ${{ needs.security-analysis.result }}"
+          echo "Dependencies: ${{ needs.dependency-review.result }}"
 
           if [[ "${{ needs.build-and-test.result }}" != "success" || \
                 "${{ needs.lint.result }}" != "success" || \
                 "${{ needs.quality.result }}" != "success" || \
-                "${{ needs.mutation.result }}" != "success" ]]; then
+                "${{ needs.mutation.result }}" != "success" || \
+                "${{ needs.security-analysis.result }}" != "success" || \
+                "${{ needs.dependency-review.result }}" != "success" ]]; then
             echo "::error::One or more quality gates failed"
             exit 1
           fi
