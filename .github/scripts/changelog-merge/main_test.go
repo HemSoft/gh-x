@@ -439,3 +439,13 @@ func TestQueuedGateRerunWaitsForTimestamp(t *testing.T) {
 		t.Fatalf("completed rerun should pass, got %v,%v", ready, err)
 	}
 }
+
+func TestCompletionCannotOrderRerunsWithMissingStart(t *testing.T) {
+	gh := func(...string) ([]byte, error) {
+		return []byte(`{"total_count":2,"check_runs":[{"name":"cubic review","head_sha":"` + testHead + `","status":"completed","conclusion":"success","started_at":null,"completed_at":"2026-09-05T12:10:00Z","app":{"slug":"cubic-dev-ai"},"output":{"summary":"0 issues found"}},{"name":"cubic review","head_sha":"` + testHead + `","status":"completed","conclusion":"failure","started_at":"2026-09-05T12:05:00Z","completed_at":"2026-09-05T12:06:00Z","app":{"slug":"cubic-dev-ai"}}]}`), nil
+	}
+	ready, requested, err := inspectCubic(gh, testConfig, cleanState())
+	if ready || !requested || err != nil {
+		t.Fatalf("unknown start order must remain pending: %v,%v,%v", ready, requested, err)
+	}
+}

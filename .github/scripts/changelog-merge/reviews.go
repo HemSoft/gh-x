@@ -140,7 +140,6 @@ func codexCommentEvidence(state reviewState, head string) (time.Time, bool) {
 
 type checkRun struct {
 	StartedAt                time.Time `json:"started_at"`
-	CompletedAt              time.Time `json:"completed_at"`
 	Name, Status, Conclusion string
 	HeadSHA                  string `json:"head_sha"`
 	App                      struct{ Slug string }
@@ -248,16 +247,9 @@ func latestChecks(checks []checkRun, app string) ([]checkRun, error) {
 }
 
 func newerCheck(candidate, current checkRun) (bool, error) {
-	a, b := checkTime(candidate), checkTime(current)
+	a, b := candidate.StartedAt, current.StartedAt
 	if a.IsZero() || b.IsZero() || a.Equal(b) {
 		return false, errors.New("cannot order repeated review checks; manual review required")
 	}
 	return a.After(b), nil
-}
-
-func checkTime(check checkRun) time.Time {
-	if !check.StartedAt.IsZero() {
-		return check.StartedAt
-	}
-	return check.CompletedAt
 }
