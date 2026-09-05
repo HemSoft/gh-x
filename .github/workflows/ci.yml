@@ -94,6 +94,8 @@ jobs:
           go run .github/scripts/validate-main-ruleset.go
 
       - name: Validate changelog release links
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: go run ./.github/scripts/changelog-check
 
       - name: Install lint tools

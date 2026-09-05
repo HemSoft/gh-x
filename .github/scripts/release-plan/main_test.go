@@ -150,7 +150,11 @@ See changes since the latest release.
 
 func TestUpdateChangelogRejectsInvalidReleaseNotes(t *testing.T) {
 	contents := "## [Unreleased]\n\n## [1.2.3] - 2026-09-04\n\n[Unreleased]: old\n"
-	for _, notes := range []string{"not-a-date\n\n- Change\n", "2026-09-05\n\n"} {
+	for _, notes := range []string{
+		"not-a-date\n\n- Change\n",
+		"2026-02-30\n\n- Impossible date\n",
+		"2026-09-05\n\n",
+	} {
 		if _, _, err := updateChangelog(contents, "v1.2.4", notes); err == nil {
 			t.Fatalf("updateChangelog(%q) error = nil, want error", notes)
 		}

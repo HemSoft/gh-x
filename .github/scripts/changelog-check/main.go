@@ -25,23 +25,30 @@ func main() {
 		fail(err)
 	}
 
-	tagOutput, err := exec.Command("git", "tag", "--list", "v*", "--sort=-v:refname").Output()
+	releaseOutput, err := exec.Command(
+		"gh",
+		"api",
+		"--paginate",
+		"repos/HemSoft/gh-x/releases",
+		"--jq",
+		".[] | select(.draft == false and .prerelease == false) | .tag_name",
+	).Output()
 	if err != nil {
-		fail(fmt.Errorf("list repository tags: %w", err))
+		fail(fmt.Errorf("list published GitHub Releases: %w", err))
 	}
 
-	tags := strings.Fields(string(tagOutput))
-	if err := validateChangelog(string(contents), tags); err != nil {
+	releasedTags := strings.Fields(string(releaseOutput))
+	if err := validateChangelog(string(contents), releasedTags); err != nil {
 		fail(err)
 	}
 
-	fmt.Fprintf(os.Stdout, "CHANGELOG.md matches latest release %s\n", latestSemanticTag(tags))
+	fmt.Fprintf(os.Stdout, "CHANGELOG.md matches latest release %s\n", latestSemanticTag(releasedTags))
 }
 
-func validateChangelog(contents string, tags []string) error {
-	latest := latestSemanticTag(tags)
+func validateChangelog(contents string, releasedTags []string) error {
+	latest := latestSemanticTag(releasedTags)
 	if latest == "" {
-		return errors.New("repository has no semantic-version tags")
+		return errors.New("repository has no semantic-version GitHub Releases")
 	}
 
 	if !strings.Contains(contents, "GitHub Releases is the authoritative source") {
@@ -65,7 +72,7 @@ func validateChangelog(contents string, tags []string) error {
 	if !containsVersion(headings, latestVersion) {
 		return fmt.Errorf("CHANGELOG.md has no published section for latest release %s", latest)
 	}
-	return validateVersionLinks(contents, tags, headings, latestVersion)
+	return validateVersionLinks(contents, releasedTags, headings, latestVersion)
 }
 
 func validatePublishedHeadings(headings [][]string) error {
@@ -77,10 +84,10 @@ func validatePublishedHeadings(headings [][]string) error {
 	return nil
 }
 
-func validateVersionLinks(contents string, tags []string, headings [][]string, latestVersion string) error {
-	tagSet := make(map[string]bool, len(tags))
-	for _, tag := range tags {
-		tagSet[tag] = true
+func validateVersionLinks(contents string, releasedTags []string, headings [][]string, latestVersion string) error {
+	releaseSet := make(map[string]bool, len(releasedTags))
+	for _, tag := range releasedTags {
+		releaseSet[tag] = true
 	}
 
 	links := versionLink.FindAllStringSubmatch(contents, -1)
@@ -88,8 +95,8 @@ func validateVersionLinks(contents string, tags []string, headings [][]string, l
 	for _, link := range links {
 		version, url := link[1], link[2]
 		tag := "v" + version
-		if !tagSet[tag] {
-			return fmt.Errorf("published changelog link %s names missing tag %s", version, tag)
+		if !releaseSet[tag] {
+			return fmt.Errorf("published changelog link %s names missing GitHub Release %s", version, tag)
 		}
 		expected := repositoryURL + "/releases/tag/" + tag
 		if url != expected {

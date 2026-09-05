@@ -275,6 +275,9 @@ func parseReleaseNotes(notes string) (string, string, error) {
 	if len(parts) != 2 || !regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`).MatchString(parts[0]) {
 		return "", "", errors.New("release notes must start with a YYYY-MM-DD date")
 	}
+	if _, err := time.Parse("2006-01-02", parts[0]); err != nil {
+		return "", "", errors.New("release notes must start with a valid YYYY-MM-DD date")
+	}
 	body := strings.TrimSpace(parts[1])
 	if body == "" {
 		return "", "", errors.New("release notes have no entries")
