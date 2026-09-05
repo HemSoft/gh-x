@@ -32,6 +32,7 @@ export function createCodexAdapter({
                     codexHome,
                     sqliteModuleLoader,
                 });
+                pruneRolloutCache(rolloutCache, threads);
                 const sessions = [];
                 let latestRateLimits = null;
                 let latestRateLimitAt = Number.NEGATIVE_INFINITY;
@@ -180,6 +181,15 @@ function normalizeThread(row, codexHome) {
     };
 }
 
+function pruneRolloutCache(cache, threads) {
+    const currentPaths = new Set(threads.map((thread) => thread.rolloutPath));
+    for (const filePath of cache.keys()) {
+        if (!currentPaths.has(filePath)) {
+            cache.delete(filePath);
+        }
+    }
+}
+
 async function readRolloutCached(filePath, {
     cache,
     readLines,
@@ -190,6 +200,7 @@ async function readRolloutCached(filePath, {
         fileStats = stat(filePath);
     } catch (error) {
         if (error?.code === "ENOENT") {
+            cache.delete(filePath);
             return emptyRollout();
         }
         throw error;
