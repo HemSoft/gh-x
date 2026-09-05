@@ -15,8 +15,8 @@ const repositoryURL = "https://github.com/HemSoft/gh-x"
 var (
 	semverTag        = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 	publishedHeading = regexp.MustCompile(`(?m)^## \[([0-9]+\.[0-9]+\.[0-9]+)\]([^\r\n]*)\r?$`)
-	versionLink      = regexp.MustCompile(`(?m)^\[([0-9]+\.[0-9]+\.[0-9]+)\]: (\S+)$`)
-	unreleasedLink   = regexp.MustCompile(`(?m)^\[Unreleased\]: (\S+)$`)
+	versionLink      = regexp.MustCompile(`(?m)^\[([0-9]+\.[0-9]+\.[0-9]+)\]: (\S+)\r?$`)
+	unreleasedLink   = regexp.MustCompile(`(?m)^\[Unreleased\]: (\S+)\r?$`)
 )
 
 func main() {

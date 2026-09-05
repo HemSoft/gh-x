@@ -148,6 +148,55 @@ See changes since the latest release.
 	}
 }
 
+func TestUpdateChangelogPreservesCRLF(t *testing.T) {
+	contents := strings.ReplaceAll(`## [Unreleased]
+
+## [1.2.3] - 2026-09-04
+
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.3
+`, "\n", "\r\n")
+
+	updated, changed, err := updateChangelog(contents, "v1.2.4", "2026-09-05\n\n- Added the next release.\n")
+	if err != nil {
+		t.Fatalf("updateChangelog() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("updateChangelog() changed = false, want true")
+	}
+	if strings.Contains(strings.ReplaceAll(updated, "\r\n", ""), "\n") {
+		t.Fatal("updateChangelog() introduced LF-only line endings")
+	}
+	for _, want := range []string{
+		"## [1.2.4] - 2026-09-05\r\n\r\n- Added the next release.",
+		"[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.4...HEAD\r\n[1.2.4]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.4",
+	} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("updated changelog does not contain %q:\n%s", want, updated)
+		}
+	}
+}
+
+func TestUpdateChangelogUsesLocalLineEndings(t *testing.T) {
+	contents := "# Changelog\n\n## [Unreleased]\n\n## [1.2.3] - 2026-09-04\n\n[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.3...HEAD\r\n[1.2.3]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.3\r\n"
+
+	updated, changed, err := updateChangelog(contents, "v1.2.4", "2026-09-05\n\n- Added the next release.\n")
+	if err != nil {
+		t.Fatalf("updateChangelog() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("updateChangelog() changed = false, want true")
+	}
+	for _, want := range []string{
+		"## [Unreleased]\n\n## [1.2.4] - 2026-09-05\n\n- Added the next release.\n\n## [1.2.3]",
+		"[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.4...HEAD\r\n[1.2.4]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.4",
+	} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("updated changelog does not contain %q:\n%s", want, updated)
+		}
+	}
+}
+
 func TestUpdateChangelogAcceptsCompletedHistoricalRelease(t *testing.T) {
 	contents := `## [Unreleased]
 

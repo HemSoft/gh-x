@@ -26,6 +26,7 @@ func TestValidateChangelog(t *testing.T) {
 		wantErr      string
 	}{
 		{name: "current latest release", contents: validChangelog, latest: "v1.2.3", releasedTags: []string{"v1.2.3", "v1.2.2"}},
+		{name: "current latest release with CRLF", contents: strings.ReplaceAll(validChangelog, "\n", "\r\n"), latest: "v1.2.3", releasedTags: []string{"v1.2.3", "v1.2.2"}},
 		{name: "API order does not select latest", contents: validChangelog, latest: "v1.2.3", releasedTags: []string{"v1.2.2", "v1.2.3"}},
 		{name: "stale Unreleased base", contents: strings.Replace(validChangelog, "compare/v1.2.3", "compare/v1.2.2", 1), latest: "v1.2.3", releasedTags: []string{"v1.2.3"}, wantErr: "Unreleased comparison"},
 		{name: "missing latest section", contents: strings.Replace(validChangelog, "## [1.2.3]", "## [1.2.2]", 1), latest: "v1.2.3", releasedTags: []string{"v1.2.3", "v1.2.2"}, wantErr: "no published section for latest release"},

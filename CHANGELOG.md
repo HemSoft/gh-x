@@ -12,6 +12,11 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+## [0.11.4] - 2026-09-05
+
+- chore: require pull requests for main (#66)
+- docs: record v0.11.3 release (#68)
+
 ## [0.11.3] - 2026-09-05
 
 - docs: reconcile changelog with published releases (#67)
@@ -77,6 +82,7 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.11.3...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.11.4...HEAD
+[0.11.4]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.4
 [0.11.3]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.3
 [0.11.2]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.2
