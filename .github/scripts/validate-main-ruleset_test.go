@@ -145,3 +145,135 @@ func boolPointer(value bool) *bool {
 func intPointer(value int) *int {
 	return &value
 }
+
+func TestIsPinnedAction(t *testing.T) {
+	tests := []struct {
+		name           string
+		uses           string
+		expectedAction string
+		want           bool
+	}{
+		{
+			name:           "valid 40-character hex commit SHA",
+			uses:           "github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938",
+			expectedAction: "github/codeql-action/init",
+			want:           true,
+		},
+		{
+			name:           "mutable major tag is rejected",
+			uses:           "github/codeql-action/init@v4",
+			expectedAction: "github/codeql-action/init",
+			want:           false,
+		},
+		{
+			name:           "mutable branch is rejected",
+			uses:           "github/codeql-action/init@main",
+			expectedAction: "github/codeql-action/init",
+			want:           false,
+		},
+		{
+			name:           "short SHA is rejected",
+			uses:           "github/codeql-action/init@cdf488f",
+			expectedAction: "github/codeql-action/init",
+			want:           false,
+		},
+		{
+			name:           "mismatched action is rejected",
+			uses:           "github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938",
+			expectedAction: "github/codeql-action/init",
+			want:           false,
+		},
+		{
+			name:           "missing delimiter is rejected",
+			uses:           "github/codeql-action/init",
+			expectedAction: "github/codeql-action/init",
+			want:           false,
+		},
+		{
+			name:           "non-hex character is rejected",
+			uses:           "github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa93z",
+			expectedAction: "github/codeql-action/init",
+			want:           false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isPinnedAction(tt.uses, tt.expectedAction); got != tt.want {
+				t.Errorf("isPinnedAction(%q, %q) = %v, want %v", tt.uses, tt.expectedAction, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActionSHA(t *testing.T) {
+	uses := "github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938"
+	want := "cdf488f595d80d6e07e03d4674febd5ab45fa938"
+	if got := actionSHA(uses); got != want {
+		t.Errorf("actionSHA(%q) = %q, want %q", uses, got, want)
+	}
+}
+
+func TestActionVersionComment(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		action  string
+		wantVer string
+		wantOk  bool
+	}{
+		{
+			name: "matches pinned action with version comment",
+			content: `      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+`,
+			action:  "github/codeql-action/init",
+			wantVer: "v4.37.9",
+			wantOk:  true,
+		},
+		{
+			name:    "handles CRLF line endings",
+			content: "      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0\r\n",
+			action:  "actions/checkout",
+			wantVer: "v6.1.0",
+			wantOk:  true,
+		},
+		{
+			name: "missing version comment returns false",
+			content: `      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938
+`,
+			action:  "github/codeql-action/init",
+			wantVer: "",
+			wantOk:  false,
+		},
+		{
+			name: "unpinned action returns false",
+			content: `      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4 # v4.37.9
+`,
+			action:  "github/codeql-action/init",
+			wantVer: "",
+			wantOk:  false,
+		},
+		{
+			name: "does not match comment on subsequent line",
+			content: `      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938
+        # v4.37.9
+`,
+			action:  "github/codeql-action/init",
+			wantVer: "",
+			wantOk:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotVer, gotOk := actionVersionComment(tt.content, tt.action)
+			if gotOk != tt.wantOk || gotVer != tt.wantVer {
+				t.Errorf("actionVersionComment() = (%q, %v), want (%q, %v)", gotVer, gotOk, tt.wantVer, tt.wantOk)
+			}
+		})
+	}
+}

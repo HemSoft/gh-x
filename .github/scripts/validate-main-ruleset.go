@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -105,7 +106,7 @@ type workflowStep struct {
 func main() {
 	var configuredRuleset ruleset
 	loadJSON(".github/rulesets/main.json", &configuredRuleset)
-	ci := loadWorkflow(".github/workflows/ci.yml")
+	ci, ciContent := loadWorkflowWithContent(".github/workflows/ci.yml")
 	autoRelease := loadWorkflow(".github/workflows/auto-release.yml")
 
 	if err := validateRuleset(configuredRuleset); err != nil {
@@ -128,19 +129,21 @@ func main() {
 		{"language": "javascript-typescript", "build-mode": "none"},
 	}), "CodeQL must analyze Go and JavaScript with supported build modes")
 	codeQLInit := namedStep(security, "Initialize CodeQL")
-	require(codeQLInit.Uses == "github/codeql-action/init@v4", "CodeQL init must use the supported v4 action")
+	requirePinnedAction(ciContent, codeQLInit, "github/codeql-action/init", "v4")
 	require(reflect.DeepEqual(codeQLInit.With, map[string]string{
 		"languages":  "${{ matrix.language }}",
 		"build-mode": "${{ matrix.build-mode }}",
 	}), "CodeQL init must receive the language and build mode matrix values")
-	require(namedStep(security, "Analyze with CodeQL").Uses == "github/codeql-action/analyze@v4", "CodeQL analysis must use the supported v4 action")
+	codeQLAnalyze := namedStep(security, "Analyze with CodeQL")
+	requirePinnedAction(ciContent, codeQLAnalyze, "github/codeql-action/analyze", "v4")
+	require(actionSHA(codeQLInit.Uses) == actionSHA(codeQLAnalyze.Uses), "CodeQL init and analyze must use the same action revision")
 
 	dependencyReview := ci.Jobs["dependency-review"]
 	require(dependencyReview.Name == "Dependency Review", "CI must publish the Dependency Review check")
 	require(reflect.DeepEqual(dependencyReview.Permissions, map[string]string{"contents": "read"}), "dependency review must use read-only contents permission")
 	reviewStep := namedStep(dependencyReview, "Review dependency changes")
 	require(reviewStep.If == "github.event_name == 'pull_request'", "dependency review must run only for pull requests")
-	require(reviewStep.Uses == "actions/dependency-review-action@v5", "dependency review must use the current v5 action")
+	requirePinnedAction(ciContent, reviewStep, "actions/dependency-review-action", "v5")
 	require(reviewStep.With["fail-on-severity"] == "high", "dependency review must block high and critical vulnerabilities")
 	require(namedStep(dependencyReview, "Skip dependency review outside pull requests").If == "github.event_name != 'pull_request'", "non-PR runs must complete dependency review without a bypass")
 
@@ -315,6 +318,11 @@ func loadJSON(path string, target any) {
 }
 
 func loadWorkflow(path string) workflow {
+	result, _ := loadWorkflowWithContent(path)
+	return result
+}
+
+func loadWorkflowWithContent(path string) (workflow, string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		fail(fmt.Sprintf("read %s: %v", path, err))
@@ -323,7 +331,7 @@ func loadWorkflow(path string) workflow {
 	if err := yaml.Unmarshal(data, &result); err != nil {
 		fail(fmt.Sprintf("parse %s: %v", path, err))
 	}
-	return result
+	return result, string(data)
 }
 
 func namedStep(job workflowJob, name string) workflowStep {
@@ -349,4 +357,35 @@ func require(condition bool, message string) {
 func fail(message string) {
 	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)
+}
+
+var actionSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+func isPinnedAction(uses, expectedAction string) bool {
+	action, sha, found := strings.Cut(uses, "@")
+	if !found {
+		return false
+	}
+	return action == expectedAction && actionSHAPattern.MatchString(sha)
+}
+
+func actionSHA(uses string) string {
+	_, sha, _ := strings.Cut(uses, "@")
+	return sha
+}
+
+func requirePinnedAction(workflowContent string, step workflowStep, expectedAction string, expectedMajor string) {
+	require(isPinnedAction(step.Uses, expectedAction), fmt.Sprintf("%s must use a pinned commit SHA", expectedAction))
+	version, ok := actionVersionComment(workflowContent, expectedAction)
+	require(ok, fmt.Sprintf("%s must include a release-version comment", expectedAction))
+	require(strings.HasPrefix(version, expectedMajor+"."), fmt.Sprintf("%s must use supported major version %s (found %s)", expectedAction, expectedMajor, version))
+}
+
+func actionVersionComment(workflowContent, action string) (string, bool) {
+	pattern := regexp.MustCompile(`(?m)^[ \t]*(?:-[ \t]+)?uses:[ \t]+` + regexp.QuoteMeta(action) + `@[0-9a-f]{40}[ \t]+#[ \t]+(v\d+(?:\.\d+)*)`)
+	matches := pattern.FindStringSubmatch(workflowContent)
+	if len(matches) < 2 {
+		return "", false
+	}
+	return matches[1], true
 }
