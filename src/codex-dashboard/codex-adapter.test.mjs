@@ -188,7 +188,8 @@ test("evicts rollout summaries that leave the current snapshot", async () => {
 
     await adapter.getSnapshot();
     await adapter.getSnapshot();
-    assert.equal(reads.get("C:\\Users\\User\\.codex\\sessions\\rollout-0.jsonl"), 1);
+    const [firstRolloutPath] = reads.keys();
+    assert.equal(reads.get(firstRolloutPath), 1);
 
     for (let index = 1; index <= 128; index += 1) {
         currentPath = `sessions/rollout-${index}.jsonl`;
@@ -197,7 +198,7 @@ test("evicts rollout summaries that leave the current snapshot", async () => {
 
     currentPath = "sessions/rollout-0.jsonl";
     await adapter.getSnapshot();
-    assert.equal(reads.get("C:\\Users\\User\\.codex\\sessions\\rollout-0.jsonl"), 2);
+    assert.equal(reads.get(firstRolloutPath), 2);
 });
 
 test("invalidates changed and missing rollout cache entries", async () => {
