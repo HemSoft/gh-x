@@ -15,6 +15,13 @@ func TestValidateRuleset(t *testing.T) {
 	}{
 		{name: "versioned ruleset is valid"},
 		{
+			name: "status check rule is missing",
+			mutate: func(_ *testing.T, config *ruleset) {
+				config.Rules = rulesOfType(*config, "pull_request")
+			},
+			wantErr: "must define one required-status-check rule",
+		},
+		{
 			name: "pull request rule is missing",
 			mutate: func(_ *testing.T, config *ruleset) {
 				config.Rules = rulesOfType(*config, "required_status_checks")
