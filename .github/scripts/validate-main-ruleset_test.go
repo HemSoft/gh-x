@@ -256,6 +256,16 @@ func TestActionVersionComment(t *testing.T) {
 			wantVer: "",
 			wantOk:  false,
 		},
+		{
+			name: "does not match comment on subsequent line",
+			content: `      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938
+        # v4.37.9
+`,
+			action:  "github/codeql-action/init",
+			wantVer: "",
+			wantOk:  false,
+		},
 	}
 
 	for _, tt := range tests {

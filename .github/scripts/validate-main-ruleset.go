@@ -382,7 +382,7 @@ func requirePinnedAction(workflowContent string, step workflowStep, expectedActi
 }
 
 func actionVersionComment(workflowContent, action string) (string, bool) {
-	pattern := regexp.MustCompile(`(?m)^\s*(?:-\s+)?uses:\s+` + regexp.QuoteMeta(action) + `@[0-9a-f]{40}\s+#\s+(v\d+(?:\.\d+)*)`)
+	pattern := regexp.MustCompile(`(?m)^[ \t]*(?:-[ \t]+)?uses:[ \t]+` + regexp.QuoteMeta(action) + `@[0-9a-f]{40}[ \t]+#[ \t]+(v\d+(?:\.\d+)*)`)
 	matches := pattern.FindStringSubmatch(workflowContent)
 	if len(matches) < 2 {
 		return "", false
