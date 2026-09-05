@@ -172,6 +172,94 @@ test("builds a complete snapshot through one adapter interface", async () => {
     assert.equal(snapshot.sessions[0].context.percentUsed, 40);
 });
 
+test("evicts rollout summaries that leave the current snapshot", async () => {
+    let currentPath = "sessions/rollout-0.jsonl";
+    const reads = new Map();
+    const adapter = createCodexAdapter({
+        codexHome: "C:\\Users\\User\\.codex",
+        now,
+        sqliteModuleLoader: fakeSqliteLoader(() => [snapshotRow(currentPath)]),
+        stat: () => ({ size: 10, mtimeMs: 20 }),
+        readLines: async function* (filePath) {
+            reads.set(filePath, (reads.get(filePath) || 0) + 1);
+            yield userMessage("2026-08-18T16:29:41.000Z", filePath);
+        },
+    });
+
+    await adapter.getSnapshot();
+    await adapter.getSnapshot();
+    assert.equal(reads.get("C:\\Users\\User\\.codex\\sessions\\rollout-0.jsonl"), 1);
+
+    for (let index = 1; index <= 128; index += 1) {
+        currentPath = `sessions/rollout-${index}.jsonl`;
+        await adapter.getSnapshot();
+    }
+
+    currentPath = "sessions/rollout-0.jsonl";
+    await adapter.getSnapshot();
+    assert.equal(reads.get("C:\\Users\\User\\.codex\\sessions\\rollout-0.jsonl"), 2);
+});
+
+test("invalidates changed and missing rollout cache entries", async () => {
+    let mtimeMs = 20;
+    let missing = false;
+    let reads = 0;
+    const adapter = createCodexAdapter({
+        codexHome: "C:\\Users\\User\\.codex",
+        now,
+        sqliteModuleLoader: fakeSqliteLoader(() => [snapshotRow("sessions/rollout.jsonl")]),
+        stat: () => {
+            if (missing) {
+                throw Object.assign(new Error("missing rollout"), { code: "ENOENT" });
+            }
+            return { size: 10, mtimeMs };
+        },
+        readLines: async function* () {
+            reads += 1;
+            yield userMessage("2026-08-18T16:29:41.000Z", `prompt-${reads}`);
+        },
+    });
+
+    assert.equal((await adapter.getSnapshot()).sessions[0].summary, "prompt-1");
+    assert.equal((await adapter.getSnapshot()).sessions[0].summary, "prompt-1");
+
+    mtimeMs += 1;
+    assert.equal((await adapter.getSnapshot()).sessions[0].summary, "prompt-2");
+
+    missing = true;
+    assert.equal((await adapter.getSnapshot()).sessions[0].summary, "Snapshot title");
+
+    missing = false;
+    assert.equal((await adapter.getSnapshot()).sessions[0].summary, "prompt-3");
+    assert.equal(reads, 3);
+});
+
+function snapshotRow(rolloutPath) {
+    return {
+        id: rolloutPath,
+        rollout_path: rolloutPath,
+        created_at_ms: Date.parse("2026-08-18T15:00:00.000Z"),
+        updated_at_ms: Date.parse("2026-08-18T16:29:50.000Z"),
+        cwd: "D:\\github\\HemSoft\\gh-x",
+        title: "Snapshot title",
+        tokens_used: 1,
+        model: "gpt-5.5",
+        git_branch: "main",
+    };
+}
+
+function fakeSqliteLoader(rows) {
+    return async () => ({
+        DatabaseSync: class {
+            prepare() {
+                return { all: rows };
+            }
+
+            close() {}
+        },
+    });
+}
+
 function event(timestamp, type, payloadType) {
     return {
         timestamp,
