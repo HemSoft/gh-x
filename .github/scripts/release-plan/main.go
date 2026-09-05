@@ -239,7 +239,7 @@ func updateChangelog(contents, releaseTag, notes string) (string, bool, error) {
 	versionLink := "[" + version + "]: https://github.com/HemSoft/gh-x/releases/tag/" + releaseTag
 	expectedUnreleased := "[Unreleased]: https://github.com/HemSoft/gh-x/compare/" + releaseTag + "...HEAD"
 	if strings.Contains(contents, headingPrefix) {
-		if strings.Contains(contents, versionLink) && strings.Contains(contents, expectedUnreleased) {
+		if strings.Contains(contents, versionLink) {
 			return contents, false, nil
 		}
 		return "", false, fmt.Errorf("CHANGELOG.md contains an incomplete section for %s", releaseTag)

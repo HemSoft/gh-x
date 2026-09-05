@@ -148,6 +148,31 @@ See changes since the latest release.
 	}
 }
 
+func TestUpdateChangelogAcceptsCompletedHistoricalRelease(t *testing.T) {
+	contents := `## [Unreleased]
+
+## [1.2.4] - 2026-09-05
+
+## [1.2.3] - 2026-09-04
+
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.4
+[1.2.3]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.3
+`
+
+	updated, changed, err := updateChangelog(contents, "v1.2.3", "2026-09-04\n\n- Historical release.\n")
+	if err != nil || changed || updated != contents {
+		t.Fatalf("historical update = changed %t, error %v; want unchanged", changed, err)
+	}
+}
+
+func TestUpdateChangelogRejectsIncompleteExistingRelease(t *testing.T) {
+	contents := "## [Unreleased]\n\n## [1.2.3] - 2026-09-04\n\n[Unreleased]: old\n"
+	if _, _, err := updateChangelog(contents, "v1.2.3", "2026-09-04\n\n- Release.\n"); err == nil {
+		t.Fatal("updateChangelog() error = nil, want incomplete-section error")
+	}
+}
+
 func TestUpdateChangelogRejectsInvalidReleaseNotes(t *testing.T) {
 	contents := "## [Unreleased]\n\n## [1.2.3] - 2026-09-04\n\n[Unreleased]: old\n"
 	for _, notes := range []string{
