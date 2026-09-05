@@ -541,7 +541,7 @@ Only same-repository `github-actions[bot]` PRs targeting `main`, using a
 The normal Quality Gate includes a changelog AI-review job for that branch
 namespace, on both PR and manually dispatched CI runs. It requires a clean
 current-head Codex receipt and resolved conversations, and waits for Cubic
-when it runs. Missing, stale, truncated, or failed review evidence leaves
+to finish or explicitly skip its review. Missing, stale, truncated, or failed review evidence leaves
 the gate blocked. Other PRs keep the existing quality gates.
 
 Repository auto-merge must be enabled. The release workflow waits for the PR
