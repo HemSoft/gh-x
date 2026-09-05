@@ -95,14 +95,16 @@ jobs:
         run: go run ./.github/scripts/release-plan create
 
       - name: Load existing release notes
-        if: steps.check.outputs.reconcile == 'true'
+        id: existing_release
+        if: steps.check.outputs.release_tag != ''
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.check.outputs.release_tag }}
         run: gh release view "$RELEASE_TAG" --json body --jq .body > release-notes.md
 
       - name: Update changelog
-        if: steps.check.outputs.skip == 'false' || steps.check.outputs.reconcile == 'true'
+        if: steps.check.outputs.skip == 'false' || steps.existing_release.outcome == 'success'
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}
         run: |
@@ -111,7 +113,7 @@ jobs:
           go run ./.github/scripts/release-plan changelog
 
       - name: Merge changelog update through CI
-        if: steps.check.outputs.skip == 'false' || steps.check.outputs.reconcile == 'true'
+        if: steps.check.outputs.skip == 'false' || steps.existing_release.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}

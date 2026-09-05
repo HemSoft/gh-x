@@ -53,6 +53,15 @@ func runCheck() error {
 		return err
 	}
 
+	pointingTags, err := gitOutput("tag", "--points-at", "HEAD", "--sort=-v:refname")
+	if err != nil {
+		return err
+	}
+	if tag := firstSemanticTag(nonEmptyLines(pointingTags)); tag != "" {
+		fmt.Fprintf(os.Stdout, "HEAD already has release tag %s - checking for changelog reconciliation\n", tag)
+		return writeOutputs(map[string]string{"release_tag": tag, "skip": "true"})
+	}
+
 	remoteMain, err := gitOutput("ls-remote", "origin", "refs/heads/main")
 	if err != nil {
 		return err
@@ -64,15 +73,6 @@ func runCheck() error {
 	if releaseSHA != fields[0] {
 		fmt.Fprintf(os.Stdout, "A newer main commit superseded %s - skipping auto-release\n", releaseSHA)
 		return writeOutputs(map[string]string{"skip": "true"})
-	}
-
-	pointingTags, err := gitOutput("tag", "--points-at", "HEAD", "--sort=-v:refname")
-	if err != nil {
-		return err
-	}
-	if tag := firstSemanticTag(nonEmptyLines(pointingTags)); tag != "" {
-		fmt.Fprintf(os.Stdout, "HEAD already has release tag %s - resuming changelog reconciliation\n", tag)
-		return writeOutputs(map[string]string{"reconcile": "true", "release_tag": tag, "skip": "true"})
 	}
 
 	latest, err := latestReachableTag()
@@ -96,10 +96,10 @@ func runCheck() error {
 	}
 	if !releaseNeeded(nonEmptyLines(changed)) {
 		fmt.Fprintln(os.Stdout, "Only documentation or agent metadata changed - skipping auto-release")
-		return writeOutputs(map[string]string{"latest": latest, "reconcile": "false", "skip": "true", "version_base": versionBase})
+		return writeOutputs(map[string]string{"latest": latest, "skip": "true", "version_base": versionBase})
 	}
 
-	return writeOutputs(map[string]string{"latest": latest, "reconcile": "false", "skip": "false", "version_base": versionBase})
+	return writeOutputs(map[string]string{"latest": latest, "skip": "false", "version_base": versionBase})
 }
 
 func runVersion() error {
