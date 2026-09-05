@@ -128,19 +128,19 @@ func main() {
 		{"language": "javascript-typescript", "build-mode": "none"},
 	}), "CodeQL must analyze Go and JavaScript with supported build modes")
 	codeQLInit := namedStep(security, "Initialize CodeQL")
-	require(codeQLInit.Uses == "github/codeql-action/init@v4", "CodeQL init must use the supported v4 action")
+	require(codeQLInit.Uses == "github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938", "CodeQL init must use the supported v4 action")
 	require(reflect.DeepEqual(codeQLInit.With, map[string]string{
 		"languages":  "${{ matrix.language }}",
 		"build-mode": "${{ matrix.build-mode }}",
 	}), "CodeQL init must receive the language and build mode matrix values")
-	require(namedStep(security, "Analyze with CodeQL").Uses == "github/codeql-action/analyze@v4", "CodeQL analysis must use the supported v4 action")
+	require(namedStep(security, "Analyze with CodeQL").Uses == "github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938", "CodeQL analysis must use the supported v4 action")
 
 	dependencyReview := ci.Jobs["dependency-review"]
 	require(dependencyReview.Name == "Dependency Review", "CI must publish the Dependency Review check")
 	require(reflect.DeepEqual(dependencyReview.Permissions, map[string]string{"contents": "read"}), "dependency review must use read-only contents permission")
 	reviewStep := namedStep(dependencyReview, "Review dependency changes")
 	require(reviewStep.If == "github.event_name == 'pull_request'", "dependency review must run only for pull requests")
-	require(reviewStep.Uses == "actions/dependency-review-action@v5", "dependency review must use the current v5 action")
+	require(reviewStep.Uses == "actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294", "dependency review must use the current v5 action")
 	require(reviewStep.With["fail-on-severity"] == "high", "dependency review must block high and critical vulnerabilities")
 	require(namedStep(dependencyReview, "Skip dependency review outside pull requests").If == "github.event_name != 'pull_request'", "non-PR runs must complete dependency review without a bypass")
 
