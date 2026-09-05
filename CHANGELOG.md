@@ -1,85 +1,37 @@
 # Changelog
 
-All notable changes to `gh-x` will be documented in this file.
+GitHub Releases is the authoritative source for published release notes and
+version history. This file links the latest published release, compares it with
+the current branch, and preserves notes from the repository's earlier versioning
+scheme.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses semantic versioning.
 
 ## [Unreleased]
 
-### Added
+See the comparison link below for changes since the latest published release.
 
-- Added the five most recent workflow runs to `gh x status`, with bordered
-  headers and a rotating perfection message when all five runs succeed.
-- Added linked pull request numbers to issue tables and linked issue numbers to
-  pull request tables, including both sections of `gh x status`.
-- Added `gh x monitor`, a Bubble Tea dashboard across configured repositories
-  with PR and issue sections, saved layout state, and per-section filters
-  defined in the per-user `gh-x/config.yml` file.
+## [0.11.3] - 2026-09-05
+
+- docs: reconcile changelog with published releases (#67)
+
+## [0.11.2] - 2026-09-05
 
 ### Changed
 
-- Replaced the short-lived `pr list` watch flags (`--watch`, `--monitor`, and
-  `--interval`) with the dedicated `gh x monitor` command.
-- Moved all Go sources and tests under `src/`; build commands now target
-  `./src`.
-- Condensed pull request tables with one-space column gaps, compact review
-  decision symbols, and `Rev` and `Upd` headers.
+- Required CodeQL analysis and dependency review in the repository's CI quality
+  gate.
 
-### Fixed
+## Legacy history
 
-- Sorted workflow runs newest-first before rendering `gh x status` and
-  `gh x run list`, with deterministic ordering for equal timestamps.
-- Routed `gh x monitor` GraphQL requests by normalized GitHub host, so
-  Enterprise and mixed-host configurations use host-specific endpoints while
-  search qualifiers remain `OWNER/REPO`.
-- Added automatic multi-account fallback: when the active GitHub account
-  cannot access the target repository, commands retry with another logged-in
-  account's token via `GH_TOKEN` on the retried subprocess only, print a
-  one-line notice, and never modify the global active account. User-scoped
-  commands (`pr me`, `pr atm`) and review submission always run as the active
-  account.
-- Added local Copilot and Codex CLI usage dashboards (`src/codex-dashboard`,
-  `src/dashboard-hub`) with launcher scripts, a combined hub, and an optional
-  Tailscale Serve installer for tailnet access.
-- Expanded `gh x status` into a structured repository health dashboard with
-  default-branch health, local/remote/dangling branch counts, conservative
-  worktree cleanup candidates, and separate open issue and pull request tables.
-- Added an `SFL` column that shows the latest formal SFL Reviewer decision
-  independently from aggregate AI finding status.
-- Recognized current-head Codex Cloud review summaries posted as pull-request
-  conversation comments, so clean reviews show `AI pass` and `0/0!` instead of
-  appearing as if no AI review ran.
-- Show the comments `!` marker when every AI review thread is resolved and
-  AI status is `pass`, even if the latest bot review originally left inline
-  findings that have since been addressed.
-- Collapsed repeated check contexts from reruns so a stale failure no longer
-  overrides a newer result for the same workflow and job.
-- Ignored AI and SFL reviews that target an earlier head commit.
-- Recognized `sfl-app[bot]` as an SFL reviewer.
-- Reported `?` for AI and SFL status when GitHub returns incomplete review
-  and thread data, instead of a possibly incorrect status.
+The entries below came from an earlier versioning scheme. `HemSoft/gh-x` has no
+`v0.16.0`, `v0.17.0`, or `v0.18.0` tags, so these are not published releases
+and intentionally have no version links.
 
-### Removed
+### 0.18.0 legacy entry (2026-06-08)
 
-- Removed the SFL review automation from the repository (`sfl-pr-review`
-  workflows, `sfl.json`, the `sfl-review` label, and gh-aw support files) and
-  dropped the `SFL` column from `gh x pr list`, `gh x pr atm`, `gh x pr me`,
-  and watch mode. AI PR reviews for this repository now come from cubic and
-  Codex reviews only.
-
-### Improved
-
-- Defaulted `gh x pr review` to Codex with model `gpt-5.5`, high reasoning
-  effort, and `strict` review mode.
-- Added `medium` review mode between `strict` and `fast-lane`.
-- Added opt-in posted PR reviews for `gh x pr review --post`, including a
-  formal Markdown review body and validated inline GitHub review comments.
-- Added `--allow-approve` approval gating for strict clean reviews.
-
-## [0.18.0] - 2026-06-08
-
-### Release Notes
+#### Release notes
 
 - Added `gh x pr review [number]` for read-only agentic PR review using
   configurable CLI providers.
@@ -89,15 +41,15 @@ and this project uses semantic versioning.
 - Shows the latest release changelog by default, or the latest `n` release
   changelogs when a count is supplied.
 
-## [0.17.0] - 2026-06-06
+### 0.17.0 legacy entry (2026-06-06)
 
-### Improved
+#### Improved
 
 - Improved `gh x workflow list` trigger labels so scheduled workflows show
   readable UTC schedule phrases instead of raw cron expressions.
 - Added readable formatting for hourly schedules such as `0 * * * *`.
 
-### New
+#### New
 
 - Added `gh x status` for a compact git and GitHub repository summary.
 - Shows upstream sync state, working tree change counts, dangling local branch
@@ -106,9 +58,9 @@ and this project uses semantic versioning.
 - Renamed `workflow_run` trigger output to `after workflow run` to distinguish
   dependent workflow triggers from manual triggers.
 
-## [0.16.0] - 2026-06-06
+### 0.16.0 legacy entry (2026-06-06)
 
-### Added
+#### Added
 
 - Added a `TRIGGERS` column to `gh x workflow list`.
 - Shows common GitHub Actions triggers such as `push`, `pull_request`, and
@@ -118,14 +70,13 @@ and this project uses semantic versioning.
 - Shows useful trigger filters for branch and pull request event types, such as
   `branches: main` and `types: opened, synchronize, reopened`.
 
-### Changed
+#### Changed
 
 - Workflow list output now enriches GitHub workflow metadata from workflow YAML
   definitions when available.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.2.2...HEAD
-[0.18.0]: https://github.com/HemSoft/gh-x/compare/v0.17.0...v0.18.0
-[0.17.0]: https://github.com/HemSoft/gh-x/compare/v0.16.1...v0.17.0
-[0.16.0]: https://github.com/HemSoft/gh-x/compare/v0.15.4...v0.16.0
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.11.3...HEAD
+[0.11.3]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.3
+[0.11.2]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.2

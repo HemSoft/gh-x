@@ -92,12 +92,14 @@ type workflowStrategy struct {
 }
 
 type workflowStep struct {
-	Name string            `yaml:"name"`
-	Run  string            `yaml:"run"`
-	Env  map[string]string `yaml:"env"`
-	If   string            `yaml:"if"`
-	Uses string            `yaml:"uses"`
-	With map[string]string `yaml:"with"`
+	Name            string            `yaml:"name"`
+	ID              string            `yaml:"id"`
+	Run             string            `yaml:"run"`
+	Env             map[string]string `yaml:"env"`
+	If              string            `yaml:"if"`
+	Uses            string            `yaml:"uses"`
+	With            map[string]string `yaml:"with"`
+	ContinueOnError bool              `yaml:"continue-on-error"`
 }
 
 func main() {
@@ -142,6 +144,10 @@ func main() {
 	require(reviewStep.With["fail-on-severity"] == "high", "dependency review must block high and critical vulnerabilities")
 	require(namedStep(dependencyReview, "Skip dependency review outside pull requests").If == "github.event_name != 'pull_request'", "non-PR runs must complete dependency review without a bypass")
 
+	changelogCheck := namedStep(ci.Jobs["lint"], "Validate changelog release links")
+	require(changelogCheck.Env["GH_TOKEN"] == "${{ github.token }}", "changelog validation must authenticate GitHub Release queries")
+	require(strings.TrimSpace(changelogCheck.Run) == "go run ./.github/scripts/changelog-check", "CI must run the tested changelog validator")
+
 	gate := ci.Jobs["gate"]
 	require(gate.Name == "Quality Gate", "CI must publish the Quality Gate check")
 	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review"), "Quality Gate must depend on every build, quality, and security job")
@@ -158,8 +164,8 @@ func main() {
 	releaseJob, ok := autoRelease.Jobs["release"]
 	require(ok, "auto-release must define the release job")
 	require(
-		releaseJob.If == "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'",
-		"auto-release must require a successful push-triggered CI run",
+		releaseJob.If == "github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')",
+		"auto-release must require successful push or trusted workflow-dispatch CI",
 	)
 	require(releaseJob.Concurrency.Group == "auto-release", "eligible releases must share one concurrency group")
 	require(!releaseJob.Concurrency.CancelInProgress, "an active release must not be cancelled")
@@ -185,6 +191,46 @@ func main() {
 	require(create.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release creation must receive the validated SHA through env")
 	require(create.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "release creation must receive the calculated release tag through env")
 	require(strings.TrimSpace(create.Run) == "go run ./.github/scripts/release-plan create", "release creation must use the tested release-plan command")
+
+	existingNotes := namedStep(releaseJob, "Load existing release notes")
+	require(existingNotes.ID == "existing_release", "existing release notes step must expose its outcome")
+	require(existingNotes.If == "steps.check.outputs.release_tag != ''", "tagged release runs must check for existing release notes")
+	require(!existingNotes.ContinueOnError, "release lookup failures must not be suppressed")
+	require(existingNotes.Env["RELEASE_TAG"] == "${{ steps.check.outputs.release_tag }}", "existing release notes must use the tagged head")
+	require(strings.Contains(existingNotes.Run, `gh api --include --silent "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"`), "existing release lookup must expose its HTTP status")
+	require(strings.Contains(existingNotes.Run, `grep -Eq '^HTTP/[^ ]+ 404 '`), "only a confirmed missing release may skip reconciliation")
+	require(strings.Contains(existingNotes.Run, `gh release view "$RELEASE_TAG" --json body --jq .body > release-notes.md`), "existing release notes must load the authoritative GitHub Release body")
+	require(strings.Contains(existingNotes.Run, `echo "found=true" >> "$GITHUB_OUTPUT"`), "existing release lookup must publish a found result")
+	require(strings.Contains(existingNotes.Run, `echo "found=false" >> "$GITHUB_OUTPUT"`), "a confirmed missing release must publish a not-found result")
+	require(strings.Contains(existingNotes.Run, `exit 1`), "non-404 release lookup failures must fail reconciliation")
+
+	changelog := namedStep(releaseJob, "Update changelog")
+	require(changelog.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "changelog update must run for new and confirmed existing releases")
+	require(changelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog update must receive the new or resumed release tag")
+	require(strings.Contains(changelog.Run, "git switch --detach origin/main"), "changelog reconciliation must start from current main")
+	require(strings.Contains(changelog.Run, "go run ./.github/scripts/release-plan changelog"), "release workflow must use the tested changelog updater")
+
+	mergeChangelog := namedStep(releaseJob, "Merge changelog update through CI")
+	require(mergeChangelog.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "changelog pull request must run for new and confirmed existing releases")
+	require(mergeChangelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog pull request must receive the new or resumed release tag")
+	require(mergeChangelog.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "changelog reconciliation must retain the released commit SHA")
+	require(strings.Contains(mergeChangelog.Run, "gh workflow run ci.yml --ref \"$branch\""), "changelog pull request must run CI on its exact branch")
+	require(strings.Contains(mergeChangelog.Run, `branch="chore/changelog-${RELEASE_TAG#v}"`), "release retries must reuse a deterministic changelog branch")
+	require(strings.Contains(mergeChangelog.Run, `gh pr list --base main --head "$branch" --state open`), "release retries must reuse an existing open changelog pull request")
+	require(strings.Contains(mergeChangelog.Run, `--jq '.[0].url // empty'`), "a missing changelog pull request must produce an empty lookup")
+	require(strings.Contains(mergeChangelog.Run, `git push --force-with-lease=`), "release retries must safely refresh the existing changelog branch")
+	require(strings.Contains(mergeChangelog.Run, "gh run watch \"$run_id\" --exit-status"), "changelog pull request must wait for successful CI")
+	require(strings.Contains(mergeChangelog.Run, "gh pr merge \"$pr_url\" --squash --delete-branch"), "changelog update must merge through a pull request")
+	require(strings.Contains(mergeChangelog.Run, "gh workflow run ci.yml --ref main"), "the bot merge must dispatch main CI for any intervening product changes")
+	noDiffStart := strings.Index(mergeChangelog.Run, "if git diff --quiet -- CHANGELOG.md; then")
+	require(noDiffStart >= 0, "release retries must recognize an already-current changelog")
+	noDiffEnd := strings.Index(mergeChangelog.Run[noDiffStart:], "\nfi\n\nbranch=")
+	require(noDiffEnd >= 0, "already-current changelog handling must terminate its conditional")
+	noDiffBranch := mergeChangelog.Run[noDiffStart : noDiffStart+noDiffEnd]
+	require(strings.Contains(noDiffBranch, `if [[ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]]; then`), "already-current changelog retries must dispatch only when main advanced past the released commit")
+	noDiffDispatch := strings.Index(noDiffBranch, "gh workflow run ci.yml --ref main")
+	noDiffExit := strings.Index(noDiffBranch, "exit 0")
+	require(noDiffDispatch >= 0 && noDiffExit >= 0 && noDiffDispatch < noDiffExit, "already-current changelog retries must dispatch main CI before returning")
 
 	fmt.Fprintln(os.Stdout, "main ruleset and release workflows are consistent")
 }

@@ -24,7 +24,7 @@ var (
 
 func main() {
 	if len(os.Args) != 2 {
-		fail("usage: release-plan <check|version|notes|create>")
+		fail("usage: release-plan <check|version|notes|create|changelog>")
 	}
 
 	var err error
@@ -37,6 +37,8 @@ func main() {
 		err = runNotes()
 	case "create":
 		err = runCreate()
+	case "changelog":
+		err = runChangelog()
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
@@ -51,6 +53,15 @@ func runCheck() error {
 		return err
 	}
 
+	pointingTags, err := gitOutput("tag", "--points-at", "HEAD", "--sort=-v:refname")
+	if err != nil {
+		return err
+	}
+	if tag := firstSemanticTag(nonEmptyLines(pointingTags)); tag != "" {
+		fmt.Fprintf(os.Stdout, "HEAD already has release tag %s - checking for changelog reconciliation\n", tag)
+		return writeOutputs(map[string]string{"release_tag": tag, "skip": "true"})
+	}
+
 	remoteMain, err := gitOutput("ls-remote", "origin", "refs/heads/main")
 	if err != nil {
 		return err
@@ -62,17 +73,6 @@ func runCheck() error {
 	if releaseSHA != fields[0] {
 		fmt.Fprintf(os.Stdout, "A newer main commit superseded %s - skipping auto-release\n", releaseSHA)
 		return writeOutputs(map[string]string{"skip": "true"})
-	}
-
-	pointingTags, err := gitOutput("tag", "--points-at", "HEAD")
-	if err != nil {
-		return err
-	}
-	for _, tag := range nonEmptyLines(pointingTags) {
-		if semverTag.MatchString(tag) {
-			fmt.Fprintln(os.Stdout, "HEAD already has a release tag - skipping auto-release")
-			return writeOutputs(map[string]string{"skip": "true"})
-		}
 	}
 
 	latest, err := latestReachableTag()
@@ -202,6 +202,87 @@ func runCreate() error {
 	}
 
 	return runCommand("gh", createReleaseArgs(releaseTag, releaseSHA, assets)...)
+}
+
+func runChangelog() error {
+	releaseTag := os.Getenv("RELEASE_TAG")
+	if !semverTag.MatchString(releaseTag) {
+		return fmt.Errorf("invalid RELEASE_TAG %q", releaseTag)
+	}
+	notes, err := os.ReadFile("release-notes.md")
+	if err != nil {
+		return fmt.Errorf("read release notes: %w", err)
+	}
+	contents, err := os.ReadFile("CHANGELOG.md")
+	if err != nil {
+		return fmt.Errorf("read changelog: %w", err)
+	}
+
+	updated, changed, err := updateChangelog(string(contents), releaseTag, string(notes))
+	if err != nil {
+		return err
+	}
+	if !changed {
+		fmt.Fprintf(os.Stdout, "CHANGELOG.md already records %s\n", releaseTag)
+		return nil
+	}
+	if err := os.WriteFile("CHANGELOG.md", []byte(updated), 0o644); err != nil {
+		return fmt.Errorf("write changelog: %w", err)
+	}
+	fmt.Fprintf(os.Stdout, "Recorded %s in CHANGELOG.md\n", releaseTag)
+	return nil
+}
+
+func updateChangelog(contents, releaseTag, notes string) (string, bool, error) {
+	version := strings.TrimPrefix(releaseTag, "v")
+	headingPrefix := "## [" + version + "] - "
+	versionLink := "[" + version + "]: https://github.com/HemSoft/gh-x/releases/tag/" + releaseTag
+	expectedUnreleased := "[Unreleased]: https://github.com/HemSoft/gh-x/compare/" + releaseTag + "...HEAD"
+	if strings.Contains(contents, headingPrefix) {
+		if strings.Contains(contents, versionLink) {
+			return contents, false, nil
+		}
+		return "", false, fmt.Errorf("CHANGELOG.md contains an incomplete section for %s", releaseTag)
+	}
+
+	releaseDate, body, err := parseReleaseNotes(notes)
+	if err != nil {
+		return "", false, err
+	}
+	unreleasedStart := strings.Index(contents, "## [Unreleased]")
+	if unreleasedStart < 0 {
+		return "", false, errors.New("CHANGELOG.md has no Unreleased section")
+	}
+	nextHeadingOffset := strings.Index(contents[unreleasedStart+len("## [Unreleased]"):], "\n## ")
+	if nextHeadingOffset < 0 {
+		return "", false, errors.New("CHANGELOG.md has no section after Unreleased")
+	}
+	insertAt := unreleasedStart + len("## [Unreleased]") + nextHeadingOffset
+	entry := "\n## [" + version + "] - " + releaseDate + "\n\n" + body + "\n"
+	updated := contents[:insertAt] + entry + contents[insertAt:]
+
+	unreleasedMatch := regexp.MustCompile(`(?m)^\[Unreleased\]: \S+$`).FindString(updated)
+	if unreleasedMatch == "" {
+		return "", false, errors.New("CHANGELOG.md has no Unreleased comparison link")
+	}
+	updated = strings.Replace(updated, unreleasedMatch, expectedUnreleased+"\n"+versionLink, 1)
+	return updated, true, nil
+}
+
+func parseReleaseNotes(notes string) (string, string, error) {
+	normalized := strings.ReplaceAll(notes, "\r\n", "\n")
+	parts := strings.SplitN(normalized, "\n", 2)
+	if len(parts) != 2 || !regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`).MatchString(parts[0]) {
+		return "", "", errors.New("release notes must start with a YYYY-MM-DD date")
+	}
+	if _, err := time.Parse("2006-01-02", parts[0]); err != nil {
+		return "", "", errors.New("release notes must start with a valid YYYY-MM-DD date")
+	}
+	body := strings.TrimSpace(parts[1])
+	if body == "" {
+		return "", "", errors.New("release notes have no entries")
+	}
+	return parts[0], body, nil
 }
 
 func latestReachableTag() (string, error) {
@@ -353,7 +434,7 @@ func writeOutputs(values map[string]string) error {
 		return fmt.Errorf("open GITHUB_OUTPUT: %w", err)
 	}
 	defer file.Close()
-	for _, key := range []string{"latest", "skip", "tag", "version_base"} {
+	for _, key := range []string{"latest", "skip", "tag", "release_tag", "version_base"} {
 		if value, ok := values[key]; ok {
 			if _, err := fmt.Fprintf(file, "%s=%s\n", key, value); err != nil {
 				return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
