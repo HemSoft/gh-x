@@ -234,10 +234,6 @@ func runChangelog() error {
 }
 
 func updateChangelog(contents, releaseTag, notes string) (string, bool, error) {
-	lineEnding := "\n"
-	if strings.Contains(contents, "\r\n") {
-		lineEnding = "\r\n"
-	}
 	version := strings.TrimPrefix(releaseTag, "v")
 	headingPrefix := "## [" + version + "] - "
 	versionLink := "[" + version + "]: https://github.com/HemSoft/gh-x/releases/tag/" + releaseTag
@@ -258,19 +254,27 @@ func updateChangelog(contents, releaseTag, notes string) (string, bool, error) {
 		return "", false, errors.New("CHANGELOG.md has no Unreleased section")
 	}
 	sectionBodyStart := unreleasedStart + len("## [Unreleased]")
-	nextHeadingOffset := strings.Index(contents[sectionBodyStart:], lineEnding+"## ")
-	if nextHeadingOffset < 0 {
+	nextHeadingMatch := regexp.MustCompile(`\r?\n## `).FindStringIndex(contents[sectionBodyStart:])
+	if len(nextHeadingMatch) == 0 {
 		return "", false, errors.New("CHANGELOG.md has no section after Unreleased")
 	}
-	insertAt := sectionBodyStart + nextHeadingOffset
+	insertAt := sectionBodyStart + nextHeadingMatch[0]
+	headingBoundary := contents[insertAt : sectionBodyStart+nextHeadingMatch[1]]
+	lineEnding := strings.TrimSuffix(headingBoundary, "## ")
 	entry := lineEnding + "## [" + version + "] - " + releaseDate + lineEnding + lineEnding + strings.ReplaceAll(body, "\n", lineEnding) + lineEnding
 	updated := contents[:insertAt] + entry + contents[insertAt:]
 
-	unreleasedMatch := regexp.MustCompile(`(?m)^\[Unreleased\]: \S+`).FindString(updated)
-	if unreleasedMatch == "" {
+	unreleasedMatch := regexp.MustCompile(`(?m)^\[Unreleased\]: \S+`).FindStringIndex(updated)
+	if len(unreleasedMatch) == 0 {
 		return "", false, errors.New("CHANGELOG.md has no Unreleased comparison link")
 	}
-	updated = strings.Replace(updated, unreleasedMatch, expectedUnreleased+lineEnding+versionLink, 1)
+	linkLineEnding := lineEnding
+	if strings.HasPrefix(updated[unreleasedMatch[1]:], "\r\n") {
+		linkLineEnding = "\r\n"
+	} else if strings.HasPrefix(updated[unreleasedMatch[1]:], "\n") {
+		linkLineEnding = "\n"
+	}
+	updated = updated[:unreleasedMatch[0]] + expectedUnreleased + linkLineEnding + versionLink + updated[unreleasedMatch[1]:]
 	return updated, true, nil
 }
 
