@@ -12,6 +12,11 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+## [0.11.6] - 2026-09-05
+
+- chore: pin GitHub Actions dependencies to immutable commits (#73)
+- docs: record v0.11.5 release (#71)
+
 ## [0.11.5] - 2026-09-05
 
 - fix: support CRLF changelog validation (#69)
@@ -86,7 +91,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.11.5...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.11.6...HEAD
+[0.11.6]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.6
 [0.11.5]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.5
 [0.11.4]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.4
 [0.11.3]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.3
