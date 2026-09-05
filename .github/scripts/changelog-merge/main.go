@@ -216,9 +216,17 @@ func commandContext(ctx context.Context, args []string) context.Context {
 }
 
 func waitForReview(ctx context.Context, gh command, cfg config, number string, allowRequests bool) error {
+	ctx, cancel := context.WithTimeout(ctx, executionTimeout([]string{"review"}))
+	defer cancel()
 	sent := map[string]bool{}
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		ready, err := pollReview(gh, cfg, number, sent, allowRequests)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
 			return err
 		}

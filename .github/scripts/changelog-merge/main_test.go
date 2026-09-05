@@ -649,3 +649,15 @@ func TestUnrelatedCubicChecksCannotSatisfyReview(t *testing.T) {
 		})
 	}
 }
+
+func TestExpiredReviewDoesNotPollOrRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	gh := func(...string) ([]byte, error) {
+		t.Fatal("expired review must not read evidence or request reviewers")
+		return nil, nil
+	}
+	if err := waitForReview(ctx, gh, testConfig, "12", true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled review, got %v", err)
+	}
+}
