@@ -234,6 +234,10 @@ func runChangelog() error {
 }
 
 func updateChangelog(contents, releaseTag, notes string) (string, bool, error) {
+	lineEnding := "\n"
+	if strings.Contains(contents, "\r\n") {
+		lineEnding = "\r\n"
+	}
 	version := strings.TrimPrefix(releaseTag, "v")
 	headingPrefix := "## [" + version + "] - "
 	versionLink := "[" + version + "]: https://github.com/HemSoft/gh-x/releases/tag/" + releaseTag
@@ -253,19 +257,20 @@ func updateChangelog(contents, releaseTag, notes string) (string, bool, error) {
 	if unreleasedStart < 0 {
 		return "", false, errors.New("CHANGELOG.md has no Unreleased section")
 	}
-	nextHeadingOffset := strings.Index(contents[unreleasedStart+len("## [Unreleased]"):], "\n## ")
+	sectionBodyStart := unreleasedStart + len("## [Unreleased]")
+	nextHeadingOffset := strings.Index(contents[sectionBodyStart:], lineEnding+"## ")
 	if nextHeadingOffset < 0 {
 		return "", false, errors.New("CHANGELOG.md has no section after Unreleased")
 	}
-	insertAt := unreleasedStart + len("## [Unreleased]") + nextHeadingOffset
-	entry := "\n## [" + version + "] - " + releaseDate + "\n\n" + body + "\n"
+	insertAt := sectionBodyStart + nextHeadingOffset
+	entry := lineEnding + "## [" + version + "] - " + releaseDate + lineEnding + lineEnding + strings.ReplaceAll(body, "\n", lineEnding) + lineEnding
 	updated := contents[:insertAt] + entry + contents[insertAt:]
 
-	unreleasedMatch := regexp.MustCompile(`(?m)^\[Unreleased\]: \S+$`).FindString(updated)
+	unreleasedMatch := regexp.MustCompile(`(?m)^\[Unreleased\]: \S+`).FindString(updated)
 	if unreleasedMatch == "" {
 		return "", false, errors.New("CHANGELOG.md has no Unreleased comparison link")
 	}
-	updated = strings.Replace(updated, unreleasedMatch, expectedUnreleased+"\n"+versionLink, 1)
+	updated = strings.Replace(updated, unreleasedMatch, expectedUnreleased+lineEnding+versionLink, 1)
 	return updated, true, nil
 }
 
