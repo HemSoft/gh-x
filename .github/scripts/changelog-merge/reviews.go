@@ -139,6 +139,8 @@ func codexCommentEvidence(state reviewState, head string) (time.Time, bool) {
 }
 
 type checkRun struct {
+	StartedAt                time.Time `json:"started_at"`
+	CompletedAt              time.Time `json:"completed_at"`
 	Name, Status, Conclusion string
 	HeadSHA                  string `json:"head_sha"`
 	App                      struct{ Slug string }
@@ -156,11 +158,13 @@ func inspectCubic(gh command, cfg config, state reviewState) (bool, bool, error)
 	if response.TotalCount > len(response.CheckRuns) {
 		return false, false, errors.New("check evidence truncated; manual review required")
 	}
+	checks, err := latestChecks(response.CheckRuns, "cubic-dev-ai")
+	if err != nil {
+		// An unorderable rerun is pending; do not post a duplicate request.
+		return false, true, nil
+	}
 	found := false
-	for _, check := range response.CheckRuns {
-		if check.App.Slug != "cubic-dev-ai" {
-			continue
-		}
+	for _, check := range checks {
 		found = true
 		ready, err := cubicReady(check, state, cfg.head)
 		if err != nil || !ready {
@@ -214,4 +218,46 @@ func ambiguousCodexReview(state reviewState, head string) bool {
 		}
 	}
 	return false
+}
+
+// API filtering can retain reruns from different check suites for one context.
+func latestChecks(checks []checkRun, app string) ([]checkRun, error) {
+	latest := map[string]checkRun{}
+	for _, check := range checks {
+		if check.App.Slug != app {
+			continue
+		}
+		current, exists := latest[check.Name]
+		if !exists {
+			latest[check.Name] = check
+			continue
+		}
+		newer, err := newerCheck(check, current)
+		if err != nil {
+			return nil, err
+		}
+		if newer {
+			latest[check.Name] = check
+		}
+	}
+	result := make([]checkRun, 0, len(latest))
+	for _, check := range latest {
+		result = append(result, check)
+	}
+	return result, nil
+}
+
+func newerCheck(candidate, current checkRun) (bool, error) {
+	a, b := checkTime(candidate), checkTime(current)
+	if a.IsZero() || b.IsZero() || a.Equal(b) {
+		return false, errors.New("cannot order repeated review checks; manual review required")
+	}
+	return a.After(b), nil
+}
+
+func checkTime(check checkRun) time.Time {
+	if !check.StartedAt.IsZero() {
+		return check.StartedAt
+	}
+	return check.CompletedAt
 }

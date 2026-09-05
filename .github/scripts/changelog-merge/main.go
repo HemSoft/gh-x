@@ -260,6 +260,11 @@ func waitForReviewGate(ctx context.Context, gh command, cfg config) error {
 }
 
 func passingReviewGate(checks []checkRun, head string) (bool, error) {
+	checks, err := latestChecks(checks, "github-actions")
+	if err != nil {
+		// A queued rerun may not have timestamps yet. Wait for unambiguous evidence.
+		return false, nil
+	}
 	for _, check := range checks {
 		if check.App.Slug != "github-actions" || check.Name != "Changelog AI Review" {
 			continue

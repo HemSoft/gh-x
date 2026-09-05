@@ -368,3 +368,74 @@ func TestReadOnlyReviewNeverRequests(t *testing.T) {
 		t.Fatalf("missing reviews must wait without writes: %v,%v", ready, err)
 	}
 }
+
+func TestLatestReviewCheckWins(t *testing.T) {
+	for _, oldStatus := range []string{"failure", "pending", "findings"} {
+		t.Run(oldStatus, func(t *testing.T) {
+			old := checkRun{Name: "cubic review", HeadSHA: testHead, Status: "completed", Conclusion: "failure", StartedAt: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}
+			old.App.Slug = "cubic-dev-ai"
+			if oldStatus == "pending" {
+				old.Status = "in_progress"
+			}
+			if oldStatus == "findings" {
+				old.Conclusion = "success"
+				old.Output.Summary = "1 issue found"
+			}
+			clean := old
+			clean.StartedAt = old.StartedAt.Add(time.Minute)
+			clean.Status = "completed"
+			clean.Conclusion = "success"
+			clean.Output.Summary = "0 issues found"
+			for _, checks := range [][]checkRun{{old, clean}, {clean, old}} {
+				gh := func(...string) ([]byte, error) {
+					return encode(t, map[string]any{"total_count": 2, "check_runs": checks}), nil
+				}
+				ready, requested, err := inspectCubic(gh, testConfig, cleanState())
+				if err != nil || !ready || !requested {
+					t.Fatalf("latest clean must win: %v,%v,%v", ready, requested, err)
+				}
+			}
+			// Reversing timestamps makes the pending/failed/finding-bearing run authoritative.
+			old.StartedAt = clean.StartedAt.Add(time.Minute)
+			gh := func(...string) ([]byte, error) {
+				return encode(t, map[string]any{"total_count": 2, "check_runs": []checkRun{clean, old}}), nil
+			}
+			ready, _, _ := inspectCubic(gh, testConfig, cleanState())
+			if ready {
+				t.Fatal("old clean check must not hide newer non-clean evidence")
+			}
+		})
+	}
+}
+
+func TestAmbiguousRepeatedChecksFailClosed(t *testing.T) {
+	check := checkRun{Name: "cubic review"}
+	check.App.Slug = "cubic-dev-ai"
+	if _, err := latestChecks([]checkRun{check, check}, "cubic-dev-ai"); err == nil {
+		t.Fatal("missing times must block")
+	}
+	check.StartedAt = time.Now()
+	if _, err := latestChecks([]checkRun{check, check}, "cubic-dev-ai"); err == nil {
+		t.Fatal("tied times must block")
+	}
+}
+
+func TestQueuedGateRerunWaitsForTimestamp(t *testing.T) {
+	old := checkRun{Name: "Changelog AI Review", HeadSHA: testHead, Status: "completed", Conclusion: "success", StartedAt: time.Now()}
+	old.App.Slug = "github-actions"
+	queued := old
+	queued.StartedAt = time.Time{}
+	queued.Status = "queued"
+	queued.Conclusion = ""
+	ready, err := passingReviewGate([]checkRun{old, queued}, testHead)
+	if ready || err != nil {
+		t.Fatalf("queued rerun should wait, got %v,%v", ready, err)
+	}
+	queued.StartedAt = old.StartedAt.Add(time.Minute)
+	queued.Status = "completed"
+	queued.Conclusion = "success"
+	ready, err = passingReviewGate([]checkRun{old, queued}, testHead)
+	if !ready || err != nil {
+		t.Fatalf("completed rerun should pass, got %v,%v", ready, err)
+	}
+}
