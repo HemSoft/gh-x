@@ -232,7 +232,7 @@ func TestActionVersionComment(t *testing.T) {
 			wantOk:  true,
 		},
 		{
-			name: "handles CRLF line endings",
+			name:    "handles CRLF line endings",
 			content: "      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0\r\n",
 			action:  "actions/checkout",
 			wantVer: "v6.1.0",
