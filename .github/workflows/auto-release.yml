@@ -128,11 +128,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           if git diff --quiet -- CHANGELOG.md; then
             echo "CHANGELOG.md already records ${RELEASE_TAG}."
-            gh workflow run ci.yml --ref main
+            if [[ "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]]; then
+              gh workflow run ci.yml --ref main
+            fi
             exit 0
           fi
 
