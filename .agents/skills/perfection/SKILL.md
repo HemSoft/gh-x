@@ -359,15 +359,17 @@ The CI workflow (`.github/workflows/ci.yml`) is the single source of truth for e
 - Code-owner review and approval of the last push are not required.
 - No actor can bypass the ruleset.
 
-### Copilot Code Review
+### AI code review
 
-Copilot code review is enabled via repo settings (no API — manual configuration only):
+Connected Codex is the required AI reviewer for HemSoft pull requests. It
+reviews newly opened pull requests; request a fresh review with `@codex review`
+after pushing fixes. Require a clean signal for the current head and resolve
+all addressed review conversations before declaring the pull request ready.
 
-1. Go to **Settings → Copilot → Code Review**
-2. Enable **"Automatically review pull requests"** for all PRs
-3. Copilot reviews trigger on PR open and on every push to the PR branch
-
-This is NOT enforced in CI — it's a repo-level setting alongside branch protection.
+Cubic reviews pull requests automatically when available. Its green check on a
+merge-only commit can mean that review was skipped; inspect the check output
+before counting it as a completed AI review. Report quota or availability
+limits explicitly.
 
 ## Patterns Established in This Repo
 
