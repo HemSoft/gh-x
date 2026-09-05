@@ -2,7 +2,6 @@ import os from "node:os";
 import path from "node:path";
 import { createReadStream, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { createInterface } from "node:readline";
 
 const DEFAULT_RECENT_WINDOW_MS = 24 * 60 * 60 * 1_000;
 
@@ -361,22 +360,37 @@ function isInternalUserRecord(value) {
 
 async function* readJsonLines(filePath) {
     const stream = createReadStream(filePath, { encoding: "utf8" });
-    const lines = createInterface({
-        input: stream,
-        crlfDelay: Infinity,
-    });
-    for await (const line of lines) {
-        if (!line.trim()) {
-            continue;
+    let fragments = [];
+    // JSONL records end at LF. Unicode line/paragraph separators are valid
+    // inside JSON strings and must not be treated as record boundaries.
+    for await (const chunk of stream) {
+        const lines = chunk.split("\n");
+        for (let index = 0; index < lines.length; index += 1) {
+            fragments.push(lines[index]);
+            if (index === lines.length - 1) {
+                continue;
+            }
+            const line = fragments.join("");
+            fragments = [];
+            if (line.trim()) {
+                yield parseJsonLine(line, filePath);
+            }
         }
-        try {
-            yield JSON.parse(line);
-        } catch (error) {
-            throw adapterError(
-                "codex_rollout_invalid",
-                `Invalid JSONL in ${path.basename(filePath)}: ${error.message}`,
-            );
-        }
+    }
+    const remainder = fragments.join("");
+    if (remainder.trim()) {
+        yield parseJsonLine(remainder, filePath);
+    }
+}
+
+function parseJsonLine(line, filePath) {
+    try {
+        return JSON.parse(line);
+    } catch (error) {
+        throw adapterError(
+            "codex_rollout_invalid",
+            `Invalid JSONL in ${path.basename(filePath)}: ${error.message}`,
+        );
     }
 }
 
