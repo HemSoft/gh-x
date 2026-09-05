@@ -349,21 +349,27 @@ All jobs feed into a single **Quality Gate** status check required by branch pro
 
 The CI workflow (`.github/workflows/ci.yml`) is the single source of truth for enforcement. This skill document describes the same gates for local use. When running `audit`, `coverage`, `crap`, `mutate`, `simplify`, or `harden`, use the same thresholds and tools as CI.
 
-### Branch Protection (repo ruleset ID: 16258786)
+### Main ruleset
 
-- **Required status check**: "Quality Gate" must pass
-- **All review conversations must be resolved** before merge
-- **Stale reviews are dismissed** on new pushes
+- Changes to `main` must arrive through a pull request.
+- The `Quality Gate` status check must pass.
+- All review conversations must be resolved before merge.
+- No approving reviews are required by the ruleset.
+- Stale approvals are not dismissed after new pushes.
+- Code-owner review and approval of the last push are not required.
+- No actor can bypass the ruleset.
 
-### Copilot Code Review
+### AI code review
 
-Copilot code review is enabled via repo settings (no API — manual configuration only):
+Connected Codex is the required AI reviewer for HemSoft pull requests. It
+reviews newly opened pull requests; request a fresh review with `@codex review`
+after pushing fixes. Require a clean signal for the current head and resolve
+all addressed review conversations before declaring the pull request ready.
 
-1. Go to **Settings → Copilot → Code Review**
-2. Enable **"Automatically review pull requests"** for all PRs
-3. Copilot reviews trigger on PR open and on every push to the PR branch
-
-This is NOT enforced in CI — it's a repo-level setting alongside branch protection.
+Cubic reviews pull requests automatically when available. Its green check on a
+merge-only commit can mean that review was skipped; inspect the check output
+before counting it as a completed AI review. Report quota or availability
+limits explicitly.
 
 ## Patterns Established in This Repo
 
