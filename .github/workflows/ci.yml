@@ -5,6 +5,7 @@ name: CI Quality Gates
 # Keep the final "Quality Gate" job name stable because the ruleset requires it.
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, edited]
@@ -60,6 +61,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -89,6 +92,11 @@ jobs:
         run: |
           go test ./.github/scripts/...
           go run .github/scripts/validate-main-ruleset.go
+
+      - name: Validate changelog release links
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: go run ./.github/scripts/changelog-check
 
       - name: Install lint tools
         run: bash .github/scripts/install-quality-tools.sh lint

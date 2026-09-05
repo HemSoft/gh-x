@@ -1,7 +1,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -65,6 +68,27 @@ func TestFirstSemanticTagSkipsNonSemanticTags(t *testing.T) {
 	}
 }
 
+func TestWriteOutputsIncludesReleaseTag(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "github-output")
+	t.Setenv("GITHUB_OUTPUT", outputPath)
+
+	err := writeOutputs(map[string]string{
+		"release_tag": "v1.2.3",
+		"skip":        "true",
+	})
+	if err != nil {
+		t.Fatalf("writeOutputs() error = %v", err)
+	}
+
+	contents, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read outputs: %v", err)
+	}
+	if got, want := string(contents), "skip=true\nrelease_tag=v1.2.3\n"; got != want {
+		t.Fatalf("outputs = %q, want %q", got, want)
+	}
+}
+
 func TestReleaseNeededExaminesEveryPath(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -82,6 +106,83 @@ func TestReleaseNeededExaminesEveryPath(t *testing.T) {
 				t.Fatalf("releaseNeeded() = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestUpdateChangelog(t *testing.T) {
+	contents := `# Changelog
+
+## [Unreleased]
+
+See changes since the latest release.
+
+## [1.2.3] - 2026-09-04
+
+- Previous release.
+
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.3
+`
+	notes := "2026-09-05\n\n- Added the next release.\n"
+
+	updated, changed, err := updateChangelog(contents, "v1.2.4", notes)
+	if err != nil {
+		t.Fatalf("updateChangelog() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("updateChangelog() changed = false, want true")
+	}
+	for _, want := range []string{
+		"## [1.2.4] - 2026-09-05\n\n- Added the next release.",
+		"[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.4...HEAD",
+		"[1.2.4]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.4",
+	} {
+		if !strings.Contains(updated, want) {
+			t.Fatalf("updated changelog does not contain %q:\n%s", want, updated)
+		}
+	}
+
+	second, changed, err := updateChangelog(updated, "v1.2.4", notes)
+	if err != nil || changed || second != updated {
+		t.Fatalf("second update = changed %t, error %v; want unchanged", changed, err)
+	}
+}
+
+func TestUpdateChangelogAcceptsCompletedHistoricalRelease(t *testing.T) {
+	contents := `## [Unreleased]
+
+## [1.2.4] - 2026-09-05
+
+## [1.2.3] - 2026-09-04
+
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.4
+[1.2.3]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.3
+`
+
+	updated, changed, err := updateChangelog(contents, "v1.2.3", "2026-09-04\n\n- Historical release.\n")
+	if err != nil || changed || updated != contents {
+		t.Fatalf("historical update = changed %t, error %v; want unchanged", changed, err)
+	}
+}
+
+func TestUpdateChangelogRejectsIncompleteExistingRelease(t *testing.T) {
+	contents := "## [Unreleased]\n\n## [1.2.3] - 2026-09-04\n\n[Unreleased]: old\n"
+	if _, _, err := updateChangelog(contents, "v1.2.3", "2026-09-04\n\n- Release.\n"); err == nil {
+		t.Fatal("updateChangelog() error = nil, want incomplete-section error")
+	}
+}
+
+func TestUpdateChangelogRejectsInvalidReleaseNotes(t *testing.T) {
+	contents := "## [Unreleased]\n\n## [1.2.3] - 2026-09-04\n\n[Unreleased]: old\n"
+	for _, notes := range []string{
+		"not-a-date\n\n- Change\n",
+		"2026-02-30\n\n- Impossible date\n",
+		"2026-09-05\n\n",
+	} {
+		if _, _, err := updateChangelog(contents, "v1.2.4", notes); err == nil {
+			t.Fatalf("updateChangelog(%q) error = nil, want error", notes)
+		}
 	}
 }
 
