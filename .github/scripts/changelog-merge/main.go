@@ -189,10 +189,22 @@ func requireCurrentReviews(gh command, cfg config, number string) error {
 }
 
 func withdrawAutoMerge(gh command, cfg config, number string, reason error) error {
+	if mergedAtExpectedHead(gh, cfg, number) {
+		return nil
+	}
 	if _, err := gh("pr", "merge", number, "--repo", cfg.repo, "--disable-auto"); err != nil {
+		if mergedAtExpectedHead(gh, cfg, number) {
+			return nil
+		}
 		return fmt.Errorf("auto-merge guard failed: %v; could not disable auto-merge: %w", reason, err)
 	}
 	return fmt.Errorf("auto-merge disabled: %w", reason)
+}
+
+func mergedAtExpectedHead(gh command, cfg config, number string) bool {
+	var pr pullRequest
+	err := readJSON(gh, &pr, "api", "repos/"+cfg.repo+"/pulls/"+number)
+	return err == nil && pr.Merged && pr.Head.SHA == cfg.head
 }
 
 // Withdrawal must retain a bounded cleanup window after the monitor times out.

@@ -603,3 +603,29 @@ func TestNewFindingBeforeQueuePreventsAutoMerge(t *testing.T) {
 		t.Fatal("finding during gate wait must block enabling auto-merge")
 	}
 }
+
+func TestMergeDuringGuardReadStillCompletesSuccessfully(t *testing.T) {
+	reads := 0
+	gh := func(args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		if args[0] == "pr" {
+			t.Fatalf("completed merge must not be withdrawn: %v", args)
+		}
+		if strings.Contains(joined, "/files?") {
+			return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
+		}
+		reads++
+		pr := validPR()
+		if reads > 1 {
+			pr.Merged = true
+			pr.State = "closed"
+		}
+		return encode(t, pr), nil
+	}
+	if err := waitForMerge(context.Background(), gh, testConfig, "12"); err != nil {
+		t.Fatal(err)
+	}
+	if reads != 3 {
+		t.Fatalf("expected open, merged eligibility, merged reconciliation; got %d reads", reads)
+	}
+}
