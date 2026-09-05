@@ -535,8 +535,25 @@ tag on another history cannot be reused:
 The workflow skips a commit that already has a semantic-version tag. Changes
 limited to Markdown, `.agents/**`, or `LICENSE` do not start a release. GitHub
 Releases is the authoritative version history. After publishing, the workflow
-opens a changelog update, runs the normal Quality Gate on its exact commit, and
-merges it through branch protection. A failed release run resumes that update
+opens a changelog update and enables squash auto-merge for its exact head.
+Only same-repository `github-actions[bot]` PRs targeting `main`, using a
+`chore/changelog-X.Y.Z` branch, and modifying only `CHANGELOG.md` qualify.
+The normal Quality Gate includes a changelog AI-review job for that branch
+namespace, on both PR and manually dispatched CI runs, using a read-only token.
+The trusted release workflow requests missing reviews once per reviewer and
+commit. The CI job requires a clean
+current-head Codex receipt and resolved conversations. Cubic's latest check must
+report zero issues or explicitly skip review; a separate review comment cannot
+override findings in that check. Missing, stale, truncated, or failed review evidence leaves
+the gate blocked. Other PRs keep the existing quality gates.
+
+Repository auto-merge must be enabled. The release workflow rechecks reviews
+immediately before queueing and every 30 seconds while queued. Changed or
+unavailable evidence, a changed head, or an expired monitoring deadline causes
+it to withdraw auto-merge. A withdrawal failure is reported explicitly.
+The release workflow waits for the PR
+to actually merge before deleting its exact head branch and dispatching CI
+on main. It does not bypass branch protection. A failed release run resumes that update
 from the existing GitHub Release and current `main`, even when `main` has
 advanced; a tag without a release remains a skip. CI also rejects stale release
 links in `CHANGELOG.md`. After the bot merge, the workflow dispatches CI on

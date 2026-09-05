@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      checks: read
       contents: write
       pull-requests: write
     steps:
@@ -124,7 +125,7 @@ jobs:
           git switch --detach origin/main
           go run ./.github/scripts/release-plan changelog
 
-      - name: Merge changelog update through CI
+      - name: Queue guarded changelog auto-merge and await completion
         if: steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -162,26 +163,11 @@ jobs:
           gh workflow run ci.yml --ref "$branch"
 
           head_sha=$(git rev-parse HEAD)
-          run_id=""
-          for attempt in $(seq 1 60); do
-            run_id=$(gh run list \
-              --workflow ci.yml \
-              --branch "$branch" \
-              --event workflow_dispatch \
-              --json databaseId,headSha \
-              --jq ".[] | select(.headSha == \"${head_sha}\") | .databaseId" \
-              --limit 10 | head -n 1)
-            if [[ -n "$run_id" ]]; then
-              break
-            fi
-            echo "Waiting for changelog CI run (${attempt}/60)..."
-            sleep 10
-          done
-          if [[ -z "$run_id" ]]; then
-            echo "::error::Timed out waiting for changelog CI run."
-            exit 1
+          CHANGELOG_BRANCH="$branch" EXPECTED_HEAD="$head_sha" \
+            go run ./.github/scripts/changelog-merge enable
+          # A queued auto-merge is not completion. The helper returns only after merge.
+          remote_sha=$(git ls-remote --heads origin "$branch" | awk '{print $1}')
+          if [[ -n "$remote_sha" ]]; then
+            git push --force-with-lease="refs/heads/${branch}:${head_sha}" origin ":refs/heads/${branch}"
           fi
-
-          gh run watch "$run_id" --exit-status
-          gh pr merge "$pr_url" --squash --delete-branch
           gh workflow run ci.yml --ref main

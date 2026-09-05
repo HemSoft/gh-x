@@ -153,10 +153,11 @@ func main() {
 
 	gate := ci.Jobs["gate"]
 	require(gate.Name == "Quality Gate", "CI must publish the Quality Gate check")
-	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review"), "Quality Gate must depend on every build, quality, and security job")
+	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review", "changelog-review"), "Quality Gate must depend on every build, quality, and security job")
 	gateRun := namedStep(gate, "Evaluate all gates").Run
 	require(strings.Contains(gateRun, `"${{ needs.security-analysis.result }}" != "success"`), "Quality Gate must reject failed CodeQL analysis")
 	require(strings.Contains(gateRun, `"${{ needs.dependency-review.result }}" != "success"`), "Quality Gate must reject failed dependency review")
+	require(strings.Contains(gateRun, `"${{ needs.changelog-review.result }}" != "success"`), "Quality Gate must reject failed changelog review")
 	require(strings.Contains(gateRun, "::error::One or more quality gates failed"), "Quality Gate must report a failed dependency")
 	require(strings.Contains(gateRun, "exit 1"), "Quality Gate must fail when a dependency is unsuccessful")
 
@@ -213,7 +214,7 @@ func main() {
 	require(strings.Contains(changelog.Run, "git switch --detach origin/main"), "changelog reconciliation must start from current main")
 	require(strings.Contains(changelog.Run, "go run ./.github/scripts/release-plan changelog"), "release workflow must use the tested changelog updater")
 
-	mergeChangelog := namedStep(releaseJob, "Merge changelog update through CI")
+	mergeChangelog := namedStep(releaseJob, "Queue guarded changelog auto-merge and await completion")
 	require(mergeChangelog.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "changelog pull request must run for new and confirmed existing releases")
 	require(mergeChangelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog pull request must receive the new or resumed release tag")
 	require(mergeChangelog.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "changelog reconciliation must retain the released commit SHA")
@@ -222,8 +223,9 @@ func main() {
 	require(strings.Contains(mergeChangelog.Run, `gh pr list --base main --head "$branch" --state open`), "release retries must reuse an existing open changelog pull request")
 	require(strings.Contains(mergeChangelog.Run, `--jq '.[0].url // empty'`), "a missing changelog pull request must produce an empty lookup")
 	require(strings.Contains(mergeChangelog.Run, `git push --force-with-lease=`), "release retries must safely refresh the existing changelog branch")
-	require(strings.Contains(mergeChangelog.Run, "gh run watch \"$run_id\" --exit-status"), "changelog pull request must wait for successful CI")
-	require(strings.Contains(mergeChangelog.Run, "gh pr merge \"$pr_url\" --squash --delete-branch"), "changelog update must merge through a pull request")
+	require(strings.Contains(mergeChangelog.Run, "go run ./.github/scripts/changelog-merge enable"), "changelog update must use guarded native auto-merge and await completion")
+	require(strings.Contains(mergeChangelog.Run, `EXPECTED_HEAD="$head_sha"`), "changelog merge must pin its expected head")
+	require(strings.Contains(mergeChangelog.Run, `git push --force-with-lease="refs/heads/${branch}:${head_sha}" origin ":refs/heads/${branch}"`), "changelog cleanup must delete only the merged head")
 	require(strings.Contains(mergeChangelog.Run, "gh workflow run ci.yml --ref main"), "the bot merge must dispatch main CI for any intervening product changes")
 	noDiffStart := strings.Index(mergeChangelog.Run, "if git diff --quiet -- CHANGELOG.md; then")
 	require(noDiffStart >= 0, "release retries must recognize an already-current changelog")
