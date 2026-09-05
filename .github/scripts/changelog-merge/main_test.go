@@ -101,10 +101,10 @@ func TestReviewEvidence(t *testing.T) {
 			s.Reviews.Nodes = append(s.Reviews.Nodes, r)
 		}, false, true, false},
 		{"spoofed request", func(s *reviewState) {
-			s.Comments.Nodes = []reviewComment{{Author: actor{"stranger"}, Body: "<!-- changelog-review-head:" + testHead + " -->"}}
+			s.Comments.Nodes = []reviewComment{{Author: actor{"stranger"}, Body: "<!-- changelog-codex-review-head:" + testHead + " -->"}}
 		}, false, false, false},
 		{"existing request", func(s *reviewState) {
-			s.Comments.Nodes = []reviewComment{{Author: actor{"github-actions[bot]"}, Body: "@codex review\n<!-- changelog-review-head:" + testHead + " -->"}}
+			s.Comments.Nodes = []reviewComment{{Author: actor{"github-actions[bot]"}, Body: "@codex review\n<!-- changelog-codex-review-head:" + testHead + " -->"}}
 		}, false, true, false},
 	}
 	for _, tt := range tests {
@@ -259,8 +259,63 @@ func TestWorkflowReviewGateUsesTrustedCode(t *testing.T) {
 
 func TestMissingCubicCheckIsPending(t *testing.T) {
 	gh := func(...string) ([]byte, error) { return []byte(`{"total_count":0,"check_runs":[]}`), nil }
-	ready, err := inspectCubic(gh, testConfig, cleanState())
+	ready, _, err := inspectCubic(gh, testConfig, cleanState())
 	if err != nil || ready {
 		t.Fatalf("missing configured Cubic check must wait, got %v,%v", ready, err)
+	}
+}
+
+func TestRequestsUseTrustedGraphQLIdentity(t *testing.T) {
+	for _, login := range []string{"github-actions", "github-actions[bot]", "stranger"} {
+		s := cleanState()
+		s.Comments.Nodes = []reviewComment{{Author: actor{login}, Body: requestMarker("cubic", testHead)}}
+		if got := wasRequested(s, "cubic", testHead); got != (login != "stranger") {
+			t.Fatalf("trusted request for %s: %v", login, got)
+		}
+		if wasRequested(s, "codex", testHead) {
+			t.Fatal("Cubic marker must not suppress Codex")
+		}
+	}
+}
+
+func TestPollRequestsMissingCubicOnlyOnce(t *testing.T) {
+	comments := 0
+	gh := func(args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case args[0] == "pr" && args[1] == "comment":
+			comments++
+			if !strings.Contains(joined, "@cubic-dev-ai review this PR") || !strings.Contains(joined, requestMarker("cubic", testHead)) {
+				t.Fatalf("unexpected request: %v", args)
+			}
+			return nil, nil
+		case args[0] == "api" && args[1] == "graphql":
+			return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": cleanState()}}}), nil
+		case strings.Contains(joined, "/files?"):
+			return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
+		case strings.Contains(joined, "check-runs?"):
+			return []byte(`{"total_count":0,"check_runs":[]}`), nil
+		default:
+			return encode(t, validPR()), nil
+		}
+	}
+	sent := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		ready, err := pollReview(gh, testConfig, "12", sent)
+		if err != nil || ready {
+			t.Fatalf("absent Cubic must wait: %v,%v", ready, err)
+		}
+	}
+	if comments != 1 {
+		t.Fatalf("duplicate review requests: %d", comments)
+	}
+}
+
+func TestMergeBudgetOutlivesRequiredGates(t *testing.T) {
+	if executionTimeout([]string{"enable"}) <= 2*35*time.Minute {
+		t.Fatal("merge must outlive two queued review jobs")
+	}
+	if executionTimeout([]string{"review"}) >= 35*time.Minute {
+		t.Fatal("review must finish within its CI job budget")
 	}
 }

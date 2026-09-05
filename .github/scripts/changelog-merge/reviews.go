@@ -80,27 +80,24 @@ func reviewReady(state reviewState, head string) (bool, bool, error) {
 	return !clean.IsZero() && !clean.Before(latest), requested, nil
 }
 
-func codexEvidence(state reviewState, head string) (time.Time, time.Time, bool) {
-	var clean, latest time.Time
-	requested := false
+func requestMarker(reviewer, head string) string {
+	return "<!-- changelog-" + reviewer + "-review-head:" + head + " -->"
+}
+
+func wasRequested(state reviewState, reviewer, head string) bool {
 	for _, comment := range state.Comments.Nodes {
-		if comment.Author.Login == "github-actions[bot]" && strings.Contains(comment.Body, "<!-- changelog-review-head:"+head+" -->") {
-			requested = true
-		}
-		if !codexActor(comment.Author.Login) {
-			continue
-		}
-		if strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") && strings.Contains(comment.Body, "`"+head[:7]+"`") {
-			requested = true
-		}
-		match := reviewedCommit.FindStringSubmatch(comment.Body)
-		if len(match) == 2 && strings.HasPrefix(head, match[1]) {
-			requested = true
-			if strings.Contains(comment.Body, "Codex Review: Didn't find any major issues.") && comment.CreatedAt.After(clean) {
-				clean = comment.CreatedAt
-			}
+		// GraphQL returns bare bot logins; REST includes the suffix.
+		trusted := comment.Author.Login == "github-actions" || comment.Author.Login == "github-actions[bot]"
+		if trusted && strings.Contains(comment.Body, requestMarker(reviewer, head)) {
+			return true
 		}
 	}
+	return false
+}
+
+func codexEvidence(state reviewState, head string) (time.Time, time.Time, bool) {
+	clean, requested := codexCommentEvidence(state, head)
+	var latest time.Time
 	for _, item := range state.Reviews.Nodes {
 		if !codexActor(item.Author.Login) || item.Commit.OID != head {
 			continue
@@ -116,6 +113,28 @@ func codexEvidence(state reviewState, head string) (time.Time, time.Time, bool) 
 	return clean, latest, requested
 }
 
+func codexCommentEvidence(state reviewState, head string) (time.Time, bool) {
+	var clean time.Time
+	requested := wasRequested(state, "codex", head)
+	for _, comment := range state.Comments.Nodes {
+		if !codexActor(comment.Author.Login) {
+			continue
+		}
+		if strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") && strings.Contains(comment.Body, "`"+head[:7]+"`") {
+			requested = true
+		}
+		match := reviewedCommit.FindStringSubmatch(comment.Body)
+		if len(match) != 2 || !strings.HasPrefix(head, match[1]) {
+			continue
+		}
+		requested = true
+		if strings.Contains(comment.Body, "Codex Review: Didn't find any major issues.") && comment.CreatedAt.After(clean) {
+			clean = comment.CreatedAt
+		}
+	}
+	return clean, requested
+}
+
 type checkRun struct {
 	Name, Status, Conclusion string
 	HeadSHA                  string `json:"head_sha"`
@@ -123,16 +142,16 @@ type checkRun struct {
 	Output                   struct{ Summary, Title string }
 }
 
-func inspectCubic(gh command, cfg config, state reviewState) (bool, error) {
+func inspectCubic(gh command, cfg config, state reviewState) (bool, bool, error) {
 	var response struct {
 		TotalCount int        `json:"total_count"`
 		CheckRuns  []checkRun `json:"check_runs"`
 	}
 	if err := readJSON(gh, &response, "api", "repos/"+cfg.repo+"/commits/"+cfg.head+"/check-runs?per_page=100&filter=latest"); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if response.TotalCount > len(response.CheckRuns) {
-		return false, errors.New("check evidence truncated; manual review required")
+		return false, false, errors.New("check evidence truncated; manual review required")
 	}
 	found := false
 	for _, check := range response.CheckRuns {
@@ -142,11 +161,20 @@ func inspectCubic(gh command, cfg config, state reviewState) (bool, error) {
 		found = true
 		ready, err := cubicReady(check, state, cfg.head)
 		if err != nil || !ready {
-			return ready, err
+			return ready, true, err
 		}
 	}
 	// This repository has Cubic configured. Absence is pending, not an explicit skip.
-	return found, nil
+	return found, found || wasRequested(state, "cubic", cfg.head) || hasCubicReview(state, cfg.head), nil
+}
+
+func hasCubicReview(state reviewState, head string) bool {
+	for _, item := range state.Reviews.Nodes {
+		if cubicActor(item.Author.Login) && item.Commit.OID == head {
+			return true
+		}
+	}
+	return false
 }
 
 func cubicReady(check checkRun, state reviewState, head string) (bool, error) {

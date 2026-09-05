@@ -42,7 +42,7 @@ type pullRequest struct {
 type changedFile struct{ Filename, Status string }
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), executionTimeout(os.Args[1:]))
 	defer cancel()
 	cfg := config{os.Getenv("GITHUB_REPOSITORY"), os.Getenv("CHANGELOG_BRANCH"), os.Getenv("EXPECTED_HEAD")}
 	if err := run(ctx, cfg, os.Args[1:], ghCommand(ctx)); err != nil {
@@ -171,37 +171,64 @@ func waitForMerge(ctx context.Context, gh command, cfg config, number string) er
 }
 
 func waitForReview(ctx context.Context, gh command, cfg config, number string) error {
-	requestSent := false
+	sent := map[string]bool{}
 	for {
-		if err := inspectEligibility(gh, cfg, number); err != nil {
-			return err
-		}
-		state, err := fetchReviewState(gh, cfg, number)
+		ready, err := pollReview(gh, cfg, number, sent)
 		if err != nil {
 			return err
 		}
-		ready, requested, err := reviewReady(state, cfg.head)
-		if err != nil {
-			return err
-		}
-		cubicReady, err := inspectCubic(gh, cfg, state)
-		if err != nil {
-			return err
-		}
-		if ready && cubicReady {
+		if ready {
 			return inspectEligibility(gh, cfg, number)
-		}
-		if !requested && !requestSent {
-			requestSent = true
-			body := "@codex review\n\n<!-- changelog-review-head:" + cfg.head + " -->"
-			if _, err := gh("pr", "comment", number, "--repo", cfg.repo, "--body", body); err != nil {
-				return err
-			}
 		}
 		if err := pause(ctx); err != nil {
 			return fmt.Errorf("PR #%s lacks a clean current-head AI review or resolved conversations: %w", number, err)
 		}
 	}
+}
+
+func pollReview(gh command, cfg config, number string, sent map[string]bool) (bool, error) {
+	if err := inspectEligibility(gh, cfg, number); err != nil {
+		return false, err
+	}
+	state, err := fetchReviewState(gh, cfg, number)
+	if err != nil {
+		return false, err
+	}
+	ready, requested, err := reviewReady(state, cfg.head)
+	if err != nil {
+		return false, err
+	}
+	cubicReady, cubicRequested, err := inspectCubic(gh, cfg, state)
+	if err != nil {
+		return false, err
+	}
+	if !requested {
+		if err := requestReview(gh, cfg, number, "codex", sent); err != nil {
+			return false, err
+		}
+	}
+	if !cubicRequested {
+		if err := requestReview(gh, cfg, number, "cubic", sent); err != nil {
+			return false, err
+		}
+	}
+	return ready && cubicReady, nil
+}
+
+func requestReview(gh command, cfg config, number, reviewer string, sent map[string]bool) error {
+	if sent[reviewer] {
+		return nil
+	}
+	trigger := "@codex review"
+	if reviewer == "cubic" {
+		trigger = "@cubic-dev-ai review this PR"
+	}
+	body := trigger + "\n\n" + requestMarker(reviewer, cfg.head)
+	if _, err := gh("pr", "comment", number, "--repo", cfg.repo, "--body", body); err != nil {
+		return err
+	}
+	sent[reviewer] = true
+	return nil
 }
 
 // A legacy CI workflow without this job must not be auto-merged by this helper.
@@ -213,22 +240,42 @@ func waitForReviewGate(ctx context.Context, gh command, cfg config) error {
 		if err := readJSON(gh, &response, "api", "repos/"+cfg.repo+"/commits/"+cfg.head+"/check-runs?check_name=Changelog%20AI%20Review&filter=latest"); err != nil {
 			return err
 		}
-		for _, check := range response.CheckRuns {
-			if check.App.Slug != "github-actions" || check.Name != "Changelog AI Review" {
-				continue
-			}
-			if check.HeadSHA != cfg.head {
-				return errors.New("changelog review gate head mismatch")
-			}
-			if check.Status == "completed" {
-				if check.Conclusion != "success" {
-					return errors.New("changelog AI review gate failed")
-				}
-				return nil
-			}
+		passed, err := passingReviewGate(response.CheckRuns, cfg.head)
+		if err != nil {
+			return err
+		}
+		if passed {
+			return nil
 		}
 		if err := pause(ctx); err != nil {
 			return fmt.Errorf("no passing current-head Changelog AI Review job; keep PR open: %w", err)
 		}
 	}
+}
+
+func passingReviewGate(checks []checkRun, head string) (bool, error) {
+	for _, check := range checks {
+		if check.App.Slug != "github-actions" || check.Name != "Changelog AI Review" {
+			continue
+		}
+		if check.HeadSHA != head {
+			return false, errors.New("changelog review gate head mismatch")
+		}
+		if check.Status != "completed" {
+			return false, nil
+		}
+		if check.Conclusion != "success" {
+			return false, errors.New("changelog AI review gate failed")
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// Merge polling includes queued CI, reviewer setup, and the actual merge.
+func executionTimeout(args []string) time.Duration {
+	if len(args) == 1 && args[0] == "enable" {
+		return 90 * time.Minute
+	}
+	return 30 * time.Minute
 }

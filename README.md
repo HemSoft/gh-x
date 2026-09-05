@@ -539,7 +539,8 @@ opens a changelog update and enables squash auto-merge for its exact head.
 Only same-repository `github-actions[bot]` PRs targeting `main`, using a
 `chore/changelog-X.Y.Z` branch, and modifying only `CHANGELOG.md` qualify.
 The normal Quality Gate includes a changelog AI-review job for that branch
-namespace, on both PR and manually dispatched CI runs. It requires a clean
+namespace, on both PR and manually dispatched CI runs. It requests missing
+reviews once per reviewer and commit. It requires a clean
 current-head Codex receipt and resolved conversations, and waits for Cubic
 to finish or explicitly skip its review. Missing, stale, truncated, or failed review evidence leaves
 the gate blocked. Other PRs keep the existing quality gates.
