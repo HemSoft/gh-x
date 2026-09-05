@@ -360,18 +360,24 @@ function isInternalUserRecord(value) {
 
 async function* readJsonLines(filePath) {
     const stream = createReadStream(filePath, { encoding: "utf8" });
-    let remainder = "";
+    let fragments = [];
     // JSONL records end at LF. Unicode line/paragraph separators are valid
     // inside JSON strings and must not be treated as record boundaries.
     for await (const chunk of stream) {
-        const lines = (remainder + chunk).split("\n");
-        remainder = lines.pop();
-        for (const line of lines) {
+        const lines = chunk.split("\n");
+        for (let index = 0; index < lines.length; index += 1) {
+            fragments.push(lines[index]);
+            if (index === lines.length - 1) {
+                continue;
+            }
+            const line = fragments.join("");
+            fragments = [];
             if (line.trim()) {
                 yield parseJsonLine(line, filePath);
             }
         }
     }
+    const remainder = fragments.join("");
     if (remainder.trim()) {
         yield parseJsonLine(remainder, filePath);
     }
