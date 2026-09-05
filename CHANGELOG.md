@@ -12,6 +12,11 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+## [0.11.8] - 2026-09-05
+
+- fix: guard release changelog auto-merge with current reviews (#77)
+- docs: record v0.11.7 release (#76)
+
 ## [0.11.7] - 2026-09-05
 
 - fix: preserve Unicode separators in Codex rollout JSONL (#75)
@@ -96,7 +101,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.11.7...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.11.8...HEAD
+[0.11.8]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.8
 [0.11.7]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.7
 [0.11.6]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.6
 [0.11.5]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.5
