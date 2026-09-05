@@ -177,8 +177,8 @@ func main() {
 	releaseJob, ok := autoRelease.Jobs["release"]
 	require(ok, "auto-release must define the release job")
 	require(
-		releaseJob.If == "github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'",
-		"auto-release must require a successful push-triggered CI run",
+		releaseJob.If == "github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')",
+		"auto-release must require successful push or trusted workflow-dispatch CI",
 	)
 	require(releaseJob.Concurrency.Group == "auto-release", "eligible releases must share one concurrency group")
 	require(!releaseJob.Concurrency.CancelInProgress, "an active release must not be cancelled")
@@ -227,9 +227,11 @@ func main() {
 	require(strings.Contains(mergeChangelog.Run, "gh workflow run ci.yml --ref \"$branch\""), "changelog pull request must run CI on its exact branch")
 	require(strings.Contains(mergeChangelog.Run, `branch="chore/changelog-${RELEASE_TAG#v}"`), "release retries must reuse a deterministic changelog branch")
 	require(strings.Contains(mergeChangelog.Run, `gh pr list --base main --head "$branch" --state open`), "release retries must reuse an existing open changelog pull request")
+	require(strings.Contains(mergeChangelog.Run, `--jq '.[0].url // empty'`), "a missing changelog pull request must produce an empty lookup")
 	require(strings.Contains(mergeChangelog.Run, `git push --force-with-lease=`), "release retries must safely refresh the existing changelog branch")
 	require(strings.Contains(mergeChangelog.Run, "gh run watch \"$run_id\" --exit-status"), "changelog pull request must wait for successful CI")
 	require(strings.Contains(mergeChangelog.Run, "gh pr merge \"$pr_url\" --squash --delete-branch"), "changelog update must merge through a pull request")
+	require(strings.Contains(mergeChangelog.Run, "gh workflow run ci.yml --ref main"), "the bot merge must dispatch main CI for any intervening product changes")
 
 	fmt.Fprintln(os.Stdout, "main ruleset and release workflows are consistent")
 }

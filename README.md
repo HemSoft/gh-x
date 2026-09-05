@@ -539,8 +539,10 @@ opens a changelog update, runs the normal Quality Gate on its exact commit, and
 merges it through branch protection. A failed release run resumes that update
 from the existing GitHub Release and current `main`, even when `main` has
 advanced; a tag without a release remains a skip. CI also rejects stale release
-links in `CHANGELOG.md`. Each created release includes prebuilt binaries for the
-supported operating systems and architectures.
+links in `CHANGELOG.md`. After the bot merge, the workflow dispatches CI on
+`main` so intervening product changes remain eligible for release. Each
+created release includes prebuilt binaries for the supported operating systems
+and architectures.
 
 ## License
 

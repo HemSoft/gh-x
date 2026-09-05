@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   release:
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    if: github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')
     concurrency:
       group: auto-release
       cancel-in-progress: false
@@ -144,7 +144,7 @@ jobs:
           remote_sha=$(git ls-remote --heads origin "$branch" | awk '{print $1}')
           git push --force-with-lease="refs/heads/${branch}:${remote_sha}" origin "HEAD:refs/heads/${branch}"
 
-          pr_url=$(gh pr list --base main --head "$branch" --state open --json url --jq '.[0].url')
+          pr_url=$(gh pr list --base main --head "$branch" --state open --json url --jq '.[0].url // empty')
           if [[ -z "$pr_url" ]]; then
             pr_url=$(gh pr create \
               --base main \
@@ -179,3 +179,4 @@ jobs:
 
           gh run watch "$run_id" --exit-status
           gh pr merge "$pr_url" --squash --delete-branch
+          gh workflow run ci.yml --ref main

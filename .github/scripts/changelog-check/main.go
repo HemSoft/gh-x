@@ -25,6 +25,22 @@ func main() {
 		fail(err)
 	}
 
+	latestOutput, err := exec.Command(
+		"gh",
+		"release",
+		"view",
+		"--repo",
+		"HemSoft/gh-x",
+		"--json",
+		"tagName",
+		"--jq",
+		".tagName",
+	).Output()
+	if err != nil {
+		fail(fmt.Errorf("find latest published GitHub Release: %w", err))
+	}
+	latest := strings.TrimSpace(string(latestOutput))
+
 	releaseOutput, err := exec.Command(
 		"gh",
 		"api",
@@ -38,17 +54,16 @@ func main() {
 	}
 
 	releasedTags := strings.Fields(string(releaseOutput))
-	if err := validateChangelog(string(contents), releasedTags); err != nil {
+	if err := validateChangelog(string(contents), latest, releasedTags); err != nil {
 		fail(err)
 	}
 
-	fmt.Fprintf(os.Stdout, "CHANGELOG.md matches latest release %s\n", latestSemanticTag(releasedTags))
+	fmt.Fprintf(os.Stdout, "CHANGELOG.md matches latest release %s\n", latest)
 }
 
-func validateChangelog(contents string, releasedTags []string) error {
-	latest := latestSemanticTag(releasedTags)
-	if latest == "" {
-		return errors.New("repository has no semantic-version GitHub Releases")
+func validateChangelog(contents, latest string, releasedTags []string) error {
+	if !semverTag.MatchString(latest) {
+		return errors.New("repository latest GitHub Release is not semantic-versioned")
 	}
 
 	if !strings.Contains(contents, "GitHub Releases is the authoritative source") {
@@ -116,15 +131,6 @@ func validateVersionLinks(contents string, releasedTags []string, headings [][]s
 	}
 
 	return nil
-}
-
-func latestSemanticTag(tags []string) string {
-	for _, tag := range tags {
-		if semverTag.MatchString(tag) {
-			return tag
-		}
-	}
-	return ""
 }
 
 func containsVersion(matches [][]string, version string) bool {
