@@ -72,14 +72,27 @@ type workflowJob struct {
 	Name        string              `yaml:"name"`
 	If          string              `yaml:"if"`
 	Uses        string              `yaml:"uses"`
+	Needs       []string            `yaml:"needs"`
+	Permissions map[string]string   `yaml:"permissions"`
+	Strategy    workflowStrategy    `yaml:"strategy"`
 	Concurrency workflowConcurrency `yaml:"concurrency"`
 	Steps       []workflowStep      `yaml:"steps"`
+}
+
+type workflowStrategy struct {
+	FailFast bool `yaml:"fail-fast"`
+	Matrix   struct {
+		Include []map[string]string `yaml:"include"`
+	} `yaml:"matrix"`
 }
 
 type workflowStep struct {
 	Name string            `yaml:"name"`
 	Run  string            `yaml:"run"`
 	Env  map[string]string `yaml:"env"`
+	If   string            `yaml:"if"`
+	Uses string            `yaml:"uses"`
+	With map[string]string `yaml:"with"`
 }
 
 func main() {
@@ -113,7 +126,40 @@ func main() {
 	require(equal(ci.On.PullRequest.Branches, "main"), "CI must target pull requests to main")
 	require(equal(ci.On.PullRequest.Types, "opened", "synchronize", "reopened", "edited"), "CI pull-request events changed")
 	require(equal(ci.On.Push.Branches, "main"), "CI must report status for the main branch badge")
-	require(ci.Jobs["gate"].Name == "Quality Gate", "CI must publish the Quality Gate check")
+
+	security := ci.Jobs["security-analysis"]
+	require(security.Name == "CodeQL Analysis (${{ matrix.language }})", "CI must publish per-language CodeQL checks")
+	require(reflect.DeepEqual(security.Permissions, map[string]string{
+		"contents":        "read",
+		"security-events": "write",
+	}), "CodeQL must use least-privilege permissions")
+	require(!security.Strategy.FailFast, "CodeQL must analyze every configured language")
+	require(reflect.DeepEqual(security.Strategy.Matrix.Include, []map[string]string{
+		{"language": "go", "build-mode": "autobuild"},
+		{"language": "javascript-typescript", "build-mode": "none"},
+	}), "CodeQL must analyze Go and JavaScript with supported build modes")
+	codeQLInit := namedStep(security, "Initialize CodeQL")
+	require(codeQLInit.Uses == "github/codeql-action/init@v4", "CodeQL init must use the supported v4 action")
+	require(reflect.DeepEqual(codeQLInit.With, map[string]string{
+		"languages":  "${{ matrix.language }}",
+		"build-mode": "${{ matrix.build-mode }}",
+	}), "CodeQL init must receive the language and build mode matrix values")
+	require(namedStep(security, "Analyze with CodeQL").Uses == "github/codeql-action/analyze@v4", "CodeQL analysis must use the supported v4 action")
+
+	dependencyReview := ci.Jobs["dependency-review"]
+	require(dependencyReview.Name == "Dependency Review", "CI must publish the Dependency Review check")
+	require(reflect.DeepEqual(dependencyReview.Permissions, map[string]string{"contents": "read"}), "dependency review must use read-only contents permission")
+	reviewStep := namedStep(dependencyReview, "Review dependency changes")
+	require(reviewStep.If == "github.event_name == 'pull_request'", "dependency review must run only for pull requests")
+	require(reviewStep.Uses == "actions/dependency-review-action@v5", "dependency review must use the current v5 action")
+	require(reviewStep.With["fail-on-severity"] == "high", "dependency review must block high and critical vulnerabilities")
+	require(namedStep(dependencyReview, "Skip dependency review outside pull requests").If == "github.event_name != 'pull_request'", "non-PR runs must complete dependency review without a bypass")
+
+	gate := ci.Jobs["gate"]
+	require(gate.Name == "Quality Gate", "CI must publish the Quality Gate check")
+	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review"), "Quality Gate must depend on every build, quality, and security job")
+	require(strings.Contains(namedStep(gate, "Evaluate all gates").Run, "needs.security-analysis.result"), "Quality Gate must reject failed CodeQL analysis")
+	require(strings.Contains(namedStep(gate, "Evaluate all gates").Run, "needs.dependency-review.result"), "Quality Gate must reject failed dependency review")
 
 	require(equal(autoRelease.On.WorkflowRun.Workflows, "CI Quality Gates"), "auto-release must follow CI Quality Gates")
 	require(equal(autoRelease.On.WorkflowRun.Types, "completed"), "auto-release must follow completed CI runs")
