@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -63,6 +65,27 @@ func TestFirstSemanticTagSkipsNonSemanticTags(t *testing.T) {
 	tags := []string{"vnext", "v999999999999999999999999999999.2.3", "v2.0.0"}
 	if got, want := firstSemanticTag(tags), "v999999999999999999999999999999.2.3"; got != want {
 		t.Fatalf("firstSemanticTag() = %q, want %q", got, want)
+	}
+}
+
+func TestWriteOutputsIncludesReleaseTag(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "github-output")
+	t.Setenv("GITHUB_OUTPUT", outputPath)
+
+	err := writeOutputs(map[string]string{
+		"release_tag": "v1.2.3",
+		"skip":        "true",
+	})
+	if err != nil {
+		t.Fatalf("writeOutputs() error = %v", err)
+	}
+
+	contents, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read outputs: %v", err)
+	}
+	if got, want := string(contents), "skip=true\nrelease_tag=v1.2.3\n"; got != want {
+		t.Fatalf("outputs = %q, want %q", got, want)
 	}
 }
 

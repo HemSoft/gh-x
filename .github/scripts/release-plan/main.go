@@ -431,7 +431,7 @@ func writeOutputs(values map[string]string) error {
 		return fmt.Errorf("open GITHUB_OUTPUT: %w", err)
 	}
 	defer file.Close()
-	for _, key := range []string{"latest", "skip", "tag", "version_base"} {
+	for _, key := range []string{"latest", "skip", "tag", "release_tag", "version_base"} {
 		if value, ok := values[key]; ok {
 			if _, err := fmt.Fprintf(file, "%s=%s\n", key, value); err != nil {
 				return fmt.Errorf("write GITHUB_OUTPUT: %w", err)
