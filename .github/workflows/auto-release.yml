@@ -132,6 +132,7 @@ jobs:
           set -euo pipefail
           if git diff --quiet -- CHANGELOG.md; then
             echo "CHANGELOG.md already records ${RELEASE_TAG}."
+            gh workflow run ci.yml --ref main
             exit 0
           fi
 

@@ -213,6 +213,8 @@ func main() {
 	require(strings.Contains(existingNotes.Run, `gh api --include --silent "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"`), "existing release lookup must expose its HTTP status")
 	require(strings.Contains(existingNotes.Run, `grep -Eq '^HTTP/[^ ]+ 404 '`), "only a confirmed missing release may skip reconciliation")
 	require(strings.Contains(existingNotes.Run, `gh release view "$RELEASE_TAG" --json body --jq .body > release-notes.md`), "existing release notes must load the authoritative GitHub Release body")
+	require(strings.Contains(existingNotes.Run, `echo "found=true" >> "$GITHUB_OUTPUT"`), "existing release lookup must publish a found result")
+	require(strings.Contains(existingNotes.Run, `echo "found=false" >> "$GITHUB_OUTPUT"`), "a confirmed missing release must publish a not-found result")
 	require(strings.Contains(existingNotes.Run, `exit 1`), "non-404 release lookup failures must fail reconciliation")
 
 	changelog := namedStep(releaseJob, "Update changelog")
@@ -232,6 +234,14 @@ func main() {
 	require(strings.Contains(mergeChangelog.Run, "gh run watch \"$run_id\" --exit-status"), "changelog pull request must wait for successful CI")
 	require(strings.Contains(mergeChangelog.Run, "gh pr merge \"$pr_url\" --squash --delete-branch"), "changelog update must merge through a pull request")
 	require(strings.Contains(mergeChangelog.Run, "gh workflow run ci.yml --ref main"), "the bot merge must dispatch main CI for any intervening product changes")
+	noDiffStart := strings.Index(mergeChangelog.Run, "if git diff --quiet -- CHANGELOG.md; then")
+	require(noDiffStart >= 0, "release retries must recognize an already-current changelog")
+	noDiffEnd := strings.Index(mergeChangelog.Run[noDiffStart:], "fi")
+	require(noDiffEnd >= 0, "already-current changelog handling must terminate its conditional")
+	noDiffBranch := mergeChangelog.Run[noDiffStart : noDiffStart+noDiffEnd]
+	noDiffDispatch := strings.Index(noDiffBranch, "gh workflow run ci.yml --ref main")
+	noDiffExit := strings.Index(noDiffBranch, "exit 0")
+	require(noDiffDispatch >= 0 && noDiffExit >= 0 && noDiffDispatch < noDiffExit, "already-current changelog retries must dispatch main CI before returning")
 
 	fmt.Fprintln(os.Stdout, "main ruleset and release workflows are consistent")
 }
