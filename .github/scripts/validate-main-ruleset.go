@@ -157,6 +157,7 @@ func main() {
 	gateRun := namedStep(gate, "Evaluate all gates").Run
 	require(strings.Contains(gateRun, `"${{ needs.security-analysis.result }}" != "success"`), "Quality Gate must reject failed CodeQL analysis")
 	require(strings.Contains(gateRun, `"${{ needs.dependency-review.result }}" != "success"`), "Quality Gate must reject failed dependency review")
+	require(strings.Contains(gateRun, `"${{ needs.changelog-review.result }}" != "success"`), "Quality Gate must reject failed changelog review")
 	require(strings.Contains(gateRun, "::error::One or more quality gates failed"), "Quality Gate must report a failed dependency")
 	require(strings.Contains(gateRun, "exit 1"), "Quality Gate must fail when a dependency is unsuccessful")
 

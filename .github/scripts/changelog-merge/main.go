@@ -82,7 +82,10 @@ func run(ctx context.Context, cfg config, args []string, gh command) error {
 		return err
 	}
 	if args[0] == "review" {
-		return waitForReview(ctx, gh, cfg, number)
+		return waitForReview(ctx, gh, cfg, number, false)
+	}
+	if err := waitForReview(ctx, gh, cfg, number, true); err != nil {
+		return err
 	}
 	if err := waitForReviewGate(ctx, gh, cfg); err != nil {
 		return err
@@ -170,10 +173,10 @@ func waitForMerge(ctx context.Context, gh command, cfg config, number string) er
 	}
 }
 
-func waitForReview(ctx context.Context, gh command, cfg config, number string) error {
+func waitForReview(ctx context.Context, gh command, cfg config, number string, allowRequests bool) error {
 	sent := map[string]bool{}
 	for {
-		ready, err := pollReview(gh, cfg, number, sent)
+		ready, err := pollReview(gh, cfg, number, sent, allowRequests)
 		if err != nil {
 			return err
 		}
@@ -186,7 +189,7 @@ func waitForReview(ctx context.Context, gh command, cfg config, number string) e
 	}
 }
 
-func pollReview(gh command, cfg config, number string, sent map[string]bool) (bool, error) {
+func pollReview(gh command, cfg config, number string, sent map[string]bool, allowRequests bool) (bool, error) {
 	if err := inspectEligibility(gh, cfg, number); err != nil {
 		return false, err
 	}
@@ -201,6 +204,9 @@ func pollReview(gh command, cfg config, number string, sent map[string]bool) (bo
 	cubicReady, cubicRequested, err := inspectCubic(gh, cfg, state)
 	if err != nil {
 		return false, err
+	}
+	if !allowRequests {
+		return ready && cubicReady, nil
 	}
 	if !requested {
 		if err := requestReview(gh, cfg, number, "codex", sent); err != nil {

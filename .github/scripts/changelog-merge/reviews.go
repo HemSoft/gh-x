@@ -41,7 +41,7 @@ type reviewState struct {
 const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid comments(last:100){nodes{body createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}`
 
 var zeroCubicIssues = regexp.MustCompile(`(?i)\b0 issues found\b|\bno issues found\b`)
-var reviewedCommit = regexp.MustCompile("\\*\\*Reviewed commit:\\*\\* `([0-9a-f]{10,40})`")
+var reviewedCommit = regexp.MustCompile("\\*\\*Reviewed commit:\\*\\*\\s*`?([0-9a-f]{10,40})\\b`?")
 
 func fetchReviewState(gh command, cfg config, number string) (reviewState, error) {
 	var response struct {
@@ -66,6 +66,9 @@ func reviewReady(state reviewState, head string) (bool, bool, error) {
 	if state.Comments.PageInfo.HasPreviousPage || state.Reviews.PageInfo.HasPreviousPage || state.ReviewThreads.PageInfo.HasNextPage {
 		return false, false, errors.New("review evidence truncated; manual review required")
 	}
+	if ambiguousCodexReview(state, head) {
+		return false, true, errors.New("current-head Codex review lacks a submission timestamp")
+	}
 	for _, comment := range state.Comments.Nodes {
 		if codexActor(comment.Author.Login) && strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") && strings.Contains(comment.Body, "`"+head[:7]+"`") && strings.Contains(comment.Body, "**Running**") {
 			return false, true, nil
@@ -77,7 +80,7 @@ func reviewReady(state reviewState, head string) (bool, bool, error) {
 			return false, requested, nil
 		}
 	}
-	return !clean.IsZero() && !clean.Before(latest), requested, nil
+	return !clean.IsZero() && clean.After(latest), requested, nil
 }
 
 func requestMarker(reviewer, head string) string {
@@ -103,7 +106,7 @@ func codexEvidence(state reviewState, head string) (time.Time, time.Time, bool) 
 			continue
 		}
 		requested = true
-		if item.SubmittedAt.After(latest) {
+		if item.State != "APPROVED" && item.SubmittedAt.After(latest) {
 			latest = item.SubmittedAt
 		}
 		if item.State == "APPROVED" && item.SubmittedAt.After(clean) {
@@ -202,4 +205,13 @@ func cubicReady(check checkRun, state reviewState, head string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func ambiguousCodexReview(state reviewState, head string) bool {
+	for _, item := range state.Reviews.Nodes {
+		if codexActor(item.Author.Login) && item.Commit.OID == head && item.SubmittedAt.IsZero() {
+			return true
+		}
+	}
+	return false
 }

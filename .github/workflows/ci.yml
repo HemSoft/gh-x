@@ -387,7 +387,8 @@ jobs:
             exit 1
           fi
 
-  # Privileged reviewer requests run trusted default-branch code, never PR code.
+  # Read-only review verification uses the default-branch helper.
+  # Reviewer requests belong to the trusted Auto Release workflow.
   changelog-review:
     name: Changelog AI Review
     if: startsWith(github.head_ref || github.ref_name, 'chore/changelog-')
@@ -399,7 +400,7 @@ jobs:
     permissions:
       contents: read
       checks: read
-      pull-requests: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:

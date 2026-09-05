@@ -95,6 +95,23 @@ func TestReviewEvidence(t *testing.T) {
 		{"new review running", func(s *reviewState) {
 			s.Comments.Nodes = append(s.Comments.Nodes, reviewComment{Author: actor{"chatgpt-codex-connector"}, Body: "<!-- codex-pull-request-review-summary --> `" + testHead[:7] + "` **Running**"})
 		}, false, true, false},
+		{"tied independent evidence", func(s *reviewState) {
+			r := review{Author: actor{"chatgpt-codex-connector"}, State: "COMMENTED", SubmittedAt: s.Comments.Nodes[0].CreatedAt}
+			r.Commit.OID = testHead
+			s.Reviews.Nodes = []review{r}
+		}, false, true, false},
+		{"lone approval", func(s *reviewState) {
+			r := review{Author: actor{"chatgpt-codex-connector"}, State: "APPROVED", SubmittedAt: s.Comments.Nodes[0].CreatedAt}
+			r.Commit.OID = testHead
+			s.Comments.Nodes = nil
+			s.Reviews.Nodes = []review{r}
+		}, true, true, false},
+		{"missing review timestamp", func(s *reviewState) {
+			r := review{Author: actor{"chatgpt-codex-connector"}, State: "COMMENTED"}
+			r.Commit.OID = testHead
+			s.Reviews.Nodes = []review{r}
+		}, false, true, true},
+		{"unquoted receipt", func(s *reviewState) { s.Comments.Nodes[0].Body = strings.ReplaceAll(s.Comments.Nodes[0].Body, "`", "") }, true, true, false},
 		{"newer finding", func(s *reviewState) {
 			r := review{Author: actor{"chatgpt-codex-connector"}, State: "COMMENTED", SubmittedAt: s.Comments.Nodes[0].CreatedAt.Add(time.Minute)}
 			r.Commit.OID = testHead
@@ -171,6 +188,13 @@ func TestEnableWaitsForReviewGateAndPinsMerge(t *testing.T) {
 			return []byte(`[{"number":12}]`), nil
 		case strings.Contains(joined, "/files?"):
 			return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
+		case args[0] == "api" && args[1] == "graphql":
+			return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": cleanState()}}}), nil
+		case strings.Contains(joined, "check-runs?per_page"):
+			check := checkRun{Status: "completed", Conclusion: "success", HeadSHA: testHead}
+			check.App.Slug = "cubic-dev-ai"
+			check.Output.Summary = "0 issues found"
+			return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
 		case strings.Contains(joined, "check-runs?"):
 			check := checkRun{Name: "Changelog AI Review", Status: "completed", Conclusion: "success", HeadSHA: testHead}
 			check.App.Slug = "github-actions"
@@ -192,7 +216,7 @@ func TestEnableWaitsForReviewGateAndPinsMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"pr", "merge", "12", "--repo", "HemSoft/gh-x", "--auto", "--squash", "--match-head-commit", testHead}
-	if !reflect.DeepEqual(mergeArgs, want) || reads != 3 {
+	if !reflect.DeepEqual(mergeArgs, want) || reads != 5 {
 		t.Fatalf("merge=%v, reads=%d", mergeArgs, reads)
 	}
 }
@@ -246,7 +270,7 @@ func TestWorkflowReviewGateUsesTrustedCode(t *testing.T) {
 	if job.Steps[0].With["ref"] != "${{ github.event.repository.default_branch }}" || job.Steps[0].With["persist-credentials"] != "false" {
 		t.Fatal("privileged review must use trusted default branch without persisted credentials")
 	}
-	if job.Permissions["pull-requests"] != "write" || job.Permissions["contents"] != "read" {
+	if job.Permissions["pull-requests"] != "read" || job.Permissions["contents"] != "read" {
 		t.Fatal("review permissions changed")
 	}
 	if !strings.Contains(strings.Join(workflow.Jobs["gate"].Needs, ","), "changelog-review") {
@@ -301,7 +325,7 @@ func TestPollRequestsMissingCubicOnlyOnce(t *testing.T) {
 	}
 	sent := map[string]bool{}
 	for i := 0; i < 2; i++ {
-		ready, err := pollReview(gh, testConfig, "12", sent)
+		ready, err := pollReview(gh, testConfig, "12", sent, true)
 		if err != nil || ready {
 			t.Fatalf("absent Cubic must wait: %v,%v", ready, err)
 		}
@@ -317,5 +341,30 @@ func TestMergeBudgetOutlivesRequiredGates(t *testing.T) {
 	}
 	if executionTimeout([]string{"review"}) >= 35*time.Minute {
 		t.Fatal("review must finish within its CI job budget")
+	}
+}
+
+func TestReadOnlyReviewNeverRequests(t *testing.T) {
+	gh := func(args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case args[0] == "pr":
+			t.Fatalf("read-only CI attempted mutation: %v", args)
+		case args[1] == "graphql":
+			state := cleanState()
+			state.Comments.Nodes = nil
+			return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": state}}}), nil
+		case strings.Contains(joined, "/files?"):
+			return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
+		case strings.Contains(joined, "check-runs?"):
+			return []byte(`{"total_count":0,"check_runs":[]}`), nil
+		default:
+			return encode(t, validPR()), nil
+		}
+		return nil, nil
+	}
+	ready, err := pollReview(gh, testConfig, "12", map[string]bool{}, false)
+	if err != nil || ready {
+		t.Fatalf("missing reviews must wait without writes: %v,%v", ready, err)
 	}
 }
