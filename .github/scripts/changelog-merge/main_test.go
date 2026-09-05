@@ -403,7 +403,6 @@ func TestLatestReviewCheckWins(t *testing.T) {
 
 func TestAmbiguousRepeatedChecksFailClosed(t *testing.T) {
 	check := checkRun{Name: "cubic · AI code reviewer"}
-	check.Name = cubicReviewCheckName
 	check.App.Slug = "cubic-dev-ai"
 	if _, err := latestChecks([]checkRun{check, check}, "cubic-dev-ai"); err == nil {
 		t.Fatal("missing times must block")
@@ -450,7 +449,6 @@ func TestCubicCommentsCannotOverrideCheckFindings(t *testing.T) {
 	r.Commit.OID = testHead
 	state.Reviews.Nodes = []review{r}
 	check := checkRun{Name: "cubic · AI code reviewer", StartedAt: r.SubmittedAt.Add(-time.Minute), HeadSHA: testHead, Status: "completed", Conclusion: "success"}
-	check.Name = cubicReviewCheckName
 	check.App.Slug = "cubic-dev-ai"
 	check.Output.Summary = "1 issue found"
 	gh := func(...string) ([]byte, error) {
