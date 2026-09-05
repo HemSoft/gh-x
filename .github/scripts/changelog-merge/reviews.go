@@ -84,7 +84,7 @@ func codexEvidence(state reviewState, head string) (time.Time, time.Time, bool) 
 	var clean, latest time.Time
 	requested := false
 	for _, comment := range state.Comments.Nodes {
-		if strings.Contains(comment.Body, "<!-- changelog-review-head:"+head+" -->") {
+		if comment.Author.Login == "github-actions[bot]" && strings.Contains(comment.Body, "<!-- changelog-review-head:"+head+" -->") {
 			requested = true
 		}
 		if !codexActor(comment.Author.Login) {
@@ -134,16 +134,19 @@ func inspectCubic(gh command, cfg config, state reviewState) (bool, error) {
 	if response.TotalCount > len(response.CheckRuns) {
 		return false, errors.New("check evidence truncated; manual review required")
 	}
+	found := false
 	for _, check := range response.CheckRuns {
 		if check.App.Slug != "cubic-dev-ai" {
 			continue
 		}
+		found = true
 		ready, err := cubicReady(check, state, cfg.head)
 		if err != nil || !ready {
 			return ready, err
 		}
 	}
-	return true, nil
+	// This repository has Cubic configured. Absence is pending, not an explicit skip.
+	return found, nil
 }
 
 func cubicReady(check checkRun, state reviewState, head string) (bool, error) {

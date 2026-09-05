@@ -100,8 +100,11 @@ func TestReviewEvidence(t *testing.T) {
 			r.Commit.OID = testHead
 			s.Reviews.Nodes = append(s.Reviews.Nodes, r)
 		}, false, true, false},
+		{"spoofed request", func(s *reviewState) {
+			s.Comments.Nodes = []reviewComment{{Author: actor{"stranger"}, Body: "<!-- changelog-review-head:" + testHead + " -->"}}
+		}, false, false, false},
 		{"existing request", func(s *reviewState) {
-			s.Comments.Nodes = []reviewComment{{Body: "@codex review\n<!-- changelog-review-head:" + testHead + " -->"}}
+			s.Comments.Nodes = []reviewComment{{Author: actor{"github-actions[bot]"}, Body: "@codex review\n<!-- changelog-review-head:" + testHead + " -->"}}
 		}, false, true, false},
 	}
 	for _, tt := range tests {
@@ -251,5 +254,13 @@ func TestWorkflowReviewGateUsesTrustedCode(t *testing.T) {
 	}
 	if !strings.Contains(workflow.Jobs["gate"].Steps[0].Run, "needs.changelog-review.result") {
 		t.Fatal("Quality Gate must enforce changelog review result")
+	}
+}
+
+func TestMissingCubicCheckIsPending(t *testing.T) {
+	gh := func(...string) ([]byte, error) { return []byte(`{"total_count":0,"check_runs":[]}`), nil }
+	ready, err := inspectCubic(gh, testConfig, cleanState())
+	if err != nil || ready {
+		t.Fatalf("missing configured Cubic check must wait, got %v,%v", ready, err)
 	}
 }
