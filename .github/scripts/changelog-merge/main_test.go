@@ -184,6 +184,7 @@ func TestEnableWaitsForReviewGateAndPinsMerge(t *testing.T) {
 			return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": cleanState()}}}), nil
 		case strings.Contains(joined, "check-runs?per_page"):
 			check := checkRun{Status: "completed", Conclusion: "success", HeadSHA: testHead}
+			check.Name = cubicReviewCheckName
 			check.App.Slug = "cubic-dev-ai"
 			check.Output.Summary = "0 issues found"
 			return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
@@ -364,7 +365,7 @@ func TestReadOnlyReviewNeverRequests(t *testing.T) {
 func TestLatestReviewCheckWins(t *testing.T) {
 	for _, oldStatus := range []string{"failure", "pending", "findings"} {
 		t.Run(oldStatus, func(t *testing.T) {
-			old := checkRun{Name: "cubic review", HeadSHA: testHead, Status: "completed", Conclusion: "failure", StartedAt: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}
+			old := checkRun{Name: "cubic · AI code reviewer", HeadSHA: testHead, Status: "completed", Conclusion: "failure", StartedAt: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}
 			old.App.Slug = "cubic-dev-ai"
 			if oldStatus == "pending" {
 				old.Status = "in_progress"
@@ -401,7 +402,8 @@ func TestLatestReviewCheckWins(t *testing.T) {
 }
 
 func TestAmbiguousRepeatedChecksFailClosed(t *testing.T) {
-	check := checkRun{Name: "cubic review"}
+	check := checkRun{Name: "cubic · AI code reviewer"}
+	check.Name = cubicReviewCheckName
 	check.App.Slug = "cubic-dev-ai"
 	if _, err := latestChecks([]checkRun{check, check}, "cubic-dev-ai"); err == nil {
 		t.Fatal("missing times must block")
@@ -434,7 +436,7 @@ func TestQueuedGateRerunWaitsForTimestamp(t *testing.T) {
 
 func TestCompletionCannotOrderRerunsWithMissingStart(t *testing.T) {
 	gh := func(...string) ([]byte, error) {
-		return []byte(`{"total_count":2,"check_runs":[{"name":"cubic review","head_sha":"` + testHead + `","status":"completed","conclusion":"success","started_at":null,"completed_at":"2026-09-05T12:10:00Z","app":{"slug":"cubic-dev-ai"},"output":{"summary":"0 issues found"}},{"name":"cubic review","head_sha":"` + testHead + `","status":"completed","conclusion":"failure","started_at":"2026-09-05T12:05:00Z","completed_at":"2026-09-05T12:06:00Z","app":{"slug":"cubic-dev-ai"}}]}`), nil
+		return []byte(`{"total_count":2,"check_runs":[{"name":"cubic · AI code reviewer","head_sha":"` + testHead + `","status":"completed","conclusion":"success","started_at":null,"completed_at":"2026-09-05T12:10:00Z","app":{"slug":"cubic-dev-ai"},"output":{"summary":"0 issues found"}},{"name":"cubic · AI code reviewer","head_sha":"` + testHead + `","status":"completed","conclusion":"failure","started_at":"2026-09-05T12:05:00Z","completed_at":"2026-09-05T12:06:00Z","app":{"slug":"cubic-dev-ai"}}]}`), nil
 	}
 	ready, requested, err := inspectCubic(gh, testConfig, cleanState())
 	if ready || !requested || err != nil {
@@ -447,7 +449,8 @@ func TestCubicCommentsCannotOverrideCheckFindings(t *testing.T) {
 	r := review{Author: actor{"cubic-dev-ai"}, State: "COMMENTED", SubmittedAt: time.Now(), Body: "<!-- cubic:review-summary:start -->No issues found<!-- cubic:review-summary:end -->"}
 	r.Commit.OID = testHead
 	state.Reviews.Nodes = []review{r}
-	check := checkRun{Name: "cubic review", StartedAt: r.SubmittedAt.Add(-time.Minute), HeadSHA: testHead, Status: "completed", Conclusion: "success"}
+	check := checkRun{Name: "cubic · AI code reviewer", StartedAt: r.SubmittedAt.Add(-time.Minute), HeadSHA: testHead, Status: "completed", Conclusion: "success"}
+	check.Name = cubicReviewCheckName
 	check.App.Slug = "cubic-dev-ai"
 	check.Output.Summary = "1 issue found"
 	gh := func(...string) ([]byte, error) {
@@ -538,6 +541,7 @@ func TestQueuedAutoMergeIsWithdrawnWhenReviewChanges(t *testing.T) {
 					return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
 				case strings.Contains(joined, "check-runs?"):
 					check := checkRun{HeadSHA: testHead, Status: "completed", Conclusion: "success"}
+					check.Name = cubicReviewCheckName
 					check.App.Slug = "cubic-dev-ai"
 					check.Output.Summary = "0 issues found"
 					return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
@@ -586,6 +590,7 @@ func TestNewFindingBeforeQueuePreventsAutoMerge(t *testing.T) {
 			return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
 		case strings.Contains(joined, "check-runs?"):
 			check := checkRun{HeadSHA: testHead, Status: "completed", Conclusion: "success"}
+			check.Name = cubicReviewCheckName
 			check.App.Slug = "cubic-dev-ai"
 			check.Output.Summary = "0 issues found"
 			if strings.Contains(joined, "check_name=") {
@@ -627,5 +632,22 @@ func TestMergeDuringGuardReadStillCompletesSuccessfully(t *testing.T) {
 	}
 	if reads != 3 {
 		t.Fatalf("expected open, merged eligibility, merged reconciliation; got %d reads", reads)
+	}
+}
+
+func TestUnrelatedCubicChecksCannotSatisfyReview(t *testing.T) {
+	for _, conclusion := range []string{"success", "skipped"} {
+		t.Run(conclusion, func(t *testing.T) {
+			check := checkRun{Name: "cubic unrelated check", HeadSHA: testHead, Status: "completed", Conclusion: conclusion}
+			check.App.Slug = "cubic-dev-ai"
+			check.Output.Summary = "0 issues found"
+			gh := func(...string) ([]byte, error) {
+				return encode(t, map[string]any{"total_count": 1, "check_runs": []checkRun{check}}), nil
+			}
+			ready, requested, err := inspectCubic(gh, testConfig, cleanState())
+			if ready || requested || err != nil {
+				t.Fatalf("unrelated check must not count as review evidence: %v,%v,%v", ready, requested, err)
+			}
+		})
 	}
 }

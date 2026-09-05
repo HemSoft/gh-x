@@ -40,6 +40,8 @@ type reviewState struct {
 
 const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid comments(last:100){nodes{body createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}`
 
+const cubicReviewCheckName = "cubic · AI code reviewer"
+
 var zeroCubicIssues = regexp.MustCompile(`(?i)\b0 issues found\b|\bno issues found\b`)
 var reviewedCommit = regexp.MustCompile("(?i)(?:\\*\\*)?Reviewed commit:(?:\\*\\*)?\\s*`?([0-9a-f]{10,40})\\b`?")
 
@@ -157,7 +159,7 @@ func inspectCubic(gh command, cfg config, state reviewState) (bool, bool, error)
 	if response.TotalCount > len(response.CheckRuns) {
 		return false, false, errors.New("check evidence truncated; manual review required")
 	}
-	checks, err := latestChecks(response.CheckRuns, "cubic-dev-ai")
+	checks, err := latestChecks(cubicReviewChecks(response.CheckRuns), "cubic-dev-ai")
 	if err != nil {
 		// An unorderable rerun is pending; do not post a duplicate request.
 		return false, true, nil
@@ -172,6 +174,17 @@ func inspectCubic(gh command, cfg config, state reviewState) (bool, bool, error)
 	}
 	// This repository has Cubic configured. Absence is pending, not an explicit skip.
 	return found, found || wasRequested(state, "cubic", cfg.head) || hasCubicReview(state, cfg.head), nil
+}
+
+func cubicReviewChecks(checks []checkRun) []checkRun {
+	var reviews []checkRun
+	for _, check := range checks {
+		if strings.EqualFold(strings.TrimSpace(check.Name), cubicReviewCheckName) {
+			check.Name = cubicReviewCheckName
+			reviews = append(reviews, check)
+		}
+	}
+	return reviews
 }
 
 func hasCubicReview(state reviewState, head string) bool {
