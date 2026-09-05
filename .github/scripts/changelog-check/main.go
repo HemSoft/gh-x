@@ -14,7 +14,7 @@ const repositoryURL = "https://github.com/HemSoft/gh-x"
 
 var (
 	semverTag        = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-	publishedHeading = regexp.MustCompile(`(?m)^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - ([0-9]{4}-[0-9]{2}-[0-9]{2})$`)
+	publishedHeading = regexp.MustCompile(`(?m)^## \[([0-9]+\.[0-9]+\.[0-9]+)\]([^\r\n]*)\r?$`)
 	versionLink      = regexp.MustCompile(`(?m)^\[([0-9]+\.[0-9]+\.[0-9]+)\]: (\S+)$`)
 	unreleasedLink   = regexp.MustCompile(`(?m)^\[Unreleased\]: (\S+)$`)
 )
@@ -92,8 +92,12 @@ func validateChangelog(contents, latest string, releasedTags []string) error {
 
 func validatePublishedHeadings(headings [][]string) error {
 	for _, heading := range headings {
-		if _, err := time.Parse("2006-01-02", heading[2]); err != nil {
-			return fmt.Errorf("published changelog section %s has invalid date %q", heading[1], heading[2])
+		date, ok := strings.CutPrefix(heading[2], " - ")
+		if !ok {
+			return fmt.Errorf("published changelog section %s has invalid date %q", heading[1], strings.TrimSpace(heading[2]))
+		}
+		if _, err := time.Parse("2006-01-02", date); err != nil {
+			return fmt.Errorf("published changelog section %s has invalid date %q", heading[1], date)
 		}
 	}
 	return nil

@@ -32,6 +32,9 @@ func TestValidateChangelog(t *testing.T) {
 		{name: "missing published release", contents: validChangelog + "[9.9.9]: https://github.com/HemSoft/gh-x/releases/tag/v9.9.9\n", latest: "v1.2.3", releasedTags: []string{"v1.2.3"}, wantErr: "names missing GitHub Release v9.9.9"},
 		{name: "wrong release link", contents: strings.Replace(validChangelog, "/releases/tag/v1.2.3", "/compare/v1.2.2...v1.2.3", 1), latest: "v1.2.3", releasedTags: []string{"v1.2.3"}, wantErr: "published changelog link 1.2.3"},
 		{name: "invalid release date", contents: strings.Replace(validChangelog, "2026-09-05", "2026-99-99", 1), latest: "v1.2.3", releasedTags: []string{"v1.2.3"}, wantErr: "invalid date"},
+		{name: "placeholder release date", contents: strings.Replace(validChangelog, "2026-09-05", "TBD", 1), latest: "v1.2.3", releasedTags: []string{"v1.2.3"}, wantErr: "invalid date"},
+		{name: "non-padded release date", contents: strings.Replace(validChangelog, "2026-09-05", "2026-9-5", 1), latest: "v1.2.3", releasedTags: []string{"v1.2.3"}, wantErr: "invalid date"},
+		{name: "missing release date", contents: strings.Replace(validChangelog, " - 2026-09-05", "", 1), latest: "v1.2.3", releasedTags: []string{"v1.2.3"}, wantErr: "invalid date"},
 		{name: "missing authority", contents: strings.Replace(validChangelog, "GitHub Releases is the authoritative source", "Release notes are recorded here", 1), latest: "v1.2.3", releasedTags: []string{"v1.2.3"}, wantErr: "authoritative source"},
 		{name: "non-semantic latest release", contents: validChangelog, latest: "latest", releasedTags: []string{"latest"}, wantErr: "not semantic-versioned"},
 	}
