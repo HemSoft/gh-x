@@ -199,12 +199,19 @@ func main() {
 	require(create.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "release creation must receive the calculated release tag through env")
 	require(strings.TrimSpace(create.Run) == "go run ./.github/scripts/release-plan create", "release creation must use the tested release-plan command")
 
+	existingNotes := namedStep(releaseJob, "Load existing release notes")
+	require(existingNotes.If == "steps.check.outputs.reconcile == 'true'", "release reruns must load existing release notes")
+	require(existingNotes.Env["RELEASE_TAG"] == "${{ steps.check.outputs.release_tag }}", "existing release notes must use the tagged head")
+
 	changelog := namedStep(releaseJob, "Update changelog")
-	require(changelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "changelog update must receive the calculated release tag")
-	require(strings.TrimSpace(changelog.Run) == "go run ./.github/scripts/release-plan changelog", "release workflow must use the tested changelog updater")
+	require(changelog.If == "steps.check.outputs.skip == 'false' || steps.check.outputs.reconcile == 'true'", "changelog update must run for new and resumed releases")
+	require(changelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog update must receive the new or resumed release tag")
+	require(strings.Contains(changelog.Run, "git switch --detach origin/main"), "changelog reconciliation must start from current main")
+	require(strings.Contains(changelog.Run, "go run ./.github/scripts/release-plan changelog"), "release workflow must use the tested changelog updater")
 
 	mergeChangelog := namedStep(releaseJob, "Merge changelog update through CI")
-	require(mergeChangelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "changelog pull request must receive the calculated release tag")
+	require(mergeChangelog.If == "steps.check.outputs.skip == 'false' || steps.check.outputs.reconcile == 'true'", "changelog pull request must run for new and resumed releases")
+	require(mergeChangelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog pull request must receive the new or resumed release tag")
 	require(strings.Contains(mergeChangelog.Run, "gh workflow run ci.yml --ref \"$branch\""), "changelog pull request must run CI on its exact branch")
 	require(strings.Contains(mergeChangelog.Run, "gh run watch \"$run_id\" --exit-status"), "changelog pull request must wait for successful CI")
 	require(strings.Contains(mergeChangelog.Run, "gh pr merge \"$pr_url\" --squash --delete-branch"), "changelog update must merge through a pull request")

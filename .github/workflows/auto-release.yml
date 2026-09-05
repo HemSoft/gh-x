@@ -94,17 +94,27 @@ jobs:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: go run ./.github/scripts/release-plan create
 
-      - name: Update changelog
-        if: steps.check.outputs.skip == 'false'
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: go run ./.github/scripts/release-plan changelog
-
-      - name: Merge changelog update through CI
-        if: steps.check.outputs.skip == 'false'
+      - name: Load existing release notes
+        if: steps.check.outputs.reconcile == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_TAG: ${{ steps.check.outputs.release_tag }}
+        run: gh release view "$RELEASE_TAG" --json body --jq .body > release-notes.md
+
+      - name: Update changelog
+        if: steps.check.outputs.skip == 'false' || steps.check.outputs.reconcile == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}
+        run: |
+          git fetch origin main
+          git switch --detach origin/main
+          go run ./.github/scripts/release-plan changelog
+
+      - name: Merge changelog update through CI
+        if: steps.check.outputs.skip == 'false' || steps.check.outputs.reconcile == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}
         run: |
           set -euo pipefail
           if git diff --quiet -- CHANGELOG.md; then

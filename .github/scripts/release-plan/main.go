@@ -66,15 +66,13 @@ func runCheck() error {
 		return writeOutputs(map[string]string{"skip": "true"})
 	}
 
-	pointingTags, err := gitOutput("tag", "--points-at", "HEAD")
+	pointingTags, err := gitOutput("tag", "--points-at", "HEAD", "--sort=-v:refname")
 	if err != nil {
 		return err
 	}
-	for _, tag := range nonEmptyLines(pointingTags) {
-		if semverTag.MatchString(tag) {
-			fmt.Fprintln(os.Stdout, "HEAD already has a release tag - skipping auto-release")
-			return writeOutputs(map[string]string{"skip": "true"})
-		}
+	if tag := firstSemanticTag(nonEmptyLines(pointingTags)); tag != "" {
+		fmt.Fprintf(os.Stdout, "HEAD already has release tag %s - resuming changelog reconciliation\n", tag)
+		return writeOutputs(map[string]string{"reconcile": "true", "release_tag": tag, "skip": "true"})
 	}
 
 	latest, err := latestReachableTag()
@@ -98,10 +96,10 @@ func runCheck() error {
 	}
 	if !releaseNeeded(nonEmptyLines(changed)) {
 		fmt.Fprintln(os.Stdout, "Only documentation or agent metadata changed - skipping auto-release")
-		return writeOutputs(map[string]string{"latest": latest, "skip": "true", "version_base": versionBase})
+		return writeOutputs(map[string]string{"latest": latest, "reconcile": "false", "skip": "true", "version_base": versionBase})
 	}
 
-	return writeOutputs(map[string]string{"latest": latest, "skip": "false", "version_base": versionBase})
+	return writeOutputs(map[string]string{"latest": latest, "reconcile": "false", "skip": "false", "version_base": versionBase})
 }
 
 func runVersion() error {
