@@ -2,8 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -11,7 +9,7 @@ import (
 
 type actor struct{ Login string }
 type reviewComment struct {
-	Body      string
+	Body, URL string
 	CreatedAt time.Time
 	Author    actor
 }
@@ -23,8 +21,14 @@ type review struct {
 }
 type pageInfo struct{ HasNextPage, HasPreviousPage bool }
 type reviewState struct {
-	HeadRefOID string
-	Comments   struct {
+	HeadRefOID  string
+	CommittedAt time.Time
+	Commits     struct {
+		Nodes []struct {
+			Commit struct{ CommittedDate time.Time }
+		}
+	}
+	Comments struct {
 		Nodes    []reviewComment
 		PageInfo pageInfo
 	}
@@ -38,11 +42,8 @@ type reviewState struct {
 	}
 }
 
-const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid comments(last:100){nodes{body createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}`
+const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid commits(last:1){nodes{commit{committedDate}}} comments(last:100){nodes{body url createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}`
 
-const cubicReviewCheckName = "cubic · AI code reviewer"
-
-var zeroCubicIssues = regexp.MustCompile(`(?i)\b0 issues found\b|\bno issues found\b`)
 var reviewedCommit = regexp.MustCompile("(?i)(?:\\*\\*)?Reviewed commit:(?:\\*\\*)?\\s*`?([0-9a-f]{10,40})\\b`?")
 
 func fetchReviewState(gh command, cfg config, number string) (reviewState, error) {
@@ -53,13 +54,16 @@ func fetchReviewState(gh command, cfg config, number string) (reviewState, error
 	}
 	owner, repo, _ := strings.Cut(cfg.repo, "/")
 	err := readJSON(gh, &response, "api", "graphql", "-f", "query="+reviewQuery, "-f", "owner="+owner, "-f", "repo="+repo, "-F", "number="+number)
-	return response.Data.Repository.PullRequest, err
+	state := response.Data.Repository.PullRequest
+	if len(state.Commits.Nodes) == 1 {
+		state.CommittedAt = state.Commits.Nodes[0].Commit.CommittedDate
+	}
+	return state, err
 }
 
 func codexActor(login string) bool {
 	return login == "chatgpt-codex-connector" || login == "chatgpt-codex-connector[bot]"
 }
-func cubicActor(login string) bool { return login == "cubic-dev-ai" || login == "cubic-dev-ai[bot]" }
 
 func reviewReady(state reviewState, head string) (bool, bool, error) {
 	if state.HeadRefOID != head {
@@ -77,12 +81,38 @@ func reviewReady(state reviewState, head string) (bool, bool, error) {
 		}
 	}
 	clean, latest, requested := codexEvidence(state, head)
+	if outstandingReviewDecision(state, head) {
+		return false, requested, nil
+	}
 	for _, thread := range state.ReviewThreads.Nodes {
 		if !thread.IsResolved {
 			return false, requested, nil
 		}
 	}
 	return !clean.IsZero() && clean.After(latest), requested, nil
+}
+
+// Passive reviewers never add a completion gate, but their actual requests for
+// changes still require assessment. A later approval/dismissal clears one.
+func outstandingReviewDecision(state reviewState, head string) bool {
+	for _, finding := range state.Reviews.Nodes {
+		if finding.Commit.OID == head && finding.State == "CHANGES_REQUESTED" && !clearedReviewDecision(state, finding) {
+			return true
+		}
+	}
+	return false
+}
+
+func clearedReviewDecision(state reviewState, finding review) bool {
+	for _, later := range state.Reviews.Nodes {
+		if later.Author.Login != finding.Author.Login || later.Commit.OID != finding.Commit.OID || !later.SubmittedAt.After(finding.SubmittedAt) {
+			continue
+		}
+		if later.State == "APPROVED" || later.State == "DISMISSED" {
+			return true
+		}
+	}
+	return false
 }
 
 func requestMarker(reviewer, head string) string {
@@ -92,7 +122,7 @@ func requestMarker(reviewer, head string) string {
 func wasRequested(state reviewState, reviewer, head string) bool {
 	for _, comment := range state.Comments.Nodes {
 		// GraphQL returns bare bot logins; REST includes the suffix.
-		trusted := comment.Author.Login == "github-actions" || comment.Author.Login == "github-actions[bot]"
+		trusted := trustedRequester(comment.Author.Login)
 		if trusted && strings.Contains(comment.Body, requestMarker(reviewer, head)) {
 			return true
 		}
@@ -146,75 +176,6 @@ type checkRun struct {
 	HeadSHA                  string `json:"head_sha"`
 	App                      struct{ Slug string }
 	Output                   struct{ Summary, Title string }
-}
-
-func inspectCubic(gh command, cfg config, state reviewState) (bool, bool, error) {
-	var response struct {
-		TotalCount int        `json:"total_count"`
-		CheckRuns  []checkRun `json:"check_runs"`
-	}
-	if err := readJSON(gh, &response, "api", "repos/"+cfg.repo+"/commits/"+cfg.head+"/check-runs?per_page=100&filter=latest&check_name=cubic%20%C2%B7%20AI%20code%20reviewer"); err != nil {
-		return false, false, err
-	}
-	if response.TotalCount > len(response.CheckRuns) {
-		return false, false, errors.New("check evidence truncated; manual review required")
-	}
-	checks, err := latestChecks(cubicReviewChecks(response.CheckRuns), "cubic-dev-ai")
-	if err != nil {
-		// An unorderable rerun is pending; do not post a duplicate request.
-		return false, true, nil
-	}
-	found := false
-	for _, check := range checks {
-		found = true
-		ready, err := cubicReady(check, cfg.head)
-		if err != nil || !ready {
-			return ready, true, err
-		}
-	}
-	// This repository has Cubic configured. Absence is pending, not an explicit skip.
-	return found, found || wasRequested(state, "cubic", cfg.head) || hasCubicReview(state, cfg.head), nil
-}
-
-func cubicReviewChecks(checks []checkRun) []checkRun {
-	var reviews []checkRun
-	for _, check := range checks {
-		if strings.EqualFold(strings.TrimSpace(check.Name), cubicReviewCheckName) {
-			check.Name = cubicReviewCheckName
-			reviews = append(reviews, check)
-		}
-	}
-	return reviews
-}
-
-func hasCubicReview(state reviewState, head string) bool {
-	for _, item := range state.Reviews.Nodes {
-		if cubicActor(item.Author.Login) && item.Commit.OID == head {
-			return true
-		}
-	}
-	return false
-}
-
-func cubicReady(check checkRun, head string) (bool, error) {
-	if check.HeadSHA != head {
-		return false, errors.New("cubic check does not match expected head")
-	}
-	if check.Status != "completed" {
-		return false, nil
-	}
-	text := strings.ToLower(check.Output.Title + " " + check.Output.Summary)
-	if check.Conclusion == "skipped" || (check.Conclusion == "success" && strings.Contains(text, "review skipped")) {
-		fmt.Fprintln(os.Stdout, "Cubic review unavailable/skipped; requiring Codex and all conversations resolved")
-		return true, nil
-	}
-	if check.Conclusion != "success" {
-		return false, errors.New("cubic check did not succeed")
-	}
-	if zeroCubicIssues.MatchString(text) {
-		return true, nil
-	}
-	return false, nil
 }
 
 func ambiguousCodexReview(state reviewState, head string) bool {

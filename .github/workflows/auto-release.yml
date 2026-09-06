@@ -131,6 +131,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          CODEX_REVIEW_TOKEN: ${{ secrets.CODEX_REVIEW_TOKEN }}
         run: |
           set -euo pipefail
           if git diff --quiet -- CHANGELOG.md; then
@@ -160,9 +161,17 @@ jobs:
           else
             echo "Reusing existing changelog pull request: $pr_url"
           fi
+          head_sha=$(git rev-parse HEAD)
+          if [[ -z "$CODEX_REVIEW_TOKEN" ]]; then
+            echo "::error::PR $pr_url head $head_sha requester unavailable: configure CODEX_REVIEW_TOKEN for the connected HemSoft account. No bot review request was posted."
+            exit 1
+          fi
+          # Only this serialized job requests reviews. The dedicated user token
+          # is passed to this command; release/merge operations keep GH_TOKEN.
+          GH_TOKEN="$CODEX_REVIEW_TOKEN" CHANGELOG_BRANCH="$branch" EXPECTED_HEAD="$head_sha" \
+            go run ./.github/scripts/changelog-merge request
           gh workflow run ci.yml --ref "$branch"
 
-          head_sha=$(git rev-parse HEAD)
           CHANGELOG_BRANCH="$branch" EXPECTED_HEAD="$head_sha" \
             go run ./.github/scripts/changelog-merge enable
           # A queued auto-merge is not completion. The helper returns only after merge.
