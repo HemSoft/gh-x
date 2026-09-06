@@ -551,8 +551,9 @@ ambiguous, or superseded evidence cannot pass.
 Connect the `HemSoft` GitHub account to Codex and enable repository code review,
 as described in [OpenAI's GitHub guide](https://learn.chatgpt.com/docs/third-party/github).
 Configure the repository Actions secret `CODEX_REVIEW_TOKEN` with that user's
-GitHub token, granting repository read and pull-request write access. A
-fine-grained token also needs permission to read repository metadata and contents.
+GitHub token, granting pull-request write and contents read/write access. A
+fine-grained token also needs repository metadata read access. The helper
+requires the repository push permission before allowing a new request.
 The helper checks `GET /user` and repository access before posting. This proves
 GitHub identity and access; Codex's response proves the account connection.
 The default `GITHUB_TOKEN` and installation tokens do not inherit that connection.

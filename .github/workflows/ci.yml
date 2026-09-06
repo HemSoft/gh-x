@@ -401,7 +401,7 @@ jobs:
   # Reviewer requests belong to the trusted Auto Release workflow.
   changelog-review:
     name: Changelog AI Review
-    if: startsWith(github.head_ref || github.ref_name, 'chore/changelog-') || inputs.changelog_branch != ''
+    if: startsWith(github.head_ref || github.ref_name, 'chore/changelog-') || inputs.changelog_branch != '' || inputs.changelog_head != ''
     runs-on: ubuntu-latest
     timeout-minutes: 24
     concurrency:
@@ -421,12 +421,18 @@ jobs:
           go-version-file: go.mod
       - name: Require eligible changelog and current-head reviews
         env:
+          INPUT_BRANCH: ${{ inputs.changelog_branch }}
+          INPUT_HEAD: ${{ inputs.changelog_head }}
           WORKFLOW_REF: ${{ github.ref_name }}
           WORKFLOW_HEAD: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
           CHANGELOG_BRANCH: ${{ inputs.changelog_branch || github.head_ref || github.ref_name }}
           EXPECTED_HEAD: ${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}
         run: |
+          if { [[ -n "$INPUT_BRANCH" ]] && [[ -z "$INPUT_HEAD" ]]; } || { [[ -z "$INPUT_BRANCH" ]] && [[ -n "$INPUT_HEAD" ]]; }; then
+            echo "::error::Candidate verification requires both changelog_branch and changelog_head."
+            exit 1
+          fi
           # A changelog branch can only produce a gate for its own immutable head.
           if [[ "$WORKFLOW_REF" == chore/changelog-* ]] && [[ "$CHANGELOG_BRANCH" != "$WORKFLOW_REF" || "$EXPECTED_HEAD" != "$WORKFLOW_HEAD" ]]; then
             echo "::error::Changelog verification inputs cannot override this branch or head."

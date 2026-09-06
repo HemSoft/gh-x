@@ -104,6 +104,9 @@ func outstandingReviewDecision(state reviewState, head string) bool {
 }
 
 func clearedReviewDecision(state reviewState, finding review) bool {
+	if finding.SubmittedAt.IsZero() {
+		return false
+	}
 	for _, later := range state.Reviews.Nodes {
 		if later.Author.Login != finding.Author.Login || later.Commit.OID != finding.Commit.OID || !later.SubmittedAt.After(finding.SubmittedAt) {
 			continue

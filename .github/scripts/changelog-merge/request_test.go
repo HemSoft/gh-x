@@ -150,6 +150,61 @@ func TestVerifierBudgetIncludesLateRequest(t *testing.T) {
 	}
 }
 
+func TestPassiveReviewCannotClearAnUnknownTimestamp(t *testing.T) {
+	state := cleanState()
+	finding := review{State: "CHANGES_REQUESTED", Author: actor{"cubic-dev-ai"}}
+	finding.Commit.OID = testHead
+	approval := finding
+	approval.State, approval.SubmittedAt = "APPROVED", time.Now()
+	state.Reviews.Nodes = []review{finding, approval}
+	ready, _, _ := reviewReady(state, testHead)
+	if ready {
+		t.Fatal("missing finding timestamp must remain outstanding")
+	}
+}
+
+func TestReviewTextIsNotAnAccessRefusal(t *testing.T) {
+	for _, body := range []string{"Codex Review: Didn't find any major issues.\nReviewed commit: " + testHead + "\nQuota accounting looks correct.", "The quota variable is unused.", "Consider handling permission denied in this function."} {
+		if got := refusalCorrection(body); got != "" {
+			t.Fatalf("ordinary review misclassified: %s", body)
+		}
+	}
+}
+
+func TestRefusalMustFollowItsOwnRequest(t *testing.T) {
+	state := cleanState()
+	request := markedRequest("HemSoft", time.Now().Add(-time.Minute))
+	for _, at := range []time.Time{{}, request.CreatedAt} {
+		state.Comments.Nodes = []reviewComment{request, {Body: "quota exceeded", Author: actor{"chatgpt-codex-connector"}, CreatedAt: at, URL: "response-url"}}
+		if _, _, err := requestRefusal(state, request); err == nil {
+			t.Fatal("missing or tied response timestamps must be ambiguous")
+		}
+	}
+	otherHead := markedRequest("HemSoft", request.CreatedAt.Add(time.Second))
+	otherHead.Body = strings.ReplaceAll(otherHead.Body, testHead, strings.Repeat("f", 40))
+	state.Comments.Nodes = []reviewComment{request, otherHead, {Body: "quota exceeded", Author: actor{"chatgpt-codex-connector"}, CreatedAt: otherHead.CreatedAt.Add(time.Second)}}
+	if _, correction, err := requestRefusal(state, request); correction != "" || err != nil {
+		t.Fatalf("response to another request must not be attributed to this head: %s,%v", correction, err)
+	}
+}
+
+func TestRequesterAccessUsesSelectedRepository(t *testing.T) {
+	cfg := testConfig
+	cfg.repo = "HemSoft/another-repo"
+	gh := func(args ...string) ([]byte, error) {
+		if args[1] == "user" {
+			return []byte(`{"login":"HemSoft","type":"User"}`), nil
+		}
+		if args[1] != "repos/"+cfg.repo {
+			t.Fatalf("checked wrong repository: %v", args)
+		}
+		return []byte(`{"permissions":{"push":true}}`), nil
+	}
+	if err := verifyRequester(gh, cfg); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRefusalDoesNotOverrideLaterHeadReceipt(t *testing.T) {
 	state := cleanState()
 	clean := state.Comments.Nodes[0]
@@ -216,7 +271,7 @@ func TestUnsupportedRequesterNeverPosts(t *testing.T) {
 		}
 	}
 	gh := func(...string) ([]byte, error) { return nil, errors.New("token-secret must not appear") }
-	if err := verifyRequester(gh); err == nil || strings.Contains(err.Error(), "token-secret") {
+	if err := verifyRequester(gh, testConfig); err == nil || strings.Contains(err.Error(), "token-secret") {
 		t.Fatalf("authentication error must be actionable and redacted: %v", err)
 	}
 }

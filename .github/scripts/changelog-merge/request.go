@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -35,36 +36,63 @@ func latestRequest(state reviewState, head string) (reviewComment, error) {
 	return latest, nil
 }
 
+var accessRefusal = regexp.MustCompile(`(?i)^(?:to use codex here,?\s*|(?:please )?create a codex account|(?:please )?connect to github|permission denied|not authorized|access denied|(?:codex |you |this account )does not have access|code review is not enabled)`)
+var quotaRefusal = regexp.MustCompile(`(?i)^(?:(?:codex )?(?:usage|rate) limit|quota (?:exceeded|exhausted)|(?:please )?upgrade (?:your plan|to a paid)|insufficient credits|you(?: have|'ve) (?:hit|reached|exceeded) (?:your |the )?(?:codex )?(?:usage|rate|review|code review)|(?:codex )?review (?:is unavailable|requires a paid plan))`)
+
 func refusalCorrection(body string) string {
-	text := strings.ToLower(body)
-	for _, pattern := range []string{"create a codex account", "connect to github", "permission denied", "not authorized", "access denied", "does not have access", "code review is not enabled"} {
-		if strings.Contains(text, pattern) {
-			return "connect HemSoft to Codex, grant repository access, and enable code review"
-		}
+	text := strings.TrimSpace(body)
+	// Review receipts/summaries and quoted code are evidence, not standalone
+	// access responses, even when they discuss permissions or quota handling.
+	if reviewedCommit.MatchString(text) || strings.Contains(text, "<!-- codex-pull-request-review-summary -->") {
+		return ""
 	}
-	for _, pattern := range []string{"usage limit", "rate limit", "quota", "paid plan", "upgrade your plan", "upgrade to a paid", "insufficient credits"} {
-		if strings.Contains(text, pattern) {
-			return "restore the connected account's Codex quota or plan access before an explicit retry"
-		}
+	if accessRefusal.MatchString(text) {
+		return "connect HemSoft to Codex, grant repository access, and enable code review"
+	}
+	if quotaRefusal.MatchString(text) {
+		return "restore the connected account's Codex quota or plan access before an explicit retry"
 	}
 	return ""
 }
 
-func requestRefusal(state reviewState, request reviewComment) (reviewComment, string) {
+func requestRefusal(state reviewState, request reviewComment) (reviewComment, string, error) {
 	var response reviewComment
 	var correction string
 	if request.CreatedAt.IsZero() {
-		return response, correction
+		return response, correction, nil
 	}
 	for _, c := range state.Comments.Nodes {
-		if !codexActor(c.Author.Login) || (!c.CreatedAt.IsZero() && c.CreatedAt.Before(request.CreatedAt)) {
+		if !codexActor(c.Author.Login) {
 			continue
 		}
-		if fix := refusalCorrection(c.Body); fix != "" && (c.CreatedAt.IsZero() || c.CreatedAt.After(response.CreatedAt)) {
+		fix := refusalCorrection(c.Body)
+		if fix == "" || (!c.CreatedAt.IsZero() && c.CreatedAt.Before(request.CreatedAt)) {
+			continue
+		}
+		if c.CreatedAt.IsZero() || c.CreatedAt.Equal(request.CreatedAt) {
+			return c, "", fmt.Errorf("ambiguous Codex response timestamp at %s; inspect request %s before retrying", c.URL, request.URL)
+		}
+		if !responseBelongsToRequest(state, request, c) {
+			continue
+		}
+		if c.CreatedAt.After(response.CreatedAt) {
 			response, correction = c, fix
 		}
 	}
-	return response, correction
+	return response, correction, nil
+}
+
+func responseBelongsToRequest(state reviewState, request, response reviewComment) bool {
+	for _, c := range state.Comments.Nodes {
+		if !trustedRequester(c.Author.Login) {
+			continue
+		}
+		first, _, _ := strings.Cut(strings.TrimSpace(c.Body), "\n")
+		if first == "@codex review" && c.CreatedAt.After(request.CreatedAt) && !c.CreatedAt.After(response.CreatedAt) {
+			return false
+		}
+	}
+	return true
 }
 
 func reviewBlocked(cfg config, number string, request reviewComment, responseURL, reason string) error {
@@ -98,7 +126,10 @@ func pendingReview(state reviewState, cfg config, number string, now time.Time) 
 	if err != nil {
 		return err
 	}
-	response, correction := requestRefusal(state, request)
+	response, correction, err := requestRefusal(state, request)
+	if err != nil {
+		return err
+	}
 	if correction != "" {
 		return reviewBlocked(cfg, number, request, response.URL, "Codex refused this request; "+correction)
 	}
@@ -123,7 +154,10 @@ func currentRequestAllowsClean(state reviewState, cfg config, number string) (bo
 		return false, err
 	}
 	clean, _, _ := codexEvidence(state, cfg.head)
-	response, correction := requestRefusal(state, request)
+	response, correction, err := requestRefusal(state, request)
+	if err != nil {
+		return false, err
+	}
 	// A later clean receipt for this immutable head supersedes an earlier bot
 	// refusal. A new request or refusal after that receipt still blocks.
 	if correction != "" && (response.CreatedAt.IsZero() || !clean.After(response.CreatedAt)) {
@@ -135,7 +169,7 @@ func currentRequestAllowsClean(state reviewState, cfg config, number string) (bo
 	return true, nil
 }
 
-func verifyRequester(gh command) error {
+func verifyRequester(gh command, cfg config) error {
 	var user struct{ Login, Type string }
 	if err := readJSON(gh, &user, "api", "user"); err != nil {
 		return errors.New("cannot verify connected requester; configure CODEX_REVIEW_TOKEN for HemSoft, with repository read and pull-request write access")
@@ -144,7 +178,7 @@ func verifyRequester(gh command) error {
 		return fmt.Errorf("requester %s is unsupported; use the connected HemSoft user token, not GITHUB_TOKEN or an installation token", user.Login)
 	}
 	var repo struct{ Permissions struct{ Push bool } }
-	if err := readJSON(gh, &repo, "api", "repos/HemSoft/gh-x"); err != nil || !repo.Permissions.Push {
+	if err := readJSON(gh, &repo, "api", "repos/"+cfg.repo); err != nil || !repo.Permissions.Push {
 		return errors.New("HemSoft requester lacks verified repository write access")
 	}
 	return nil
@@ -168,7 +202,10 @@ func requestNeeded(state reviewState, cfg config, number string) (bool, error) {
 	if request.Author.Login == connectedRequester {
 		return false, pendingReview(state, cfg, number, time.Now())
 	}
-	_, correction := requestRefusal(state, request)
+	_, correction, err := requestRefusal(state, request)
+	if err != nil {
+		return false, err
+	}
 	if requested && correction == "" {
 		return false, reviewBlocked(cfg, number, request, request.URL, "existing Codex evidence requires assessment; no duplicate request posted")
 	}
@@ -184,7 +221,7 @@ func ensureRequest(gh command, cfg config, number string) error {
 	if err != nil || !needed {
 		return err
 	}
-	if err := verifyRequester(gh); err != nil {
+	if err := verifyRequester(gh, cfg); err != nil {
 		return reviewBlocked(cfg, number, reviewComment{}, "", err.Error())
 	}
 	if err := inspectEligibility(gh, cfg, number); err != nil {
