@@ -109,7 +109,13 @@ and label filters keep the factual `No issues found.` message.
 ## What `gh x status` adds
 
 `gh x status` starts with a repository health header for the resolved default
-branch and current worktree. It counts local, remote, and dangling branches,
+branch and current worktree. Each invocation shows the current local date and
+time as `YYYY-MM-DD hh:mm AM/PM ZONE`, for example `2026-09-05 12:32 PM EDT`.
+The zero-padded 12-hour clock and zone abbreviation follow the machine's local
+time zone, including daylight saving time. The timestamp also appears in plain
+redirected output and when GitHub sections are unavailable.
+
+The header counts local, remote, and dangling branches,
 then reports linked worktrees and conservative cleanup candidates. A linked
 worktree is suggested only when it is unlocked, clean, merged into the default
 branch, and has no open pull request. Git-prunable records must also have a

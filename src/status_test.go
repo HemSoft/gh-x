@@ -428,6 +428,82 @@ func TestRenderStatusNoColor(t *testing.T) {
 	}
 }
 
+func TestRenderStatusLocalTime(t *testing.T) {
+	defer saveStatusFuncs()()
+	savedLocal := time.Local
+	t.Cleanup(func() { time.Local = savedLocal })
+	tests := []struct {
+		name, zone, instant, want string
+	}{
+		{"daylight time", "America/New_York", "2026-09-05T16:32:59Z", "2026-09-05 12:32 PM EDT"},
+		{"standard time", "America/New_York", "2026-01-05T17:32:59Z", "2026-01-05 12:32 PM EST"},
+		{"noon", "America/New_York", "2026-09-05T16:00:00Z", "2026-09-05 12:00 PM EDT"},
+		{"midnight", "America/New_York", "2026-09-05T04:00:00Z", "2026-09-05 12:00 AM EDT"},
+		{"previous local date", "America/Los_Angeles", "2026-01-05T02:07:00Z", "2026-01-04 06:07 PM PST"},
+		{"next local date", "Asia/Kolkata", "2026-09-05T20:35:00Z", "2026-09-06 02:05 AM IST"},
+		{"UTC", "UTC", "2026-09-05T09:03:00Z", "2026-09-05 09:03 AM UTC"},
+		{"before spring transition", "America/New_York", "2026-03-08T06:59:00Z", "2026-03-08 01:59 AM EST"},
+		{"after spring transition", "America/New_York", "2026-03-08T07:00:00Z", "2026-03-08 03:00 AM EDT"},
+		{"before fall transition", "America/New_York", "2026-11-01T05:59:00Z", "2026-11-01 01:59 AM EDT"},
+		{"after fall transition", "America/New_York", "2026-11-01T06:00:00Z", "2026-11-01 01:00 AM EST"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			location, err := time.LoadLocation(tc.zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			time.Local = location
+			now, err := time.Parse(time.RFC3339, tc.instant)
+			if err != nil {
+				t.Fatal(err)
+			}
+			statusNowFunc = func() time.Time { return now }
+			for _, color := range []bool{false, true} {
+				var buf bytes.Buffer
+				dashboard := sampleStatusDashboard()
+				dashboard.IssuesErr = errors.New("offline")
+				dashboard.PullRequestsErr = errors.New("offline")
+				dashboard.WorkflowRunsErr = errors.New("offline")
+				if err := renderStatus(&buf, dashboard, color); err != nil {
+					t.Fatal(err)
+				}
+				output := buf.String()
+				for _, want := range []string{"Local time", tc.want, "Repository", "Main", "Current", "Branches", "Worktrees"} {
+					if !strings.Contains(output, want) {
+						t.Fatalf("color=%t: missing %q:\n%s", color, want, output)
+					}
+				}
+				if strings.Contains(output, "\x1b") != color {
+					t.Fatalf("color=%t: unexpected escape sequence presence:\n%q", color, output)
+				}
+				if strings.Count(output, "Unavailable: offline") != 3 {
+					t.Fatalf("color=%t: missing unavailable sections:\n%s", color, output)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderStatusLocalTimeAdvances(t *testing.T) {
+	defer saveStatusFuncs()()
+	savedLocal := time.Local
+	t.Cleanup(func() { time.Local = savedLocal })
+	time.Local = time.UTC
+	now := time.Date(2026, 9, 5, 23, 59, 59, 0, time.UTC)
+	statusNowFunc = func() time.Time { return now }
+	for _, want := range []string{"2026-09-05 11:59 PM UTC", "2026-09-06 12:00 AM UTC"} {
+		var buf bytes.Buffer
+		if err := renderStatus(&buf, sampleStatusDashboard(), false); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("missing refreshed timestamp %q:\n%s", want, buf.String())
+		}
+		now = now.Add(time.Minute)
+	}
+}
+
 func TestRenderStatusColorHasLinksButNoClipboard(t *testing.T) {
 	dashboard := sampleStatusDashboard()
 	var buf bytes.Buffer
@@ -572,6 +648,7 @@ func TestRenderStatusWorkflowRunSection(t *testing.T) {
 func TestRunStatusAliasesUseFetcher(t *testing.T) {
 	useBacklogPraiseIndex(t, 0)
 	defer saveStatusFuncs()()
+	statusNowFunc = func() time.Time { return time.Date(2026, 9, 5, 16, 32, 0, 0, time.UTC) }
 	fetchStatusDashboardFunc = func(bool) (statusDashboard, error) {
 		return statusDashboard{Repository: "owner/repo"}, nil
 	}
