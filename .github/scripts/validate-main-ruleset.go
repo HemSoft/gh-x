@@ -153,11 +153,12 @@ func main() {
 
 	gate := ci.Jobs["gate"]
 	require(gate.Name == "Quality Gate", "CI must publish the Quality Gate check")
-	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review", "changelog-review"), "Quality Gate must depend on every build, quality, and security job")
+	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review", "changelog-review", "performance"), "Quality Gate must depend on every build, quality, security, and performance job")
 	gateRun := namedStep(gate, "Evaluate all gates").Run
 	require(strings.Contains(gateRun, `"${{ needs.security-analysis.result }}" != "success"`), "Quality Gate must reject failed CodeQL analysis")
 	require(strings.Contains(gateRun, `"${{ needs.dependency-review.result }}" != "success"`), "Quality Gate must reject failed dependency review")
 	require(strings.Contains(gateRun, `"${{ needs.changelog-review.result }}" != "success"`), "Quality Gate must reject failed changelog review")
+	require(strings.Contains(gateRun, `"${{ needs.performance.result }}" != "success"`), "Quality Gate must reject failed performance budgets")
 	require(strings.Contains(gateRun, "::error::One or more quality gates failed"), "Quality Gate must report a failed dependency")
 	require(strings.Contains(gateRun, "exit 1"), "Quality Gate must fail when a dependency is unsuccessful")
 

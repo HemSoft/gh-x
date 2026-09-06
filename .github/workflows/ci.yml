@@ -440,13 +440,45 @@ jobs:
           fi
           go run ./.github/scripts/changelog-merge review
 
+  performance:
+    name: Performance Budgets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+      - name: Detect performance workload changes
+        id: scope
+        run: node benchmarks/changed.mjs
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        if: steps.scope.outputs.run == 'true'
+        with:
+          go-version-file: go.mod
+      - name: Test performance gate
+        run: node --test benchmarks/*.test.mjs
+      - name: Measure critical local paths
+        if: steps.scope.outputs.run == 'true'
+        run: node benchmarks/run.mjs --out "$RUNNER_TEMP/performance"
+      - name: Upload performance evidence
+        if: always() && steps.scope.outputs.run == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/performance
+          retention-days: 30
+          if-no-files-found: error
+
   # ── Final Gate ─────────────────────────────────────────────────
   # Single required status check for branch protection
   gate:
     name: Quality Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [build-and-test, lint, quality, mutation, security-analysis, dependency-review, changelog-review]
+    needs: [build-and-test, lint, quality, mutation, security-analysis, dependency-review, changelog-review, performance]
     steps:
       - name: Evaluate all gates
         run: |
@@ -457,13 +489,15 @@ jobs:
           echo "CodeQL:       ${{ needs.security-analysis.result }}"
           echo "Dependencies: ${{ needs.dependency-review.result }}"
           echo "Changelog AI: ${{ needs.changelog-review.result }}"
+          echo "Performance:  ${{ needs.performance.result }}"
 
           if [[ "${{ needs.build-and-test.result }}" != "success" || \
                 "${{ needs.lint.result }}" != "success" || \
                 "${{ needs.quality.result }}" != "success" || \
                 "${{ needs.mutation.result }}" != "success" || \
                 "${{ needs.security-analysis.result }}" != "success" || \
-                "${{ needs.dependency-review.result }}" != "success" ]]; then
+                "${{ needs.dependency-review.result }}" != "success" || \
+                "${{ needs.performance.result }}" != "success" ]]; then
             echo "::error::One or more quality gates failed"
             exit 1
           fi

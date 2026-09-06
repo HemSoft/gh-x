@@ -1,0 +1,14 @@
+{
+  "go/PR/small": { "ns": 500000, "bytes": 50000, "allocs": 1600 },
+  "go/PR/large": { "ns": 10000000, "bytes": 1000000, "allocs": 37000 },
+  "go/Issue/small": { "ns": 400000, "bytes": 35000, "allocs": 1000 },
+  "go/Issue/large": { "ns": 8000000, "bytes": 700000, "allocs": 22000 },
+  "go/Status/small": { "ns": 1200000, "bytes": 90000, "allocs": 2900 },
+  "go/Status/large": { "ns": 20000000, "bytes": 1700000, "allocs": 59000 },
+  "go/Monitor/small": { "ns": 40000, "bytes": 25000, "allocs": 120 },
+  "go/Monitor/large": { "ns": 1000000, "bytes": 600000, "allocs": 4300 },
+  "node/cold/small": { "ms": 10, "retainedBytes": 262144 },
+  "node/warm/small": { "ms": 3, "retainedBytes": 262144 },
+  "node/cold/large": { "ms": 400, "retainedBytes": 1048576 },
+  "node/warm/large": { "ms": 8, "retainedBytes": 1048576 }
+}

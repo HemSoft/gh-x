@@ -468,6 +468,12 @@ A convenience script is provided for Windows:
 .\build.ps1   # runs vet → test → build
 ```
 
+### Performance measurements
+
+Run `node benchmarks/run.mjs` for offline synthetic rendering, monitor and Codex
+snapshot benchmarks. The [performance guide](benchmarks/README.md) documents
+the fixtures, versioned budgets, sampling policy and retained CI artifacts.
+
 ### Dependency updates
 
 Dependabot checks Go modules and GitHub Actions every Monday at 09:00 Eastern.
