@@ -540,12 +540,74 @@ Only same-repository `github-actions[bot]` PRs targeting `main`, using a
 `chore/changelog-X.Y.Z` branch, and modifying only `CHANGELOG.md` qualify.
 The normal Quality Gate includes a changelog AI-review job for that branch
 namespace, on both PR and manually dispatched CI runs, using a read-only token.
-The trusted release workflow requests missing reviews once per reviewer and
-commit. The CI job requires a clean
-current-head Codex receipt and resolved conversations. Cubic's latest check must
-report zero issues or explicitly skip review; a separate review comment cannot
-override findings in that check. Missing, stale, truncated, or failed review evidence leaves
-the gate blocked. Other PRs keep the existing quality gates.
+The trusted release workflow requests connected Codex only. Cubic and other
+optional products are not requested or awaited; actionable findings and unresolved
+conversations still require assessment. The CI job accepts only a clean Codex
+receipt or approval attributable to the current head. Missing, stale, truncated,
+ambiguous, or superseded evidence cannot pass.
+
+### Connected requester setup and recovery
+
+Connect the `HemSoft` GitHub account to Codex and enable repository code review,
+as described in [OpenAI's GitHub guide](https://learn.chatgpt.com/docs/third-party/github).
+Configure the repository Actions secret `CODEX_REVIEW_TOKEN` with that user's
+GitHub token, granting pull-request write and contents read/write access. A
+fine-grained token also needs repository metadata read access. The helper
+requires the repository push permission before allowing a new request.
+The helper checks `GET /user` and repository access before posting. This proves
+GitHub identity and access; Codex's response proves the account connection.
+The default `GITHUB_TOKEN` and installation tokens do not inherit that connection.
+Missing credentials or an unsupported identity produce an actionable error.
+The user token is supplied only to the review-request command. Release creation
+and guarded merge retain the workflow's bot token.
+
+`Auto Release` is the sole automated request owner, serialized by its existing
+non-canceling concurrency group. Request comments persist the head, author, URL,
+and GitHub creation time. Verification jobs never post requests. They replace an
+older verification job for the same branch/head and reuse the original ten-minute
+deadline. A setup race uses the head commit's timestamp for its bounded window.
+Refusal comments persist terminal access, quota, plan, or configuration failures;
+reruns report the same failure immediately with the response URL and correction.
+A timeout derives from the original request time, so reruns cannot reset it.
+Auto Release also preserves the remote changelog head when its content is
+unchanged, including after main advances. Only changed notes create a new head.
+
+After correcting a refused bot request, a connected `HemSoft` session can run the
+helper from a reviewed checkout. Do not run a manual request concurrently with
+`Auto Release`; it owns automated requests. In PowerShell:
+
+```powershell
+$env:GITHUB_REPOSITORY = 'HemSoft/gh-x'
+$env:CHANGELOG_BRANCH = 'chore/changelog-0.11.8'
+$env:EXPECTED_HEAD = '<exact 40-character PR head>'
+gh api user --jq .login
+go run ./.github/scripts/changelog-merge request
+go run ./.github/scripts/changelog-merge review
+```
+
+The request command reuses existing current-head evidence. It permits one human
+replacement of an explicitly refused bot request. Re-requesting after a human
+request's refusal or timeout requires an explicit access repair and manual review
+decision; automatic reruns never retrigger it. A timeout ends waiting, not the
+validity of subsequently available review evidence. A genuine later clean receipt
+for the same head can pass verification without another trigger or wait, including
+after an old bot refusal. Silence, timeout, or refusal alone can never pass.
+Never remove comments or create empty commits to reset a wait.
+Once clean evidence exists, rerun CI with `gh workflow run ci.yml --ref <branch>`.
+The `enable` command waits for that CI gate and revalidates evidence before it can
+queue a merge; `request` and `review` never enable auto-merge.
+Auto Release captures the dispatched CI run ID using the versioned GitHub API,
+waits for that exact run to succeed, and verifies its head before calling `enable`.
+An older failed check cannot abort recovery before the replacement run appears.
+
+To verify a candidate helper revision against an existing bot PR before deployment,
+dispatch CI from the reviewed candidate branch with `changelog_branch` and
+`changelog_head` inputs. It checks that live PR using a read-only token and the
+explicit workflow revision. Normal PR and changelog-branch CI use the trusted
+default-branch helper. A changelog-branch run cannot override its own target.
+The candidate run's check belongs to the candidate SHA, so it does not replace
+the changelog PR's required check. Repeat the dispatch to verify evidence reuse
+without another comment or review charge.
 
 Repository auto-merge must be enabled. The release workflow rechecks reviews
 immediately before queueing and every 30 seconds while queued. Changed or

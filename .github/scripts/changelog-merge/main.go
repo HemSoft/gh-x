@@ -65,8 +65,8 @@ func ghCommand(ctx context.Context) command {
 }
 
 func run(ctx context.Context, cfg config, args []string, gh command) error {
-	if len(args) != 1 || (args[0] != "review" && args[0] != "enable") {
-		return errors.New("usage: changelog-merge <review|enable>")
+	if len(args) != 1 || (args[0] != "review" && args[0] != "enable" && args[0] != "request") {
+		return errors.New("usage: changelog-merge <request|review|enable>")
 	}
 	if !repoPattern.MatchString(cfg.repo) || !branchPattern.MatchString(cfg.branch) || !shaPattern.MatchString(cfg.head) {
 		return errors.New("invalid repository, changelog branch, or expected head")
@@ -83,10 +83,10 @@ func run(ctx context.Context, cfg config, args []string, gh command) error {
 		return err
 	}
 	if args[0] == "review" {
-		return waitForReview(ctx, gh, cfg, number, false)
+		return waitForReview(ctx, gh, cfg, number)
 	}
-	if err := waitForReview(ctx, gh, cfg, number, true); err != nil {
-		return err
+	if args[0] == "request" {
+		return ensureRequest(gh, cfg, number)
 	}
 	if err := waitForReviewGate(ctx, gh, cfg); err != nil {
 		return err
@@ -178,7 +178,7 @@ func waitForMerge(ctx context.Context, gh command, cfg config, number string) er
 }
 
 func requireCurrentReviews(gh command, cfg config, number string) error {
-	ready, err := pollReview(gh, cfg, number, nil, false)
+	ready, err := pollReview(gh, cfg, number)
 	if err != nil {
 		return err
 	}
@@ -215,15 +215,14 @@ func commandContext(ctx context.Context, args []string) context.Context {
 	return ctx
 }
 
-func waitForReview(ctx context.Context, gh command, cfg config, number string, allowRequests bool) error {
+func waitForReview(ctx context.Context, gh command, cfg config, number string) error {
 	ctx, cancel := context.WithTimeout(ctx, executionTimeout([]string{"review"}))
 	defer cancel()
-	sent := map[string]bool{}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		ready, err := pollReview(gh, cfg, number, sent, allowRequests)
+		ready, err := pollReview(gh, cfg, number)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -239,7 +238,7 @@ func waitForReview(ctx context.Context, gh command, cfg config, number string, a
 	}
 }
 
-func pollReview(gh command, cfg config, number string, sent map[string]bool, allowRequests bool) (bool, error) {
+func pollReview(gh command, cfg config, number string) (bool, error) {
 	if err := inspectEligibility(gh, cfg, number); err != nil {
 		return false, err
 	}
@@ -247,44 +246,14 @@ func pollReview(gh command, cfg config, number string, sent map[string]bool, all
 	if err != nil {
 		return false, err
 	}
-	ready, requested, err := reviewReady(state, cfg.head)
+	ready, _, err := reviewReady(state, cfg.head)
 	if err != nil {
 		return false, err
 	}
-	cubicReady, cubicRequested, err := inspectCubic(gh, cfg, state)
-	if err != nil {
-		return false, err
+	if ready {
+		return currentRequestAllowsClean(state, cfg, number)
 	}
-	if !allowRequests {
-		return ready && cubicReady, nil
-	}
-	if !requested {
-		if err := requestReview(gh, cfg, number, "codex", sent); err != nil {
-			return false, err
-		}
-	}
-	if !cubicRequested {
-		if err := requestReview(gh, cfg, number, "cubic", sent); err != nil {
-			return false, err
-		}
-	}
-	return ready && cubicReady, nil
-}
-
-func requestReview(gh command, cfg config, number, reviewer string, sent map[string]bool) error {
-	if sent[reviewer] {
-		return nil
-	}
-	trigger := "@codex review"
-	if reviewer == "cubic" {
-		trigger = "@cubic-dev-ai review this PR"
-	}
-	body := trigger + "\n\n" + requestMarker(reviewer, cfg.head)
-	if _, err := gh("pr", "comment", number, "--repo", cfg.repo, "--body", body); err != nil {
-		return err
-	}
-	sent[reviewer] = true
-	return nil
+	return false, pendingReview(state, cfg, number, time.Now())
 }
 
 // A legacy CI workflow without this job must not be auto-merged by this helper.
@@ -338,5 +307,7 @@ func executionTimeout(args []string) time.Duration {
 	if len(args) == 1 && args[0] == "enable" {
 		return 90 * time.Minute
 	}
-	return 30 * time.Minute
+	// Allow a full setup window plus the persisted request window. This is
+	// only a process watchdog; pendingReview enforces the original deadline.
+	return 2*reviewWindow + 2*time.Minute
 }

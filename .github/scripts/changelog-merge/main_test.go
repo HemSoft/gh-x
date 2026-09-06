@@ -136,31 +136,6 @@ func TestReviewEvidence(t *testing.T) {
 	}
 }
 
-func TestCubicEvidence(t *testing.T) {
-	tests := []struct {
-		name, status, conclusion, summary string
-		ready, wantError                  bool
-	}{
-		{"clean", "completed", "success", "0 issues found", true, false},
-		{"ten issues are not zero", "completed", "success", "10 issues found", false, false},
-		{"findings", "completed", "success", "1 issue found", false, false},
-		{"pending", "in_progress", "", "Reviewing", false, false},
-		{"failed", "completed", "failure", "failed", false, true},
-		{"skipped", "completed", "skipped", "Review skipped", true, false},
-		{"successful skip", "completed", "success", "Review skipped", true, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			check := checkRun{Status: tt.status, Conclusion: tt.conclusion, HeadSHA: testHead}
-			check.Output.Summary = tt.summary
-			ready, err := cubicReady(check, testHead)
-			if ready != tt.ready || (err != nil) != tt.wantError {
-				t.Fatalf("got %v,%v", ready, err)
-			}
-		})
-	}
-}
-
 func encode(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)
@@ -184,7 +159,7 @@ func TestEnableWaitsForReviewGateAndPinsMerge(t *testing.T) {
 			return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": cleanState()}}}), nil
 		case strings.Contains(joined, "check-runs?per_page"):
 			check := checkRun{Status: "completed", Conclusion: "success", HeadSHA: testHead}
-			check.Name = cubicReviewCheckName
+			check.Name = "cubic · AI code reviewer"
 			check.App.Slug = "cubic-dev-ai"
 			check.Output.Summary = "0 issues found"
 			return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
@@ -209,7 +184,7 @@ func TestEnableWaitsForReviewGateAndPinsMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"pr", "merge", "12", "--repo", "HemSoft/gh-x", "--auto", "--squash", "--match-head-commit", testHead}
-	if !reflect.DeepEqual(mergeArgs, want) || reads != 5 {
+	if !reflect.DeepEqual(mergeArgs, want) || reads != 3 {
 		t.Fatalf("merge=%v, reads=%d", mergeArgs, reads)
 	}
 }
@@ -260,7 +235,7 @@ func TestWorkflowReviewGateUsesTrustedCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	job := workflow.Jobs["changelog-review"]
-	if job.Steps[0].With["ref"] != "${{ github.event.repository.default_branch }}" || job.Steps[0].With["persist-credentials"] != "false" {
+	if job.Steps[0].With["ref"] != "${{ github.event_name == 'workflow_dispatch' && inputs.changelog_branch != '' && github.sha || github.event.repository.default_branch }}" || job.Steps[0].With["persist-credentials"] != "false" {
 		t.Fatal("privileged review must use trusted default branch without persisted credentials")
 	}
 	if job.Permissions["pull-requests"] != "read" || job.Permissions["contents"] != "read" {
@@ -274,14 +249,6 @@ func TestWorkflowReviewGateUsesTrustedCode(t *testing.T) {
 	}
 }
 
-func TestMissingCubicCheckIsPending(t *testing.T) {
-	gh := func(...string) ([]byte, error) { return []byte(`{"total_count":0,"check_runs":[]}`), nil }
-	ready, _, err := inspectCubic(gh, testConfig, cleanState())
-	if err != nil || ready {
-		t.Fatalf("missing configured Cubic check must wait, got %v,%v", ready, err)
-	}
-}
-
 func TestRequestsUseTrustedGraphQLIdentity(t *testing.T) {
 	for _, login := range []string{"github-actions", "github-actions[bot]", "stranger"} {
 		s := cleanState()
@@ -292,39 +259,6 @@ func TestRequestsUseTrustedGraphQLIdentity(t *testing.T) {
 		if wasRequested(s, "codex", testHead) {
 			t.Fatal("Cubic marker must not suppress Codex")
 		}
-	}
-}
-
-func TestPollRequestsMissingCubicOnlyOnce(t *testing.T) {
-	comments := 0
-	gh := func(args ...string) ([]byte, error) {
-		joined := strings.Join(args, " ")
-		switch {
-		case args[0] == "pr" && args[1] == "comment":
-			comments++
-			if !strings.Contains(joined, "@cubic-dev-ai review this PR") || !strings.Contains(joined, requestMarker("cubic", testHead)) {
-				t.Fatalf("unexpected request: %v", args)
-			}
-			return nil, nil
-		case args[0] == "api" && args[1] == "graphql":
-			return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": cleanState()}}}), nil
-		case strings.Contains(joined, "/files?"):
-			return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
-		case strings.Contains(joined, "check-runs?"):
-			return []byte(`{"total_count":0,"check_runs":[]}`), nil
-		default:
-			return encode(t, validPR()), nil
-		}
-	}
-	sent := map[string]bool{}
-	for i := 0; i < 2; i++ {
-		ready, err := pollReview(gh, testConfig, "12", sent, true)
-		if err != nil || ready {
-			t.Fatalf("absent Cubic must wait: %v,%v", ready, err)
-		}
-	}
-	if comments != 1 {
-		t.Fatalf("duplicate review requests: %d", comments)
 	}
 }
 
@@ -346,6 +280,7 @@ func TestReadOnlyReviewNeverRequests(t *testing.T) {
 		case args[1] == "graphql":
 			state := cleanState()
 			state.Comments.Nodes = nil
+			state.CommittedAt = time.Now()
 			return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": state}}}), nil
 		case strings.Contains(joined, "/files?"):
 			return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
@@ -356,48 +291,9 @@ func TestReadOnlyReviewNeverRequests(t *testing.T) {
 		}
 		return nil, nil
 	}
-	ready, err := pollReview(gh, testConfig, "12", map[string]bool{}, false)
+	ready, err := pollReview(gh, testConfig, "12")
 	if err != nil || ready {
 		t.Fatalf("missing reviews must wait without writes: %v,%v", ready, err)
-	}
-}
-
-func TestLatestReviewCheckWins(t *testing.T) {
-	for _, oldStatus := range []string{"failure", "pending", "findings"} {
-		t.Run(oldStatus, func(t *testing.T) {
-			old := checkRun{Name: "cubic · AI code reviewer", HeadSHA: testHead, Status: "completed", Conclusion: "failure", StartedAt: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}
-			old.App.Slug = "cubic-dev-ai"
-			if oldStatus == "pending" {
-				old.Status = "in_progress"
-			}
-			if oldStatus == "findings" {
-				old.Conclusion = "success"
-				old.Output.Summary = "1 issue found"
-			}
-			clean := old
-			clean.StartedAt = old.StartedAt.Add(time.Minute)
-			clean.Status = "completed"
-			clean.Conclusion = "success"
-			clean.Output.Summary = "0 issues found"
-			for _, checks := range [][]checkRun{{old, clean}, {clean, old}} {
-				gh := func(...string) ([]byte, error) {
-					return encode(t, map[string]any{"total_count": 2, "check_runs": checks}), nil
-				}
-				ready, requested, err := inspectCubic(gh, testConfig, cleanState())
-				if err != nil || !ready || !requested {
-					t.Fatalf("latest clean must win: %v,%v,%v", ready, requested, err)
-				}
-			}
-			// Reversing timestamps makes the pending/failed/finding-bearing run authoritative.
-			old.StartedAt = clean.StartedAt.Add(time.Minute)
-			gh := func(...string) ([]byte, error) {
-				return encode(t, map[string]any{"total_count": 2, "check_runs": []checkRun{clean, old}}), nil
-			}
-			ready, _, _ := inspectCubic(gh, testConfig, cleanState())
-			if ready {
-				t.Fatal("old clean check must not hide newer non-clean evidence")
-			}
-		})
 	}
 }
 
@@ -430,33 +326,6 @@ func TestQueuedGateRerunWaitsForTimestamp(t *testing.T) {
 	ready, err = passingReviewGate([]checkRun{old, queued}, testHead)
 	if !ready || err != nil {
 		t.Fatalf("completed rerun should pass, got %v,%v", ready, err)
-	}
-}
-
-func TestCompletionCannotOrderRerunsWithMissingStart(t *testing.T) {
-	gh := func(...string) ([]byte, error) {
-		return []byte(`{"total_count":2,"check_runs":[{"name":"cubic · AI code reviewer","head_sha":"` + testHead + `","status":"completed","conclusion":"success","started_at":null,"completed_at":"2026-09-05T12:10:00Z","app":{"slug":"cubic-dev-ai"},"output":{"summary":"0 issues found"}},{"name":"cubic · AI code reviewer","head_sha":"` + testHead + `","status":"completed","conclusion":"failure","started_at":"2026-09-05T12:05:00Z","completed_at":"2026-09-05T12:06:00Z","app":{"slug":"cubic-dev-ai"}}]}`), nil
-	}
-	ready, requested, err := inspectCubic(gh, testConfig, cleanState())
-	if ready || !requested || err != nil {
-		t.Fatalf("unknown start order must remain pending: %v,%v,%v", ready, requested, err)
-	}
-}
-
-func TestCubicCommentsCannotOverrideCheckFindings(t *testing.T) {
-	state := cleanState()
-	r := review{Author: actor{"cubic-dev-ai"}, State: "COMMENTED", SubmittedAt: time.Now(), Body: "<!-- cubic:review-summary:start -->No issues found<!-- cubic:review-summary:end -->"}
-	r.Commit.OID = testHead
-	state.Reviews.Nodes = []review{r}
-	check := checkRun{Name: "cubic · AI code reviewer", StartedAt: r.SubmittedAt.Add(-time.Minute), HeadSHA: testHead, Status: "completed", Conclusion: "success"}
-	check.App.Slug = "cubic-dev-ai"
-	check.Output.Summary = "1 issue found"
-	gh := func(...string) ([]byte, error) {
-		return encode(t, map[string]any{"total_count": 1, "check_runs": []checkRun{check}}), nil
-	}
-	ready, requested, err := inspectCubic(gh, testConfig, state)
-	if ready || !requested || err != nil {
-		t.Fatalf("a clean comment must not override check findings: %v,%v,%v", ready, requested, err)
 	}
 }
 
@@ -539,7 +408,7 @@ func TestQueuedAutoMergeIsWithdrawnWhenReviewChanges(t *testing.T) {
 					return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
 				case strings.Contains(joined, "check-runs?"):
 					check := checkRun{HeadSHA: testHead, Status: "completed", Conclusion: "success"}
-					check.Name = cubicReviewCheckName
+					check.Name = "cubic · AI code reviewer"
 					check.App.Slug = "cubic-dev-ai"
 					check.Output.Summary = "0 issues found"
 					return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
@@ -588,7 +457,7 @@ func TestNewFindingBeforeQueuePreventsAutoMerge(t *testing.T) {
 			return encode(t, []changedFile{{"CHANGELOG.md", "modified"}}), nil
 		case strings.Contains(joined, "check-runs?"):
 			check := checkRun{HeadSHA: testHead, Status: "completed", Conclusion: "success"}
-			check.Name = cubicReviewCheckName
+			check.Name = "cubic · AI code reviewer"
 			check.App.Slug = "cubic-dev-ai"
 			check.Output.Summary = "0 issues found"
 			if strings.Contains(joined, "check_name=Changelog") {
@@ -633,23 +502,6 @@ func TestMergeDuringGuardReadStillCompletesSuccessfully(t *testing.T) {
 	}
 }
 
-func TestUnrelatedCubicChecksCannotSatisfyReview(t *testing.T) {
-	for _, conclusion := range []string{"success", "skipped"} {
-		t.Run(conclusion, func(t *testing.T) {
-			check := checkRun{Name: "cubic unrelated check", HeadSHA: testHead, Status: "completed", Conclusion: conclusion}
-			check.App.Slug = "cubic-dev-ai"
-			check.Output.Summary = "0 issues found"
-			gh := func(...string) ([]byte, error) {
-				return encode(t, map[string]any{"total_count": 1, "check_runs": []checkRun{check}}), nil
-			}
-			ready, requested, err := inspectCubic(gh, testConfig, cleanState())
-			if ready || requested || err != nil {
-				t.Fatalf("unrelated check must not count as review evidence: %v,%v,%v", ready, requested, err)
-			}
-		})
-	}
-}
-
 func TestExpiredReviewDoesNotPollOrRequest(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -657,19 +509,7 @@ func TestExpiredReviewDoesNotPollOrRequest(t *testing.T) {
 		t.Fatal("expired review must not read evidence or request reviewers")
 		return nil, nil
 	}
-	if err := waitForReview(ctx, gh, testConfig, "12", true); !errors.Is(err, context.Canceled) {
+	if err := waitForReview(ctx, gh, testConfig, "12"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled review, got %v", err)
-	}
-}
-
-func TestCubicLookupFiltersBeforePagination(t *testing.T) {
-	gh := func(args ...string) ([]byte, error) {
-		if !strings.Contains(strings.Join(args, " "), "&check_name=cubic%20%C2%B7%20AI%20code%20reviewer") {
-			t.Fatal("Cubic lookup must exclude unrelated contexts before pagination")
-		}
-		return []byte(`{"total_count":0,"check_runs":[]}`), nil
-	}
-	if _, _, err := inspectCubic(gh, testConfig, cleanState()); err != nil {
-		t.Fatal(err)
 	}
 }

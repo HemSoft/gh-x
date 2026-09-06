@@ -131,6 +131,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          CODEX_REVIEW_TOKEN: ${{ secrets.CODEX_REVIEW_TOKEN }}
         run: |
           set -euo pipefail
           if git diff --quiet -- CHANGELOG.md; then
@@ -145,10 +146,21 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"
-          git add CHANGELOG.md
-          git commit -m "docs: record ${RELEASE_TAG} release"
           remote_sha=$(git ls-remote --heads origin "$branch" | awk '{print $1}')
-          git push --force-with-lease="refs/heads/${branch}:${remote_sha}" origin "HEAD:refs/heads/${branch}"
+          if [[ -n "$remote_sha" ]]; then
+            git fetch origin "$remote_sha"
+          fi
+          if [[ -n "$remote_sha" ]] && git diff --quiet "$remote_sha" -- CHANGELOG.md; then
+            # Keep the review request, evidence and deadline on the original SHA.
+            # Keep executing the trusted main checkout's helper, even if main advanced.
+            head_sha="$remote_sha"
+            echo "Reusing unchanged changelog head $head_sha."
+          else
+            git add CHANGELOG.md
+            git commit -m "docs: record ${RELEASE_TAG} release"
+            head_sha=$(git rev-parse HEAD)
+            git push --force-with-lease="refs/heads/${branch}:${remote_sha}" origin "HEAD:refs/heads/${branch}"
+          fi
 
           pr_url=$(gh pr list --base main --head "$branch" --state open --json url --jq '.[0].url // empty')
           if [[ -z "$pr_url" ]]; then
@@ -160,9 +172,30 @@ jobs:
           else
             echo "Reusing existing changelog pull request: $pr_url"
           fi
-          gh workflow run ci.yml --ref "$branch"
+          if [[ -z "$CODEX_REVIEW_TOKEN" ]]; then
+            echo "::error::PR $pr_url head $head_sha requester unavailable: configure CODEX_REVIEW_TOKEN for the connected HemSoft account. No bot review request was posted."
+            exit 1
+          fi
+          # Only this serialized job requests reviews. The dedicated user token
+          # is passed to this command; release/merge operations keep GH_TOKEN.
+          GH_TOKEN="$CODEX_REVIEW_TOKEN" CHANGELOG_BRANCH="$branch" EXPECTED_HEAD="$head_sha" \
+            go run ./.github/scripts/changelog-merge request
+          # Bind recovery to this dispatch, not an old failed check for the head.
+          ci_run=$(gh api --method POST \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches" \
+            -f ref="$branch" --jq '.workflow_run_id')
+          if [[ ! "$ci_run" =~ ^[0-9]+$ ]]; then
+            echo "::error::CI dispatch did not return a run ID; leaving $pr_url open."
+            exit 1
+          fi
+          timeout 40m gh run watch "$ci_run" --exit-status --interval 30
+          ci_head=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ci_run}" --jq '.head_sha')
+          if [[ "$ci_head" != "$head_sha" ]]; then
+            echo "::error::Dispatched CI head changed; leaving $pr_url open."
+            exit 1
+          fi
 
-          head_sha=$(git rev-parse HEAD)
           CHANGELOG_BRANCH="$branch" EXPECTED_HEAD="$head_sha" \
             go run ./.github/scripts/changelog-merge enable
           # A queued auto-merge is not completion. The helper returns only after merge.
