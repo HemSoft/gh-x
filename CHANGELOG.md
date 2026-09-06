@@ -12,6 +12,11 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+## [0.12.0] - 2026-09-06
+
+- feat: show local date and time in status header (#84)
+- docs: record v0.11.10 release (#83)
+
 ## [0.11.10] - 2026-09-06
 
 - test: establish critical CLI performance budgets (#63) (#82)
@@ -110,7 +115,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.11.10...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.0
 [0.11.10]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.10
 [0.11.9]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.9
 [0.11.8]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.8
