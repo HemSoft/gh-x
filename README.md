@@ -584,10 +584,13 @@ go run ./.github/scripts/changelog-merge review
 ```
 
 The request command reuses existing current-head evidence. It permits one human
-replacement of an explicitly refused bot request. A refused or timed-out human
-request requires an explicit access repair and manual review decision; automatic
-reruns never retrigger it. A later clean receipt for the same head can clear an
-old bot refusal. Never remove comments or create empty commits to reset a wait.
+replacement of an explicitly refused bot request. Re-requesting after a human
+request's refusal or timeout requires an explicit access repair and manual review
+decision; automatic reruns never retrigger it. A timeout ends waiting, not the
+validity of subsequently available review evidence. A genuine later clean receipt
+for the same head can pass verification without another trigger or wait, including
+after an old bot refusal. Silence, timeout, or refusal alone can never pass.
+Never remove comments or create empty commits to reset a wait.
 Once clean evidence exists, rerun CI with `gh workflow run ci.yml --ref <branch>`.
 The `enable` command waits for that CI gate and revalidates evidence before it can
 queue a merge; `request` and `review` never enable auto-merge.

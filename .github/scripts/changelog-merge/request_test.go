@@ -303,6 +303,25 @@ func TestTerminalRequestNeverRetriggers(t *testing.T) {
 	}
 }
 
+func TestLateCompletionAddsEvidenceWithoutRestartingWait(t *testing.T) {
+	state := cleanState()
+	request := markedRequest("HemSoft", time.Now().Add(-time.Hour))
+	state.Comments.Nodes = []reviewComment{request}
+	gh := reviewFixture(t, &state) // Any request/comment mutation fails this fixture.
+	if err := waitForReview(context.Background(), gh, testConfig, "12"); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("absent evidence must retain the expired deadline: %v", err)
+	}
+	clean := cleanState().Comments.Nodes[0]
+	clean.CreatedAt = time.Now()
+	state.Comments.Nodes = append(state.Comments.Nodes, clean)
+	if err := waitForReview(context.Background(), gh, testConfig, "12"); err != nil {
+		t.Fatalf("genuine later head-specific completion needs no new wait: %v", err)
+	}
+	if !requestStart(state, request, testHead).Equal(request.CreatedAt) {
+		t.Fatal("new evidence must not change the original request/deadline")
+	}
+}
+
 func TestCodexAlonePassesWithoutOptionalProducts(t *testing.T) {
 	state := cleanState()
 	ready, err := pollReview(reviewFixture(t, &state), testConfig, "12")
