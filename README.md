@@ -569,6 +569,8 @@ deadline. A setup race uses the head commit's timestamp for its bounded window.
 Refusal comments persist terminal access, quota, plan, or configuration failures;
 reruns report the same failure immediately with the response URL and correction.
 A timeout derives from the original request time, so reruns cannot reset it.
+Auto Release also preserves the remote changelog head when its content is
+unchanged, including after main advances. Only changed notes create a new head.
 
 After correcting a refused bot request, a connected `HemSoft` session can run the
 helper from a reviewed checkout. Do not run a manual request concurrently with
