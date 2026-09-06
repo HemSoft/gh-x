@@ -170,7 +170,21 @@ jobs:
           # is passed to this command; release/merge operations keep GH_TOKEN.
           GH_TOKEN="$CODEX_REVIEW_TOKEN" CHANGELOG_BRANCH="$branch" EXPECTED_HEAD="$head_sha" \
             go run ./.github/scripts/changelog-merge request
-          gh workflow run ci.yml --ref "$branch"
+          # Bind recovery to this dispatch, not an old failed check for the head.
+          ci_run=$(gh api --method POST \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches" \
+            -f ref="$branch" --jq '.workflow_run_id')
+          if [[ ! "$ci_run" =~ ^[0-9]+$ ]]; then
+            echo "::error::CI dispatch did not return a run ID; leaving $pr_url open."
+            exit 1
+          fi
+          timeout 40m gh run watch "$ci_run" --exit-status --interval 30
+          ci_head=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ci_run}" --jq '.head_sha')
+          if [[ "$ci_head" != "$head_sha" ]]; then
+            echo "::error::Dispatched CI head changed; leaving $pr_url open."
+            exit 1
+          fi
 
           CHANGELOG_BRANCH="$branch" EXPECTED_HEAD="$head_sha" \
             go run ./.github/scripts/changelog-merge enable

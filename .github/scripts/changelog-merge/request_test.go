@@ -61,6 +61,11 @@ func TestWorkflowHasOneRequestOwnerAndReusesVerification(t *testing.T) {
 		if step.Env["CODEX_REVIEW_TOKEN"] != "${{ secrets.CODEX_REVIEW_TOKEN }}" || !strings.Contains(step.Run, `GH_TOKEN="$CODEX_REVIEW_TOKEN"`) || !strings.Contains(step.Run, `-z "$CODEX_REVIEW_TOKEN"`) {
 			t.Fatal("request must use the explicit connected-user secret and guard missing setup")
 		}
+		watch := strings.Index(step.Run, `gh run watch "$ci_run"`)
+		merge := strings.Index(step.Run, "changelog-merge enable")
+		if watch < 0 || watch > merge || !strings.Contains(step.Run, ".workflow_run_id") || !strings.Contains(step.Run, `"$ci_head" != "$head_sha"`) {
+			t.Fatal("must await the exact dispatched run and verify its head before reading the merge gate")
+		}
 	}
 	if requests != 1 {
 		t.Fatalf("expected one request owner, got %d", requests)

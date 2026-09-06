@@ -591,6 +591,9 @@ old bot refusal. Never remove comments or create empty commits to reset a wait.
 Once clean evidence exists, rerun CI with `gh workflow run ci.yml --ref <branch>`.
 The `enable` command waits for that CI gate and revalidates evidence before it can
 queue a merge; `request` and `review` never enable auto-merge.
+Auto Release captures the dispatched CI run ID using the versioned GitHub API,
+waits for that exact run to succeed, and verifies its head before calling `enable`.
+An older failed check cannot abort recovery before the replacement run appears.
 
 To verify a candidate helper revision against an existing bot PR before deployment,
 dispatch CI from the reviewed candidate branch with `changelog_branch` and
