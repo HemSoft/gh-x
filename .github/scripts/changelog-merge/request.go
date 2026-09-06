@@ -10,6 +10,7 @@ import (
 // The Auto Release job is the sole automated request owner, serialized by its
 // concurrency group. Read-only CI jobs never post or replace requests.
 const connectedRequester = "HemSoft"
+const reviewWindow = 10 * time.Minute
 
 func trustedRequester(login string) bool {
 	return login == connectedRequester || login == "github-actions" || login == "github-actions[bot]"
@@ -103,13 +104,13 @@ func pendingReview(state reviewState, cfg config, number string, now time.Time) 
 	}
 	// PR-triggered CI can start before Auto Release posts the request. Anchor
 	// this short setup window to the immutable head, not this job invocation.
-	if request.CreatedAt.IsZero() && !state.CommittedAt.IsZero() && now.Before(state.CommittedAt.Add(executionTimeout([]string{"review"}))) {
+	if request.CreatedAt.IsZero() && !state.CommittedAt.IsZero() && now.Before(state.CommittedAt.Add(reviewWindow)) {
 		return nil
 	}
 	if request.Author.Login != connectedRequester {
 		return reviewBlocked(cfg, number, request, request.URL, "no supported connected-account request; configure CODEX_REVIEW_TOKEN for HemSoft or run the documented connected-account recovery")
 	}
-	deadline := requestStart(state, request, cfg.head).Add(executionTimeout([]string{"review"}))
+	deadline := requestStart(state, request, cfg.head).Add(reviewWindow)
 	if !now.Before(deadline) {
 		return reviewBlocked(cfg, number, request, request.URL, "Codex review timed out at "+deadline.Format(time.RFC3339)+"; inspect the existing request, do not rerun to reset its deadline")
 	}

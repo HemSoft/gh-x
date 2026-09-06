@@ -307,5 +307,7 @@ func executionTimeout(args []string) time.Duration {
 	if len(args) == 1 && args[0] == "enable" {
 		return 90 * time.Minute
 	}
-	return 10 * time.Minute
+	// Allow a full setup window plus the persisted request window. This is
+	// only a process watchdog; pendingReview enforces the original deadline.
+	return 2*reviewWindow + 2*time.Minute
 }

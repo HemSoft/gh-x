@@ -403,7 +403,7 @@ jobs:
     name: Changelog AI Review
     if: startsWith(github.head_ref || github.ref_name, 'chore/changelog-') || inputs.changelog_branch != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 24
     concurrency:
       group: changelog-review-${{ inputs.changelog_branch || github.head_ref || github.ref_name }}-${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}
       cancel-in-progress: true

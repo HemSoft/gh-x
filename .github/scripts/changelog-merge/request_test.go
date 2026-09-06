@@ -140,6 +140,16 @@ func TestSetupWindowDoesNotRestart(t *testing.T) {
 	}
 }
 
+func TestVerifierBudgetIncludesLateRequest(t *testing.T) {
+	processStart := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	requestPosted := processStart.Add(9 * time.Minute)
+	requestDeadline := requestPosted.Add(10 * time.Minute)
+	processDeadline := processStart.Add(executionTimeout([]string{"review"}))
+	if !processDeadline.After(requestDeadline) {
+		t.Fatalf("setup consumed the review window: process expires %s, request expires %s", processDeadline, requestDeadline)
+	}
+}
+
 func TestRefusalDoesNotOverrideLaterHeadReceipt(t *testing.T) {
 	state := cleanState()
 	clean := state.Comments.Nodes[0]
