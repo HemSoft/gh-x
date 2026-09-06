@@ -1,0 +1,437 @@
+{
+  "schemaVersion": 1,
+  "description": "Initial synthetic workload baseline. Production tree 18ab6e9 plus issue63 benchmark fixtures; reference machine is descriptive, not a speed normalization factor.",
+  "metadata": {
+    "recordedAt": "2026-09-06T03:54:52.608Z",
+    "platform": "win32",
+    "arch": "x64",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor          ",
+    "logicalCPUs": 32,
+    "memoryBytes": 66187001856,
+    "node": "v24.12.0",
+    "go": "go version go1.26.7 windows/amd64",
+    "revision": "18ab6e91d90db304c3ba6fcba9cfd71f9556b653",
+    "dirty": "M .github/scripts/validate-main-ruleset.go\n M .github/workflows/ci.yml\n?? benchmarks/\n?? src/performance_test.go",
+    "sampleCount": 7,
+    "goBenchtime": "150ms",
+    "gomaxprocs": 1
+  },
+  "samples": {
+    "go/PR/small": [
+      {
+        "ns": 127798,
+        "bytes": 34289,
+        "allocs": 1227
+      },
+      {
+        "ns": 134811,
+        "bytes": 34293,
+        "allocs": 1227
+      },
+      {
+        "ns": 132342,
+        "bytes": 34289,
+        "allocs": 1227
+      },
+      {
+        "ns": 133717,
+        "bytes": 34289,
+        "allocs": 1227
+      },
+      {
+        "ns": 135078,
+        "bytes": 34289,
+        "allocs": 1227
+      },
+      {
+        "ns": 133754,
+        "bytes": 34289,
+        "allocs": 1227
+      },
+      {
+        "ns": 133057,
+        "bytes": 34289,
+        "allocs": 1227
+      }
+    ],
+    "go/Issue/small": [
+      {
+        "ns": 112843,
+        "bytes": 23641,
+        "allocs": 743
+      },
+      {
+        "ns": 114375,
+        "bytes": 23641,
+        "allocs": 743
+      },
+      {
+        "ns": 110877,
+        "bytes": 23641,
+        "allocs": 743
+      },
+      {
+        "ns": 111731,
+        "bytes": 23641,
+        "allocs": 743
+      },
+      {
+        "ns": 107712,
+        "bytes": 23641,
+        "allocs": 743
+      },
+      {
+        "ns": 110894,
+        "bytes": 23641,
+        "allocs": 743
+      },
+      {
+        "ns": 110741,
+        "bytes": 23641,
+        "allocs": 743
+      }
+    ],
+    "go/Status/small": [
+      {
+        "ns": 302965,
+        "bytes": 64202,
+        "allocs": 2141
+      },
+      {
+        "ns": 294321,
+        "bytes": 64202,
+        "allocs": 2141
+      },
+      {
+        "ns": 296587,
+        "bytes": 64203,
+        "allocs": 2141
+      },
+      {
+        "ns": 310004,
+        "bytes": 64203,
+        "allocs": 2141
+      },
+      {
+        "ns": 319770,
+        "bytes": 64203,
+        "allocs": 2141
+      },
+      {
+        "ns": 335837,
+        "bytes": 64203,
+        "allocs": 2141
+      },
+      {
+        "ns": 306267,
+        "bytes": 64203,
+        "allocs": 2141
+      }
+    ],
+    "go/Monitor/small": [
+      {
+        "ns": 7047,
+        "bytes": 16824,
+        "allocs": 88
+      },
+      {
+        "ns": 6471,
+        "bytes": 16824,
+        "allocs": 88
+      },
+      {
+        "ns": 6582,
+        "bytes": 16824,
+        "allocs": 88
+      },
+      {
+        "ns": 6496,
+        "bytes": 16824,
+        "allocs": 88
+      },
+      {
+        "ns": 6408,
+        "bytes": 16824,
+        "allocs": 88
+      },
+      {
+        "ns": 6659,
+        "bytes": 16824,
+        "allocs": 88
+      },
+      {
+        "ns": 6494,
+        "bytes": 16824,
+        "allocs": 88
+      }
+    ],
+    "go/PR/large": [
+      {
+        "ns": 1664699,
+        "bytes": 757551,
+        "allocs": 28352
+      },
+      {
+        "ns": 1916233,
+        "bytes": 757556,
+        "allocs": 28352
+      },
+      {
+        "ns": 1888209,
+        "bytes": 757556,
+        "allocs": 28352
+      },
+      {
+        "ns": 1862099,
+        "bytes": 757556,
+        "allocs": 28352
+      },
+      {
+        "ns": 1864962,
+        "bytes": 757556,
+        "allocs": 28352
+      },
+      {
+        "ns": 1952139,
+        "bytes": 757556,
+        "allocs": 28352
+      },
+      {
+        "ns": 1907951,
+        "bytes": 757557,
+        "allocs": 28352
+      }
+    ],
+    "go/Issue/large": [
+      {
+        "ns": 1460729,
+        "bytes": 502084,
+        "allocs": 16828
+      },
+      {
+        "ns": 1538553,
+        "bytes": 502086,
+        "allocs": 16828
+      },
+      {
+        "ns": 1442510,
+        "bytes": 502085,
+        "allocs": 16828
+      },
+      {
+        "ns": 1483226,
+        "bytes": 502085,
+        "allocs": 16828
+      },
+      {
+        "ns": 1507190,
+        "bytes": 502083,
+        "allocs": 16828
+      },
+      {
+        "ns": 1489149,
+        "bytes": 502085,
+        "allocs": 16828
+      },
+      {
+        "ns": 1461983,
+        "bytes": 502085,
+        "allocs": 16828
+      }
+    ],
+    "go/Status/large": [
+      {
+        "ns": 3527264,
+        "bytes": 1265938,
+        "allocs": 45356
+      },
+      {
+        "ns": 3580904,
+        "bytes": 1265940,
+        "allocs": 45356
+      },
+      {
+        "ns": 3445190,
+        "bytes": 1265942,
+        "allocs": 45356
+      },
+      {
+        "ns": 3498784,
+        "bytes": 1265939,
+        "allocs": 45356
+      },
+      {
+        "ns": 3689777,
+        "bytes": 1265941,
+        "allocs": 45356
+      },
+      {
+        "ns": 3499535,
+        "bytes": 1265939,
+        "allocs": 45356
+      },
+      {
+        "ns": 3405933,
+        "bytes": 1265941,
+        "allocs": 45356
+      }
+    ],
+    "go/Monitor/large": [
+      {
+        "ns": 209394,
+        "bytes": 427258,
+        "allocs": 3222
+      },
+      {
+        "ns": 187196,
+        "bytes": 427257,
+        "allocs": 3222
+      },
+      {
+        "ns": 181649,
+        "bytes": 427257,
+        "allocs": 3222
+      },
+      {
+        "ns": 181905,
+        "bytes": 427257,
+        "allocs": 3222
+      },
+      {
+        "ns": 194119,
+        "bytes": 427257,
+        "allocs": 3222
+      },
+      {
+        "ns": 180035,
+        "bytes": 427257,
+        "allocs": 3222
+      },
+      {
+        "ns": 185949,
+        "bytes": 427257,
+        "allocs": 3222
+      }
+    ],
+    "node/cold/small": [
+      {
+        "ms": 2.3722999999999956,
+        "retainedBytes": 109088
+      },
+      {
+        "ms": 2.0356000000000023,
+        "retainedBytes": 12736
+      },
+      {
+        "ms": 1.9869000000000057,
+        "retainedBytes": 26424
+      },
+      {
+        "ms": 2.3198000000000008,
+        "retainedBytes": 12128
+      },
+      {
+        "ms": 2.769199999999998,
+        "retainedBytes": 19968
+      },
+      {
+        "ms": 1.867999999999995,
+        "retainedBytes": 20456
+      },
+      {
+        "ms": 1.5649000000000228,
+        "retainedBytes": 10712
+      }
+    ],
+    "node/warm/small": [
+      {
+        "ms": 0.5542999999999978,
+        "retainedBytes": 116024
+      },
+      {
+        "ms": 0.5482000000000085,
+        "retainedBytes": 20408
+      },
+      {
+        "ms": 0.9403999999999968,
+        "retainedBytes": 27456
+      },
+      {
+        "ms": 0.5938000000000017,
+        "retainedBytes": 12176
+      },
+      {
+        "ms": 0.8630999999999887,
+        "retainedBytes": 19984
+      },
+      {
+        "ms": 0.5302000000000078,
+        "retainedBytes": 20472
+      },
+      {
+        "ms": 0.5880999999999972,
+        "retainedBytes": 10728
+      }
+    ],
+    "node/cold/large": [
+      {
+        "ms": 69.95920000000001,
+        "retainedBytes": 254760
+      },
+      {
+        "ms": 75.76980000000003,
+        "retainedBytes": 252576
+      },
+      {
+        "ms": 71.65269999999998,
+        "retainedBytes": 229864
+      },
+      {
+        "ms": 72.0512,
+        "retainedBytes": 215632
+      },
+      {
+        "ms": 67.92620000000011,
+        "retainedBytes": 329696
+      },
+      {
+        "ms": 75.78869999999984,
+        "retainedBytes": 213936
+      },
+      {
+        "ms": 69.06790000000001,
+        "retainedBytes": 218040
+      }
+    ],
+    "node/warm/large": [
+      {
+        "ms": 1.8409000000000333,
+        "retainedBytes": 237184
+      },
+      {
+        "ms": 1.761700000000019,
+        "retainedBytes": 242560
+      },
+      {
+        "ms": 1.704499999999939,
+        "retainedBytes": 212264
+      },
+      {
+        "ms": 1.8023999999999205,
+        "retainedBytes": 214656
+      },
+      {
+        "ms": 2.8414000000000215,
+        "retainedBytes": 311032
+      },
+      {
+        "ms": 1.7510999999999513,
+        "retainedBytes": 214048
+      },
+      {
+        "ms": 1.5767000000000735,
+        "retainedBytes": 199344
+      }
+    ]
+  }
+}
