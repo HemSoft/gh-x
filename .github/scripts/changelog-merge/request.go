@@ -39,6 +39,7 @@ func latestRequest(state reviewState, head string) (reviewComment, error) {
 var accessRefusal = regexp.MustCompile(`(?i)^(?:to use codex here,?\s*|(?:please )?create a codex account|(?:please )?connect to github|permission denied|not authorized|access denied|(?:codex |you |this account )does not have access|code review is not enabled)`)
 var quotaRefusal = regexp.MustCompile(`(?i)^(?:(?:codex )?(?:usage|rate) limit|quota (?:exceeded|exhausted)|(?:please )?upgrade (?:your plan|to a paid)|insufficient credits|you(?: have|'ve) (?:hit|reached|exceeded) (?:your |the )?(?:codex )?(?:usage|rate|review|code review)|(?:codex )?review (?:is unavailable|requires a paid plan))`)
 var refusalPreamble = regexp.MustCompile(`(?i)^(?:(?:sorry|unfortunately|i'm sorry|i am sorry)[,:.!]?\s*|(?:i (?:couldn't|cannot|can't) (?:start|complete) (?:the |this )?review|(?:the |this )?review (?:cannot|can't|could not) (?:start|continue|complete))[,:.!]?\s*)+`)
+var refusalConnector = regexp.MustCompile(`(?i)^(?:but|and|so|because|since|however)[,:.!]?\s+`)
 
 func refusalCorrection(body string) string {
 	text := strings.TrimSpace(body)
@@ -47,7 +48,10 @@ func refusalCorrection(body string) string {
 	if reviewedCommit.MatchString(text) || strings.Contains(text, "<!-- codex-pull-request-review-summary -->") {
 		return ""
 	}
-	text = refusalPreamble.ReplaceAllString(text, "")
+	leading := refusalPreamble.ReplaceAllString(text, "")
+	if leading != text {
+		text = refusalConnector.ReplaceAllString(leading, "")
+	}
 	if accessRefusal.MatchString(text) {
 		return "connect HemSoft to Codex, grant repository access, and enable code review"
 	}

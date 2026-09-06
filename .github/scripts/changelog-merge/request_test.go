@@ -177,7 +177,7 @@ func TestReviewTextIsNotAnAccessRefusal(t *testing.T) {
 }
 
 func TestRefusalAllowsExplanatoryPrefix(t *testing.T) {
-	for _, body := range []string{"Sorry, you've reached your Codex usage limit.", "I couldn't start the review. To use Codex here, create a Codex account and connect to github.", "The review cannot continue: quota exceeded."} {
+	for _, body := range []string{"Sorry, you've reached your Codex usage limit.", "I couldn't start the review. To use Codex here, create a Codex account and connect to github.", "The review cannot continue: quota exceeded.", "Sorry, but you've reached your Codex usage limit.", "I can't start the review because permission denied."} {
 		if refusalCorrection(body) == "" {
 			t.Fatalf("missed explicit refusal with explanatory prose: %s", body)
 		}
