@@ -682,6 +682,7 @@ const (
 func renderStatusHeader(stdout io.Writer, styler tableStyler, dashboard statusDashboard) {
 	rows := [][]tableCell{
 		{styler.dim("Repository"), statusRepositoryCell(styler, dashboard.Repository, dashboard.RepositoryURL)},
+		{styler.dim("Local time"), styler.plain(statusNowFunc().Local().Format("2006-01-02 03:04 PM MST"))},
 		{styler.dim(statusDefaultBranchLabel(dashboard.DefaultBranch)), statusDefaultBranchCell(styler, dashboard)},
 	}
 	if dashboard.CurrentStatus.Branch != dashboard.DefaultBranch || dashboard.DefaultStatusErr != nil {
