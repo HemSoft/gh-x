@@ -171,6 +171,14 @@ func TestReviewTextIsNotAnAccessRefusal(t *testing.T) {
 	}
 }
 
+func TestRefusalAllowsExplanatoryPrefix(t *testing.T) {
+	for _, body := range []string{"Sorry, you've reached your Codex usage limit.", "I couldn't start the review. To use Codex here, create a Codex account and connect to github.", "The review cannot continue: quota exceeded."} {
+		if refusalCorrection(body) == "" {
+			t.Fatalf("missed explicit refusal with explanatory prose: %s", body)
+		}
+	}
+}
+
 func TestRefusalMustFollowItsOwnRequest(t *testing.T) {
 	state := cleanState()
 	request := markedRequest("HemSoft", time.Now().Add(-time.Minute))
