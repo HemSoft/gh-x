@@ -858,13 +858,13 @@ func TestRenderStatusShowsRequiredChecksNotice(t *testing.T) {
 		DefaultBranch:     "main",
 		Branches:          statusBranchInventory{Local: map[string]statusBranchRef{}},
 		PullRequests:      []displayPullRequest{{Number: 2, Title: "PR", State: "open", Checks: "pending"}},
-		RequiredChecksErr: errors.New("no rules returned for base main"),
+		RequiredChecksErr: errors.New("base main: rules offline"),
 	}
 	var buf bytes.Buffer
 	if err := renderStatus(&buf, dashboard, false); err != nil {
 		t.Fatalf("renderStatus error: %v", err)
 	}
-	if !strings.Contains(buf.String(), "Required check rules unavailable: no rules returned for base main") {
+	if !strings.Contains(buf.String(), "Required check rules unavailable: base main: rules offline") {
 		t.Fatalf("status must explain the required-checks downgrade:\n%s", buf.String())
 	}
 }

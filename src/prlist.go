@@ -154,12 +154,12 @@ func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListRe
 	requiredByBranch, failedRequiredBranches := fetchRequiredChecks(repoOwner, repoName, pullRequests)
 	failedRequiredPRs := make(map[int]bool)
 	for _, pr := range pullRequests {
-		if failedRequiredBranches[pr.BaseRefName] {
+		if failedRequiredBranches[pr.BaseRefName] != nil {
 			failedRequiredPRs[pr.Number] = true
 		}
 	}
 	requiredChecksFailed := len(failedRequiredBranches) > 0
-	rendered := enrichPullRequests(pullRequests, supplemental, requiredByBranch, now)
+	rendered := enrichPullRequests(pullRequests, supplemental, requiredByBranch, failedRequiredBranches, now)
 	return pullRequestListResult{
 		Entries:                pullRequests,
 		Rendered:               rendered,
@@ -171,10 +171,10 @@ func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListRe
 	}, nil
 }
 
-// requiredChecksError turns a failed required-check rules lookup into the
-// diagnostic the Checks downgrade needs, so a pass that was downgraded to
-// pending always says why.
-func requiredChecksError(failedBranches map[string]bool) error {
+// requiredChecksError turns failed required-check rules lookups into the
+// diagnostic the Checks downgrade needs, preserving each branch's failure
+// reason so a pass downgraded to pending always says why.
+func requiredChecksError(failedBranches map[string]error) error {
 	if len(failedBranches) == 0 {
 		return nil
 	}
@@ -183,7 +183,11 @@ func requiredChecksError(failedBranches map[string]bool) error {
 		branches = append(branches, branch)
 	}
 	sort.Strings(branches)
-	return fmt.Errorf("no rules returned for base %s", strings.Join(branches, ", "))
+	parts := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		parts = append(parts, fmt.Sprintf("base %s: %s", branch, conciseStatusError(failedBranches[branch])))
+	}
+	return fmt.Errorf("%s", strings.Join(parts, "; "))
 }
 
 func wrapExecError(err error, stderr string) error {
@@ -239,7 +243,7 @@ func runView(args []string, stdout io.Writer, stderr io.Writer) error {
 	prs := []pullRequest{pr}
 	supplemental, repoOwner, repoName := fetchSupplementalData(repo, prs)
 	requiredByBranch, failedRequiredBranches := fetchRequiredChecks(repoOwner, repoName, prs)
-	rendered := enrichPullRequests(prs, supplemental, requiredByBranch, time.Now().UTC())
+	rendered := enrichPullRequests(prs, supplemental, requiredByBranch, failedRequiredBranches, time.Now().UTC())
 
 	// Render as a single-row table with no limit footer
 	opts := defaultListOptions()

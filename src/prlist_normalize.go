@@ -32,7 +32,7 @@ func uniqueBaseBranches(prs []pullRequest) []string {
 // applying required-check downgrade logic. PRs whose enrichment is unknown
 // fail closed with unknown columns; their rows never report clean or empty
 // supplemental values.
-func enrichPullRequests(prs []pullRequest, supplemental prSupplementalData, requiredByBranch map[string]map[string]bool, now time.Time) []displayPullRequest {
+func enrichPullRequests(prs []pullRequest, supplemental prSupplementalData, requiredByBranch map[string]map[string]bool, failedRuleBranches map[string]error, now time.Time) []displayPullRequest {
 	rendered := make([]displayPullRequest, 0, len(prs))
 	for _, pr := range prs {
 		dp := buildDisplayPullRequest(pr, now)
@@ -44,7 +44,7 @@ func enrichPullRequests(prs []pullRequest, supplemental prSupplementalData, requ
 			unavailable || !info.ClosingIssuesAvailable,
 		)
 		applyAIReviewCheck(&dp, info, pr.StatusCheckRollup, unavailable)
-		downgradeChecksIfMissing(&dp, requiredByBranch, pr.BaseRefName, pr.StatusCheckRollup)
+		downgradeChecksIfMissing(&dp, requiredByBranch, failedRuleBranches, pr.BaseRefName, pr.StatusCheckRollup)
 		rendered = append(rendered, dp)
 	}
 	return rendered
@@ -109,8 +109,17 @@ func detectAIReviewCheck(checks []checkItem) string {
 	return "-"
 }
 
-func downgradeChecksIfMissing(dp *displayPullRequest, requiredByBranch map[string]map[string]bool, base string, checkItems []checkItem) {
+// downgradeChecksIfMissing downgrades a pass or review Checks value to
+// pending when repository required checks have not all reported: either the
+// fetched rules list a context that is missing from the rollup, or the
+// rules themselves could not be fetched, so the pass is unverified.
+func downgradeChecksIfMissing(dp *displayPullRequest, requiredByBranch map[string]map[string]bool, failedRuleBranches map[string]error, base string, checkItems []checkItem) {
 	if dp.Checks != "pass" && dp.Checks != "review" {
+		return
+	}
+	if failedRuleBranches[base] != nil {
+		dp.Checks = "pending"
+		dp.checksDowngraded = true
 		return
 	}
 	required, ok := requiredByBranch[base]

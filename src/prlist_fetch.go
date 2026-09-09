@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"net/url"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -40,24 +43,47 @@ func fetchSupplementalData(repo string, prs []pullRequest) (prSupplementalData, 
 		numbers[i] = pr.Number
 	}
 	fetched, unavailable, fetchErr := fetchPRSupplemental(owner, name, repositoryTargetHost(repo), numbers)
-	return prSupplementalData{Info: fetched, Unavailable: unavailable, Err: fetchErr}, owner, name
+	data := prSupplementalData{Info: fetched, Unavailable: unavailable, Err: fetchErr}
+	if data.Err == nil {
+		data.Err = incompleteConnectionError(fetched)
+	}
+	return data, owner, name
+}
+
+// incompleteConnectionError explains rendered unknown columns that come from
+// truncated connections instead of a failed fetch, so a PR with more
+// supplemental rows than one page holds still says why parts stay unknown.
+func incompleteConnectionError(infos map[int]prSupplementalInfo) error {
+	numbers := make([]string, 0, len(infos))
+	for number, info := range infos {
+		if info.Incomplete {
+			numbers = append(numbers, strconv.Itoa(number))
+		}
+	}
+	if len(numbers) == 0 {
+		return nil
+	}
+	sort.Strings(numbers)
+	return fmt.Errorf("truncated supplemental connections for pull request(s) %s", strings.Join(numbers, ", "))
 }
 
 // fetchRequiredChecks retrieves required check contexts per base branch (best-effort).
-func fetchRequiredChecks(owner, name string, prs []pullRequest) (map[string]map[string]bool, map[string]bool) {
+func fetchRequiredChecks(owner, name string, prs []pullRequest) (map[string]map[string]bool, map[string]error) {
 	result := make(map[string]map[string]bool)
-	failed := make(map[string]bool)
+	failed := make(map[string]error)
 	if owner == "" {
 		for _, base := range uniqueBaseBranches(prs) {
-			failed[base] = true
+			failed[base] = errors.New("repository unavailable")
 		}
 		return result, failed
 	}
 	for _, base := range uniqueBaseBranches(prs) {
-		if ctx, ok := fetchRequiredCheckContexts(owner, name, base); ok && len(ctx) > 0 {
+		ctx, ok, err := fetchRequiredCheckContexts(owner, name, base)
+		switch {
+		case err == nil && ok && len(ctx) > 0:
 			result[base] = ctx
-		} else if !ok {
-			failed[base] = true
+		case err != nil:
+			failed[base] = err
 		}
 	}
 	return result, failed

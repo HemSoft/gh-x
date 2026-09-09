@@ -283,7 +283,7 @@ func TestEnrichPullRequestsAddsIssueRelationships(t *testing.T) {
 		2: {ClosingIssuesAvailable: true},
 	}
 
-	rendered := enrichPullRequests(prs, prSupplementalData{Info: supplemental}, nil, now)
+	rendered := enrichPullRequests(prs, prSupplementalData{Info: supplemental}, nil, nil, now)
 	want := []string{"#3, #21", "-", "?"}
 	for i := range rendered {
 		if rendered[i].Issues != want[i] {
@@ -291,7 +291,7 @@ func TestEnrichPullRequestsAddsIssueRelationships(t *testing.T) {
 		}
 	}
 
-	failed := enrichPullRequests(prs[:1], prSupplementalData{Unavailable: map[int]bool{1: true}}, nil, now)
+	failed := enrichPullRequests(prs[:1], prSupplementalData{Unavailable: map[int]bool{1: true}}, nil, nil, now)
 	if failed[0].Issues != "?" {
 		t.Fatalf("failed enrichment Issues = %q, want ?", failed[0].Issues)
 	}
@@ -301,7 +301,7 @@ func TestEnrichPullRequestsTreatsNullRelationshipConnectionAsUnavailable(t *test
 	prs := []pullRequest{{Number: 1}}
 	supplemental := map[int]prSupplementalInfo{1: {ClosingIssuesAvailable: false}}
 
-	rendered := enrichPullRequests(prs, prSupplementalData{Info: supplemental}, nil, time.Time{})
+	rendered := enrichPullRequests(prs, prSupplementalData{Info: supplemental}, nil, nil, time.Time{})
 	if rendered[0].Issues != "?" {
 		t.Fatalf("null relationship connection Issues = %q, want ?", rendered[0].Issues)
 	}

@@ -373,7 +373,7 @@ func TestEnrichPullRequests(t *testing.T) {
 	}
 	required := map[string]map[string]bool{}
 
-	rendered := enrichPullRequests(prs, prSupplementalData{Info: supp}, required, now)
+	rendered := enrichPullRequests(prs, prSupplementalData{Info: supp}, required, nil, now)
 	if len(rendered) != 2 {
 		t.Fatalf("expected 2, got %d", len(rendered))
 	}
@@ -401,6 +401,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 				]
 			},
 			"reviews": {
+				"totalCount": 2,
 				"nodes": [
 					{"state": "APPROVED", "author": {"login": "copilot[bot]", "__typename": "Bot"}, "comments": {"totalCount": 0}},
 					{"state": "APPROVED", "author": {"login": "carol", "__typename": "User"}, "comments": {"totalCount": 0}}
@@ -448,6 +449,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 				]
 			},
 			"reviews": {
+				"totalCount": 2,
 				"nodes": [
 					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "comments": {"totalCount": 2}},
 					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "comments": {"totalCount": 0}}
@@ -1034,7 +1036,7 @@ func TestParseSupplementalResponse(t *testing.T) {
 	}{
 		{
 			name:    "valid with one PR",
-			input:   `{"data":{"repository":{"pr42":{"number":42,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":2,"nodes":[]},"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`,
+			input:   `{"data":{"repository":{"pr42":{"number":42,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":2,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`,
 			wantLen: 1,
 		},
 		{
@@ -1076,7 +1078,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 			"totalCount":1,
 			"nodes":[{"isResolved":false,"comments":{"nodes":[]}}]
 		},
-		"reviews":{"nodes":[]},
+		"reviews":{"totalCount":0,"nodes":[]},
 		"approvedReviews":{"nodes":[]}
 	}}}}`
 
@@ -1101,7 +1103,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 				}]}
 			}]
 		},
-		"reviews":{"nodes":[{
+		"reviews":{"totalCount":1,"nodes":[{
 			"state":"COMMENTED",
 			"author":{"login":"copilot-pull-request-reviewer[bot]"},
 			"comments":{"totalCount":1}

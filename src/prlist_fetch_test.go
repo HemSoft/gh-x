@@ -571,7 +571,7 @@ func TestEnrichRendersCapturedCodexbarFixture(t *testing.T) {
 			Typename: "CheckRun", Name: "build", WorkflowName: "CI", Status: "IN_PROGRESS",
 		}},
 	}}
-	rendered := enrichPullRequests(prs, prSupplementalData{Info: infos}, nil, now)
+	rendered := enrichPullRequests(prs, prSupplementalData{Info: infos}, nil, nil, now)
 	row := rendered[0]
 	if row.Issues != "#332" {
 		t.Fatalf("Issues = %q, want #332 from captured closing relationship", row.Issues)
@@ -714,7 +714,7 @@ func TestParseSupplementalNodeDropsPartialFieldFailure(t *testing.T) {
 	rendered := enrichPullRequests(
 		[]pullRequest{{Number: 333, State: "OPEN", UpdatedAt: now}},
 		prSupplementalData{Info: infos, Unavailable: unavailable, Err: fmt.Errorf("gh api graphql: Field failed")},
-		nil, now,
+		nil, nil, now,
 	)
 	if rendered[0].Comments != "?" || rendered[0].AIReview != "?" || rendered[0].Issues != "?" {
 		t.Fatalf("partial field failure must render unknown, got issues=%q comments=%q ai=%q",
@@ -748,10 +748,10 @@ func TestRequiredChecksError(t *testing.T) {
 	if got := requiredChecksError(nil); got != nil {
 		t.Fatalf("requiredChecksError(nil) = %v, want nil", got)
 	}
-	err := requiredChecksError(map[string]bool{"main": true, "develop": true})
+	err := requiredChecksError(map[string]error{"main": errors.New("unavailable"), "develop": errors.New("unavailable")})
 	text := err.Error()
-	if !strings.Contains(text, "develop") || !strings.Contains(text, "main") || !strings.Contains(text, "no rules returned") {
-		t.Fatalf("requiredChecksError text = %q, want both branches and reason", text)
+	if !strings.Contains(text, "base develop") || !strings.Contains(text, "base main") || !strings.Contains(text, "unavailable") {
+		t.Fatalf("requiredChecksError text = %q, want both branches and reasons", text)
 	}
 	if strings.Index(text, "develop") > strings.Index(text, "main") {
 		t.Fatalf("branches must be listed deterministically, got %q", text)
@@ -797,7 +797,7 @@ func TestExecuteListRendersAuxiliaryNotices(t *testing.T) {
 	if !strings.Contains(table, "Supplemental data unavailable: gh api graphql: gh: You have exceeded a secondary rate limit.") {
 		t.Fatalf("table should print the supplemental diagnostic:\n%s", table)
 	}
-	if !strings.Contains(table, "Required check rules unavailable: no rules returned for base main") {
+	if !strings.Contains(table, "Required check rules unavailable: base main: required check rules: malformed response") {
 		t.Fatalf("table should print the required-checks diagnostic:\n%s", table)
 	}
 	if stderr.Len() != 0 {
@@ -807,8 +807,12 @@ func TestExecuteListRendersAuxiliaryNotices(t *testing.T) {
 
 func TestExecuteListAuxiliaryNoticesGoToStderrInJSONMode(t *testing.T) {
 	stdout, stderr := runAuxiliaryNoticeListExec(t, listOptions{repo: "owner/repo", limit: 30, state: "open", json: true})
-	if !strings.Contains(stdout.String(), `"number": 42`) {
-		t.Fatalf("JSON stdout must stay machine-readable:\n%s", stdout.String())
+	var decoded []displayPullRequest
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil {
+		t.Fatalf("JSON stdout must decode as the row array: %v\n%s", err, stdout.String())
+	}
+	if len(decoded) != 1 || decoded[0].Number != 42 || decoded[0].AIReview != "?" {
+		t.Fatalf("JSON rows must carry the listed PR with unknown supplemental columns, got %#v", decoded)
 	}
 	if !strings.Contains(stderr.String(), "Supplemental data unavailable:") {
 		t.Fatalf("JSON stderr should carry the supplemental diagnostic:\n%s", stderr.String())
@@ -851,5 +855,77 @@ func TestRunViewRendersSupplementalDataAndNotices(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("complete enrichment should print no diagnostics, got stderr %q", stderr.String())
+	}
+}
+
+func TestParseSupplementalResponseDropsIncompleteConnectionObjects(t *testing.T) {
+	tests := []struct {
+		name    string
+		field   string
+		payload string
+	}{
+		{name: "missing totalCount", field: "reviewThreads", payload: `{"nodes":[]}`},
+		{name: "null totalCount", field: "reviews", payload: `{"totalCount":null,"nodes":[]}`},
+		{name: "missing nodes", field: "comments", payload: `{"totalCount":0}`},
+		{name: "null nodes", field: "approvedReviews", payload: `{"nodes":null}`},
+		{name: "empty object", field: "reviewThreads", payload: `{}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			envelope := fmt.Sprintf(`{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]},%q:%s}}}}`, test.field, test.payload)
+			infos, err := parseSupplementalResponse([]byte(envelope))
+			if err != nil {
+				t.Fatalf("parseSupplementalResponse error: %v", err)
+			}
+			if _, present := infos[9]; present {
+				t.Fatalf("PR 9 with incomplete %s must not parse as available: %#v", test.field, infos[9])
+			}
+		})
+	}
+}
+
+func TestIncompleteConnectionsCarryDiagnostic(t *testing.T) {
+	saved := fetchPRSupplementalBatchFunc
+	defer func() { fetchPRSupplementalBatchFunc = saved }()
+
+	// A PR with more threads than one page returns a truncated connection:
+	// the PR stays rendered with its healthy fields while AI data is ?.
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
+		return map[int]prSupplementalInfo{
+			7: {AIReview: "?", Incomplete: true},
+		}, nil, nil
+	}
+
+	data, _, _ := fetchSupplementalData("owner/repo", []pullRequest{{Number: 7}})
+	if data.Err == nil {
+		t.Fatal("truncated connections must produce a diagnostic when no fetch error exists")
+	}
+	if !strings.Contains(data.Err.Error(), "truncated supplemental connections for pull request(s) 7") {
+		t.Fatalf("diagnostic should name the affected PR, got %v", data.Err)
+	}
+	if data.Unavailable[7] {
+		t.Fatal("truncated PR stays rendered with healthy fields, not unavailable")
+	}
+}
+
+func TestEnrichPullRequestsDowngradesChecksOnFailedRules(t *testing.T) {
+	now := time.Date(2026, 9, 9, 4, 40, 0, 0, time.UTC)
+	prs := []pullRequest{{
+		Number:      42,
+		Title:       "Unverifiable required checks",
+		State:       "OPEN",
+		UpdatedAt:   now,
+		BaseRefName: "main",
+		StatusCheckRollup: []checkItem{{
+			Typename: "CheckRun", Name: "build", WorkflowName: "CI", Status: "COMPLETED", Conclusion: "SUCCESS",
+		}},
+	}}
+
+	rendered := enrichPullRequests(prs, prSupplementalData{}, nil, map[string]error{"main": errors.New("required check rules: malformed response")}, now)
+	if rendered[0].Checks != "pending" {
+		t.Fatalf("Checks = %q, want pending when required rules cannot be fetched", rendered[0].Checks)
+	}
+	if !rendered[0].checksDowngraded {
+		t.Fatal("expected the failed-rules downgrade to be recorded")
 	}
 }

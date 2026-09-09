@@ -22,6 +22,7 @@ type prSupplementalInfo struct {
 	AIClean                bool
 	HasUnresolvedAIThreads bool
 	Approvals              int
+	Incomplete             bool
 }
 
 // aiReviewNode holds the fields needed to detect bot reviewer status.
@@ -473,6 +474,10 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		latestCurrentHeadCodexAt,
 		hasCurrentHeadCodexReview,
 	)
+	incomplete := supplementalConnectionsIncomplete(
+		prData.ClosingIssuesReferences,
+		commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous,
+	)
 	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
 		aiThreads,
@@ -491,15 +496,17 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		AIClean:                aiClean,
 		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
 		Approvals:              countUniqueApprovers(approverLogins),
+		Incomplete:             incomplete,
 	}, true
 }
 
 // supplementalConnectionsPresent reports whether every connection the
-// supplemental summary consumes was returned for this PR. GitHub nulls an
-// individual field of an otherwise valid object when that sub-query fails,
-// so an entry with a missing connection cannot prove its threads, comments,
-// or reviews and must stay unavailable. closingIssuesReferences keeps its
-// own per-field availability flag.
+// supplemental summary consumes was fully returned for this PR. GitHub nulls
+// an individual field of an otherwise valid object when that sub-query fails
+// and can also return a connection object with absent counts, so an entry
+// with an incomplete connection cannot prove its threads, comments, or
+// reviews and must stay unavailable. closingIssuesReferences keeps its own
+// per-field availability flag.
 func supplementalConnectionsPresent(raw json.RawMessage) bool {
 	var fields struct {
 		Comments        json.RawMessage `json:"comments"`
@@ -510,13 +517,38 @@ func supplementalConnectionsPresent(raw json.RawMessage) bool {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return false
 	}
-	return connectionReturned(fields.Comments) &&
-		connectionReturned(fields.ReviewThreads) &&
-		connectionReturned(fields.Reviews) &&
-		connectionReturned(fields.ApprovedReviews)
+	return countedConnectionPresent(fields.Comments) &&
+		countedConnectionPresent(fields.ReviewThreads) &&
+		countedConnectionPresent(fields.Reviews) &&
+		nodeConnectionPresent(fields.ApprovedReviews)
 }
 
-func connectionReturned(raw json.RawMessage) bool {
+// countedConnectionPresent requires both totalCount and nodes; a missing
+// count would default the summary to a false zero.
+func countedConnectionPresent(raw json.RawMessage) bool {
+	var connection struct {
+		TotalCount json.RawMessage `json:"totalCount"`
+		Nodes      json.RawMessage `json:"nodes"`
+	}
+	if err := json.Unmarshal(raw, &connection); err != nil {
+		return false
+	}
+	return jsonValuePresent(connection.TotalCount) && jsonValuePresent(connection.Nodes)
+}
+
+// nodeConnectionPresent requires only nodes; approvedReviews carries no
+// count in the supplemental query.
+func nodeConnectionPresent(raw json.RawMessage) bool {
+	var connection struct {
+		Nodes json.RawMessage `json:"nodes"`
+	}
+	if err := json.Unmarshal(raw, &connection); err != nil {
+		return false
+	}
+	return jsonValuePresent(connection.Nodes)
+}
+
+func jsonValuePresent(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
@@ -526,6 +558,12 @@ func closingIssueNodes(connection *linkedReferenceConnection) []linkedReference 
 		return nil
 	}
 	return connection.Nodes
+}
+
+// supplementalConnectionsIncomplete reports whether any consumed connection
+// was truncated or absent, so rendered unknown columns need a diagnostic.
+func supplementalConnectionsIncomplete(closingIssues *linkedReferenceConnection, truncated ...bool) bool {
+	return anyConnectionTruncated(truncated...) || !closingIssues.complete()
 }
 
 func anyConnectionTruncated(truncated ...bool) bool {
