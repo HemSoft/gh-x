@@ -302,11 +302,15 @@ func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[in
 	if data == nil {
 		return nil, unavailable, err
 	}
-	infos, parseErr := parseSupplementalResponse(data)
+	infos, errored, parseErr := parseSupplementalResponse(data)
 	if parseErr != nil {
 		return nil, unavailable, parseErr
 	}
-	return infos, unavailablePRNumbers(prNumbers, infos), err
+	unavailable = unavailablePRNumbers(prNumbers, infos)
+	for number := range errored {
+		unavailable[number] = true
+	}
+	return infos, unavailable, err
 }
 
 // unavailablePRNumbers lists requested PRs that produced no parsed

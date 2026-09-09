@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -216,11 +217,15 @@ func fetchIssueRelationshipsBatch(owner, name, host string, issueNumbers []int) 
 	if data == nil {
 		return nil, unavailable, err
 	}
-	refs, parseErr := parseIssueRelationships(data)
+	refs, errored, parseErr := parseIssueRelationships(data)
 	if parseErr != nil {
 		return nil, unavailable, parseErr
 	}
-	return refs, unavailableIssueNumbers(issueNumbers, refs), err
+	unavailable = unavailableIssueNumbers(issueNumbers, refs)
+	for number := range errored {
+		unavailable[number] = true
+	}
+	return refs, unavailable, err
 }
 
 // unavailableIssueNumbers lists requested issues that produced no parsed
@@ -236,14 +241,15 @@ func unavailableIssueNumbers(issueNumbers []int, refs map[int][]linkedReference)
 	return unavailable
 }
 
-func parseIssueRelationships(data []byte) (map[int][]linkedReference, error) {
+func parseIssueRelationships(data []byte) (map[int][]linkedReference, map[int]bool, error) {
 	var response struct {
 		Data struct {
 			Repository map[string]json.RawMessage `json:"repository"`
 		} `json:"data"`
+		Errors []graphQLError `json:"errors"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	result := make(map[int][]linkedReference)
@@ -257,5 +263,36 @@ func parseIssueRelationships(data []byte) (map[int][]linkedReference, error) {
 		}
 		result[issue.Number] = issue.ClosedByPullRequestsReferences.Nodes
 	}
-	return result, nil
+	return result, issueAliasesFromErrors(response.Errors), nil
+}
+
+// issueAliasesFromErrors walks each GraphQL error path for the batch's issueN
+// alias names, because an error path through an alias marks that alias's
+// relationship data as failed even when a parseable object survived.
+func issueAliasesFromErrors(errors []graphQLError) map[int]bool {
+	errored := make(map[int]bool)
+	for _, gqlErr := range errors {
+		for _, element := range gqlErr.Path {
+			var name string
+			if json.Unmarshal(element, &name) != nil {
+				continue
+			}
+			if number, ok := issueAliasNumber(name); ok {
+				errored[number] = true
+			}
+		}
+	}
+	return errored
+}
+
+// issueAliasNumber extracts the issue number from a batch alias like "issue332".
+func issueAliasNumber(alias string) (int, bool) {
+	if !strings.HasPrefix(alias, "issue") {
+		return 0, false
+	}
+	number, err := strconv.Atoi(strings.TrimPrefix(alias, "issue"))
+	if err != nil {
+		return 0, false
+	}
+	return number, true
 }

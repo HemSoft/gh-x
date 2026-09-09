@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -323,14 +324,25 @@ func latestAIReview(reviews []aiReviewNode) (aiReviewNode, bool) {
 	return aiReviewNode{}, false
 }
 
-func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, error) {
+// graphQLError is one entry from a GraphQL response's errors array.
+type graphQLError struct {
+	Path []json.RawMessage `json:"path"`
+}
+
+// parseSupplementalResponse parses the batch envelope into per-PR info plus
+// the aliases the GraphQL errors paths mark as failed. GitHub nulls the
+// affected field or object for every error and reports its path, so an error
+// path through an alias means that alias's data must stay unavailable even
+// when a parseable object survived.
+func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, map[int]bool, error) {
 	var resp struct {
 		Data struct {
 			Repository map[string]json.RawMessage `json:"repository"`
 		} `json:"data"`
+		Errors []graphQLError `json:"errors"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	result := make(map[int]prSupplementalInfo)
 	for _, raw := range resp.Data.Repository {
@@ -343,7 +355,38 @@ func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, error) 
 		}
 		result[num] = info
 	}
-	return result, nil
+	return result, aliasesFromErrors(resp.Errors), nil
+}
+
+// aliasesFromErrors walks each GraphQL error path for the batch's prN alias
+// names, because an error path through an alias marks that alias's data as
+// failed even when the object survived the failure.
+func aliasesFromErrors(errors []graphQLError) map[int]bool {
+	errored := make(map[int]bool)
+	for _, gqlErr := range errors {
+		for _, element := range gqlErr.Path {
+			var name string
+			if json.Unmarshal(element, &name) != nil {
+				continue
+			}
+			if number, ok := aliasNumber(name); ok {
+				errored[number] = true
+			}
+		}
+	}
+	return errored
+}
+
+// aliasNumber extracts the PR number from a batch alias like "pr333".
+func aliasNumber(alias string) (int, bool) {
+	if !strings.HasPrefix(alias, "pr") {
+		return 0, false
+	}
+	number, err := strconv.Atoi(strings.TrimPrefix(alias, "pr"))
+	if err != nil {
+		return 0, false
+	}
+	return number, true
 }
 
 // parsePRSupplementalNode parses a single PR's supplemental data from raw JSON.
@@ -411,9 +454,10 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 // conversation receipt, so both evidence sources feed one chronological list.
 func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReviewNode, hasCurrentHeadCodexReview bool, latestCurrentHeadCodexAt time.Time, unattributableReview bool) {
 	for _, r := range prData.Reviews.Nodes {
-		if r.Author.Login == "" && r.Author.Typename == "" || r.State == "" || r.Commit.OID == "" {
-			// A review whose authorship, state, or commit cannot be read may
-			// be bot evidence that cannot be classified.
+		if (r.Author.Login == "" && r.Author.Typename == "") || r.State == "" {
+			// A review without attributable authorship or a state may be bot
+			// evidence that cannot be classified. A PENDING review carries no
+			// commit by design, so commit absence stays legitimate.
 			unattributableReview = true
 		}
 		formal = append(formal, aiReviewNode{

@@ -258,7 +258,7 @@ func TestParseIssueRelationships(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, err := parseIssueRelationships([]byte(test.input))
+			result, _, err := parseIssueRelationships([]byte(test.input))
 			if test.wantErr {
 				if err == nil {
 					t.Fatalf("parseIssueRelationships returned %v, want error", result)

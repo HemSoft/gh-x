@@ -1052,7 +1052,8 @@ func TestParseSupplementalResponse(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := parseSupplementalResponse([]byte(tc.input))
+			result, errored, err := parseSupplementalResponse([]byte(tc.input))
+			_ = errored
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got result with %d entries", len(result))
@@ -1082,7 +1083,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 		"approvedReviews":{"nodes":[]}
 	}}}}`
 
-	result, err := parseSupplementalResponse([]byte(emptyComments))
+	result, _, err := parseSupplementalResponse([]byte(emptyComments))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1112,7 +1113,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 		"approvedReviews":{"nodes":[]}
 	}}}}`
 
-	result2, err := parseSupplementalResponse([]byte(botComments))
+	result2, _, err := parseSupplementalResponse([]byte(botComments))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

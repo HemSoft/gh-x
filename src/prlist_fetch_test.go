@@ -553,9 +553,12 @@ const capturedCodexbarSupplementalResponse = `{
 }`
 
 func TestEnrichRendersCapturedCodexbarFixture(t *testing.T) {
-	infos, err := parseSupplementalResponse([]byte(capturedCodexbarSupplementalResponse))
+	infos, errored, err := parseSupplementalResponse([]byte(capturedCodexbarSupplementalResponse))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse returned error: %v", err)
+	}
+	if len(errored) != 0 {
+		t.Fatalf("the captured fixture must carry no error paths, got %v", errored)
 	}
 	if _, ok := infos[333]; !ok {
 		t.Fatalf("fixture must parse PR 333, got %v", infos)
@@ -696,7 +699,7 @@ func TestParseSupplementalNodeDropsPartialFieldFailure(t *testing.T) {
 	raw := json.RawMessage(`{"number":333,"headRefOid":"53b343204e072b22f6511ac68bf6284aa2c418c2","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":332,"url":"https://github.com/HemSoft/codexbar-ios/issues/332"}]},"comments":{"totalCount":2,"nodes":[{"body":"hi","author":{"login":"user","__typename":"User"}}]},"reviewThreads":null,"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]}}`)
 
 	envelope := `{"data":{"repository":{"pr333":` + string(raw) + `}},"errors":[{"type":"NOT_FOUND","path":["repository","pr333","reviewThreads"],"message":"Field failed"}]}`
-	infos, parseErr := parseSupplementalResponse([]byte(envelope))
+	infos, _, parseErr := parseSupplementalResponse([]byte(envelope))
 	if parseErr != nil {
 		t.Fatalf("envelope with partial errors must still parse: %v", parseErr)
 	}
@@ -873,7 +876,7 @@ func TestParseSupplementalResponseDropsIncompleteConnectionObjects(t *testing.T)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			envelope := fmt.Sprintf(`{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]},%q:%s}}}}`, test.field, test.payload)
-			infos, err := parseSupplementalResponse([]byte(envelope))
+			infos, _, err := parseSupplementalResponse([]byte(envelope))
 			if err != nil {
 				t.Fatalf("parseSupplementalResponse error: %v", err)
 			}
@@ -946,7 +949,7 @@ func TestParseSupplementalResponseDropsBrokenThreadNodes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			envelope := fmt.Sprintf(`{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":1,"nodes":[%s]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`, test.brokenNode)
-			infos, err := parseSupplementalResponse([]byte(envelope))
+			infos, _, err := parseSupplementalResponse([]byte(envelope))
 			if err != nil {
 				t.Fatalf("parseSupplementalResponse error: %v", err)
 			}
@@ -1034,9 +1037,12 @@ func TestEnrichPullRequestsKeepsReviewStateOnFailedRules(t *testing.T) {
 
 func TestUnattributableThreadsForceUnknownAI(t *testing.T) {
 	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":1,"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":null}]}}]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
-	infos, err := parseSupplementalResponse([]byte(envelope))
+	infos, errored, err := parseSupplementalResponse([]byte(envelope))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)
+	}
+	if len(errored) != 0 {
+		t.Fatalf("a null comment author without an error path is legitimate data, got %v", errored)
 	}
 	info, ok := infos[9]
 	if !ok {
@@ -1066,9 +1072,12 @@ func TestUnattributableThreadsForceUnknownAI(t *testing.T) {
 
 func TestUnattributableFormalReviewForcesUnknownAI(t *testing.T) {
 	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":null,"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
-	infos, err := parseSupplementalResponse([]byte(envelope))
+	infos, errored, err := parseSupplementalResponse([]byte(envelope))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)
+	}
+	if len(errored) != 0 {
+		t.Fatalf("a null review author without an error path is legitimate data, got %v", errored)
 	}
 	info, ok := infos[9]
 	if !ok {
@@ -1093,31 +1102,46 @@ func TestUnattributableFormalReviewForcesUnknownAI(t *testing.T) {
 }
 
 func TestUnattributableFormalReviewFieldsForceUnknownAI(t *testing.T) {
-	tests := []struct {
-		name   string
-		review string
-	}{
-		{name: "null commit", review: `{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":null,"comments":{"totalCount":0}}`},
-		{name: "missing state", review: `{"author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"abc"},"comments":{"totalCount":0}}`},
+	// A field-level failure always carries a GraphQL error path through the
+	// alias, which keeps the PR's data unavailable even when the object
+	// survived with zero values.
+	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":null,"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}},"errors":[{"type":null,"path":["repository","pr9","reviews"],"message":"Field failed"}]}`
+	infos, errored, err := parseSupplementalResponse([]byte(envelope))
+	if err != nil {
+		t.Fatalf("parseSupplementalResponse error: %v", err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			envelope := fmt.Sprintf(`{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[%s]},"approvedReviews":{"nodes":[]}}}}}`, test.review)
-			infos, err := parseSupplementalResponse([]byte(envelope))
-			if err != nil {
-				t.Fatalf("parseSupplementalResponse error: %v", err)
-			}
-			info, ok := infos[9]
-			if !ok {
-				t.Fatalf("a review with a nulled consumed field must parse, got %#v", infos)
-			}
-			if info.AIReview != "?" {
-				t.Fatalf("AIReview = %q, want ? when a consumed review field is unreadable", info.AIReview)
-			}
-			if !info.UnattributableEvidence {
-				t.Fatal("expected the unattributable-evidence flag to be set")
-			}
-		})
+	if !errored[9] {
+		t.Fatalf("the error path through pr9 must mark the alias, got %v", errored)
+	}
+	if _, ok := infos[9]; !ok {
+		t.Fatal("the envelope still parses; the fetch layer unions the error mark into unavailable")
+	}
+
+	// A PENDING review carries no commit by design and stays legitimate data.
+	pending := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"PENDING","author":{"login":"user","__typename":"User"},"commit":null,"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
+	infos, errored, err = parseSupplementalResponse([]byte(pending))
+	if err != nil {
+		t.Fatalf("parseSupplementalResponse error: %v", err)
+	}
+	if len(errored) != 0 {
+		t.Fatalf("a PENDING review without a commit must not be marked, got %v", errored)
+	}
+	info, ok := infos[9]
+	if !ok {
+		t.Fatalf("the PENDING review PR must parse, got %#v", infos)
+	}
+	if info.UnattributableEvidence {
+		t.Fatal("a PENDING review must not count as unattributable evidence")
+	}
+
+	saved := fetchPRSupplementalBatchFunc
+	defer func() { fetchPRSupplementalBatchFunc = saved }()
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
+		return nil, map[int]bool{9: true}, nil
+	}
+	data, _, _ := fetchSupplementalData("owner/repo", []pullRequest{{Number: 9}})
+	if !data.Unavailable[9] {
+		t.Fatalf("the error-marked PR must stay unavailable, got %v", data.Unavailable)
 	}
 }
 
@@ -1125,20 +1149,26 @@ func TestNullRelationshipNodesStayUnavailable(t *testing.T) {
 	// Issue side: a null node inside the connection must not render "-" (no
 	// linked PRs); the issue stays unknown instead.
 	issueEnvelope := `{"data":{"repository":{"issue7":{"number":7,"closedByPullRequestsReferences":{"totalCount":1,"nodes":[null]}}}}}`
-	refs, err := parseIssueRelationships([]byte(issueEnvelope))
+	refs, errored, err := parseIssueRelationships([]byte(issueEnvelope))
 	if err != nil {
 		t.Fatalf("parseIssueRelationships error: %v", err)
 	}
 	if _, present := refs[7]; present {
 		t.Fatalf("issue 7 with a null relationship node must stay unavailable, got %#v", refs[7])
 	}
+	if len(errored) != 0 {
+		t.Fatalf("a null relationship node without an error path is malformed data, got %v", errored)
+	}
 
 	// PR side: the closing-issues connection with a null node is unavailable,
 	// so the relationship column renders ? rather than a false empty value.
 	prEnvelope := `{"data":{"repository":{"pr9":{"number":9,"closingIssuesReferences":{"totalCount":1,"nodes":[null]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`
-	infos, err := parseSupplementalResponse([]byte(prEnvelope))
+	infos, errored, err := parseSupplementalResponse([]byte(prEnvelope))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)
+	}
+	if len(errored) != 0 {
+		t.Fatalf("a null relationship node without an error path is malformed data, got %v", errored)
 	}
 	info, ok := infos[9]
 	if !ok {
