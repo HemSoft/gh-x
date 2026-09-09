@@ -1287,8 +1287,11 @@ func TestTrimCellTextRespectsDisplayWidth(t *testing.T) {
 	if !strings.HasSuffix(trimmed, "...") {
 		t.Fatalf("trimmed cell should end with an ellipsis, got %q", trimmed)
 	}
-	if got := trimCellText("plain ascii title that exceeds the limit by far", 51); runewidth.StringWidth(got) > 51 {
+	ascii := strings.Repeat("a", 80)
+	if got := trimCellText(ascii, 51); runewidth.StringWidth(got) > 51 {
 		t.Fatalf("ascii cell width = %d, want at most 51", runewidth.StringWidth(got))
+	} else if !strings.HasSuffix(got, "...") {
+		t.Fatalf("truncated ascii cell should end with an ellipsis, got %q", got)
 	}
 	if got := trimCellText("short", 51); got != "short" {
 		t.Fatalf("short cell = %q, want unchanged", got)

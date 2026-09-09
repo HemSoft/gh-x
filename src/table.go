@@ -209,7 +209,9 @@ func truncateCells(rows [][]tableCell, colWidths []int, flexibleCols []int) [][]
 				continue
 			}
 			if runewidth.StringWidth(cell.text) > colWidths[j] {
-				trimmed := trimTitle(cell.text, colWidths[j])
+				// Display-width truncation keeps wide-rune content inside the
+				// column budget, so writeRow never pads with a negative count.
+				trimmed := trimCellText(cell.text, colWidths[j])
 				rows[i][j] = cell.withText(trimmed)
 			}
 		}
