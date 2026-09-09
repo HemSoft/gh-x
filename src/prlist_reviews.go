@@ -25,7 +25,7 @@ type prSupplementalInfo struct {
 	Approvals              int
 	Incomplete             bool
 	EvidenceAmbiguous      bool
-	UnattributableThreads  bool
+	UnattributableEvidence bool
 }
 
 // aiReviewNode holds the fields needed to detect bot reviewer status.
@@ -40,10 +40,9 @@ type aiReviewNode struct {
 
 // aiReviewThread holds thread resolution state and authorship for AI review detection.
 type aiReviewThread struct {
-	AuthorLogin   string
-	AuthorType    string
-	IsResolved    bool
-	AuthorUnknown bool
+	AuthorLogin string
+	AuthorType  string
+	IsResolved  bool
 }
 
 // aiReviewComment holds PR conversation comments that may contain a
@@ -358,7 +357,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		return 0, prSupplementalInfo{}, false
 	}
 
-	formal, aiNodes, hasCurrentHeadCodexReview, latestCurrentHeadCodexAt := collectAIEvidence(&prData)
+	formal, aiNodes, hasCurrentHeadCodexReview, latestCurrentHeadCodexAt, unattributableReview := collectAIEvidence(&prData)
 	sortAIReviewsChronologically(aiNodes)
 	aiThreads, unknownUnresolved := parseReviewThreadStates(&prData)
 
@@ -387,7 +386,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		aiNodes,
 		aiThreads,
 		prData.HeadRefOID,
-		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous) || unknownUnresolved,
+		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous) || unknownUnresolved || unattributableReview,
 	)
 
 	return prData.Number, prSupplementalInfo{
@@ -404,14 +403,19 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		Approvals:              countUniqueApprovers(approverLogins(&prData)),
 		Incomplete:             incomplete,
 		EvidenceAmbiguous:      evidenceOrderAmbiguous,
-		UnattributableThreads:  unknownUnresolved,
+		UnattributableEvidence: unknownUnresolved || unattributableReview,
 	}, true
 }
 
 // collectAIEvidence gathers the formal reviews plus any current-head Codex
 // conversation receipt, so both evidence sources feed one chronological list.
-func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReviewNode, hasCurrentHeadCodexReview bool, latestCurrentHeadCodexAt time.Time) {
+func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReviewNode, hasCurrentHeadCodexReview bool, latestCurrentHeadCodexAt time.Time, unattributableReview bool) {
 	for _, r := range prData.Reviews.Nodes {
+		if r.Author.Login == "" && r.Author.Typename == "" {
+			// A review without attributable authorship may be a bot review
+			// whose evidence cannot be classified.
+			unattributableReview = true
+		}
 		formal = append(formal, aiReviewNode{
 			State:        r.State,
 			AuthorLogin:  r.Author.Login,
@@ -436,7 +440,7 @@ func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReview
 			}
 		}
 	}
-	return formal, aiNodes, hasCurrentHeadCodexReview, latestCurrentHeadCodexAt
+	return formal, aiNodes, hasCurrentHeadCodexReview, latestCurrentHeadCodexAt, unattributableReview
 }
 
 // parseReviewThreadStates maps review threads to their resolution state and
@@ -456,10 +460,9 @@ func parseReviewThreadStates(prData *supplementalNodeData) ([]aiReviewThread, bo
 			unknownUnresolved = true
 		}
 		aiThreads = append(aiThreads, aiReviewThread{
-			AuthorLogin:   login,
-			AuthorType:    authorType,
-			IsResolved:    t.IsResolved,
-			AuthorUnknown: unknown,
+			AuthorLogin: login,
+			AuthorType:  authorType,
+			IsResolved:  t.IsResolved,
 		})
 	}
 	return aiThreads, unknownUnresolved

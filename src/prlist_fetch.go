@@ -48,7 +48,7 @@ func fetchSupplementalData(repo string, prs []pullRequest) (prSupplementalData, 
 		data.Err = joinSupplementalReasons(
 			incompleteConnectionError(fetched),
 			evidenceAmbiguityError(fetched),
-			unattributableThreadsError(fetched),
+			unattributableEvidenceError(fetched),
 		)
 	}
 	return data, owner, name
@@ -91,15 +91,15 @@ func evidenceAmbiguityError(infos map[int]prSupplementalInfo) error {
 	return fmt.Errorf("cannot order AI review evidence for pull request(s) %s", joinPRNumbers(numbers))
 }
 
-// unattributableThreadsError names PRs whose unresolved review thread cannot
-// be attributed to an author, so an unknown AI column is not misread as a
+// unattributableEvidenceError names PRs whose review evidence cannot be
+// attributed to an author, so an unknown AI column is not misread as a
 // confirmed pass or failure.
-func unattributableThreadsError(infos map[int]prSupplementalInfo) error {
-	numbers := incompleteInfoNumbers(infos, func(info prSupplementalInfo) bool { return info.UnattributableThreads })
+func unattributableEvidenceError(infos map[int]prSupplementalInfo) error {
+	numbers := incompleteInfoNumbers(infos, func(info prSupplementalInfo) bool { return info.UnattributableEvidence })
 	if len(numbers) == 0 {
 		return nil
 	}
-	return fmt.Errorf("unattributable review threads for pull request(s) %s", joinPRNumbers(numbers))
+	return fmt.Errorf("unattributable review evidence for pull request(s) %s", joinPRNumbers(numbers))
 }
 
 func incompleteInfoNumbers(infos map[int]prSupplementalInfo, marked func(prSupplementalInfo) bool) []int {

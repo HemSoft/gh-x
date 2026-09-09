@@ -1033,7 +1033,6 @@ func TestEnrichPullRequestsKeepsReviewStateOnFailedRules(t *testing.T) {
 }
 
 func TestUnattributableThreadsForceUnknownAI(t *testing.T) {
-	now := time.Date(2026, 9, 9, 4, 40, 0, 0, time.UTC)
 	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":1,"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":null}]}}]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
 	infos, err := parseSupplementalResponse([]byte(envelope))
 	if err != nil {
@@ -1046,23 +1045,49 @@ func TestUnattributableThreadsForceUnknownAI(t *testing.T) {
 	if info.AIReview != "?" {
 		t.Fatalf("AIReview = %q, want ? when an unresolved thread has no attributable author", info.AIReview)
 	}
-	if !info.UnattributableThreads {
-		t.Fatal("expected the unattributable-thread flag to be set")
+	if !info.UnattributableEvidence {
+		t.Fatal("expected the unattributable-evidence flag to be set")
 	}
 	if info.HasUnresolvedAIThreads {
 		t.Fatal("an unattributable thread must not be counted as a confirmed AI finding")
 	}
 
 	// The rendered diagnostic names the PR and the reason.
-	data, _, _ := fetchSupplementalData("owner/repo", []pullRequest{{Number: 9, State: "OPEN", UpdatedAt: now}})
-	_ = data
 	saved := fetchPRSupplementalBatchFunc
 	defer func() { fetchPRSupplementalBatchFunc = saved }()
 	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
 		return infos, nil, nil
 	}
-	data, _, _ = fetchSupplementalData("owner/repo", []pullRequest{{Number: 9}})
-	if data.Err == nil || !strings.Contains(data.Err.Error(), "unattributable review threads for pull request(s) 9") {
-		t.Fatalf("diagnostic should name unattributable threads, got %v", data.Err)
+	data, _, _ := fetchSupplementalData("owner/repo", []pullRequest{{Number: 9}})
+	if data.Err == nil || !strings.Contains(data.Err.Error(), "unattributable review evidence for pull request(s) 9") {
+		t.Fatalf("diagnostic should name unattributable evidence, got %v", data.Err)
+	}
+}
+
+func TestUnattributableFormalReviewForcesUnknownAI(t *testing.T) {
+	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":null,"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
+	infos, err := parseSupplementalResponse([]byte(envelope))
+	if err != nil {
+		t.Fatalf("parseSupplementalResponse error: %v", err)
+	}
+	info, ok := infos[9]
+	if !ok {
+		t.Fatalf("a null review author is legitimate data and must parse, got %#v", infos)
+	}
+	if info.AIReview != "?" {
+		t.Fatalf("AIReview = %q, want ? when a formal review has no attributable author", info.AIReview)
+	}
+	if !info.UnattributableEvidence {
+		t.Fatal("expected the unattributable-evidence flag to be set")
+	}
+
+	saved := fetchPRSupplementalBatchFunc
+	defer func() { fetchPRSupplementalBatchFunc = saved }()
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
+		return infos, nil, nil
+	}
+	data, _, _ := fetchSupplementalData("owner/repo", []pullRequest{{Number: 9}})
+	if data.Err == nil || !strings.Contains(data.Err.Error(), "unattributable review evidence for pull request(s) 9") {
+		t.Fatalf("diagnostic should name unattributable evidence, got %v", data.Err)
 	}
 }
