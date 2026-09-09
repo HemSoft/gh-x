@@ -25,6 +25,7 @@ type prSupplementalInfo struct {
 	Approvals              int
 	Incomplete             bool
 	EvidenceAmbiguous      bool
+	UnattributableThreads  bool
 }
 
 // aiReviewNode holds the fields needed to detect bot reviewer status.
@@ -39,9 +40,10 @@ type aiReviewNode struct {
 
 // aiReviewThread holds thread resolution state and authorship for AI review detection.
 type aiReviewThread struct {
-	AuthorLogin string
-	AuthorType  string
-	IsResolved  bool
+	AuthorLogin   string
+	AuthorType    string
+	IsResolved    bool
+	AuthorUnknown bool
 }
 
 // aiReviewComment holds PR conversation comments that may contain a
@@ -348,61 +350,7 @@ func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, error) 
 // parsePRSupplementalNode parses a single PR's supplemental data from raw JSON.
 // Returns the PR number, supplemental info, and whether parsing succeeded.
 func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool) {
-	var prData struct {
-		Number                  int                        `json:"number"`
-		HeadRefOID              string                     `json:"headRefOid"`
-		ClosingIssuesReferences *linkedReferenceConnection `json:"closingIssuesReferences"`
-		Comments                struct {
-			TotalCount int `json:"totalCount"`
-			Nodes      []struct {
-				Body      string    `json:"body"`
-				CreatedAt time.Time `json:"createdAt"`
-				Author    struct {
-					Login    string `json:"login"`
-					Typename string `json:"__typename"`
-				} `json:"author"`
-			} `json:"nodes"`
-		} `json:"comments"`
-		ReviewThreads struct {
-			TotalCount int `json:"totalCount"`
-			Nodes      []struct {
-				IsResolved bool `json:"isResolved"`
-				Comments   struct {
-					Nodes []struct {
-						Author struct {
-							Login    string `json:"login"`
-							Typename string `json:"__typename"`
-						} `json:"author"`
-					} `json:"nodes"`
-				} `json:"comments"`
-			} `json:"nodes"`
-		} `json:"reviewThreads"`
-		Reviews struct {
-			TotalCount int `json:"totalCount"`
-			Nodes      []struct {
-				State       string    `json:"state"`
-				SubmittedAt time.Time `json:"submittedAt"`
-				Commit      struct {
-					OID string `json:"oid"`
-				} `json:"commit"`
-				Author struct {
-					Login    string `json:"login"`
-					Typename string `json:"__typename"`
-				} `json:"author"`
-				Comments struct {
-					TotalCount int `json:"totalCount"`
-				} `json:"comments"`
-			} `json:"nodes"`
-		} `json:"reviews"`
-		ApprovedReviews struct {
-			Nodes []struct {
-				Author struct {
-					Login    string `json:"login"`
-					Typename string `json:"__typename"`
-				} `json:"author"`
-			} `json:"nodes"`
-		} `json:"approvedReviews"`
-	}
+	var prData supplementalNodeData
 	if err := json.Unmarshal(raw, &prData); err != nil {
 		return 0, prSupplementalInfo{}, false
 	}
@@ -410,9 +358,61 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		return 0, prSupplementalInfo{}, false
 	}
 
-	var formalReviewNodes []aiReviewNode
+	formal, aiNodes, hasCurrentHeadCodexReview, latestCurrentHeadCodexAt := collectAIEvidence(&prData)
+	sortAIReviewsChronologically(aiNodes)
+	aiThreads, unknownUnresolved := parseReviewThreadStates(&prData)
+
+	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
+	commentsIncomplete := connectionIncomplete(
+		prData.Comments.TotalCount,
+		len(prData.Comments.Nodes),
+		hasCurrentHeadCodexReview,
+	)
+	reviewsIncomplete := connectionIncomplete(
+		prData.Reviews.TotalCount,
+		len(prData.Reviews.Nodes),
+		sufficientReviewEvidence(formal, prData.HeadRefOID, latestCurrentHeadCodexAt),
+	)
+	evidenceOrderAmbiguous := reviewEvidenceOrderAmbiguous(
+		formal,
+		prData.HeadRefOID,
+		latestCurrentHeadCodexAt,
+		hasCurrentHeadCodexReview,
+	)
+	incomplete := supplementalConnectionsIncomplete(
+		prData.ClosingIssuesReferences,
+		commentsIncomplete, threadsTruncated, reviewsIncomplete,
+	)
+	aiReview, aiClean := summarizeSupplementalReviews(
+		aiNodes,
+		aiThreads,
+		prData.HeadRefOID,
+		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous) || unknownUnresolved,
+	)
+
+	return prData.Number, prSupplementalInfo{
+		Threads: reviewThreadInfo{
+			Total:    prData.ReviewThreads.TotalCount,
+			Resolved: countResolvedThreads(aiThreads),
+		},
+		ThreadsTruncated:       threadsTruncated,
+		ClosingIssues:          closingIssueNodes(prData.ClosingIssuesReferences),
+		ClosingIssuesAvailable: prData.ClosingIssuesReferences.complete(),
+		AIReview:               aiReview,
+		AIClean:                aiClean,
+		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
+		Approvals:              countUniqueApprovers(approverLogins(&prData)),
+		Incomplete:             incomplete,
+		EvidenceAmbiguous:      evidenceOrderAmbiguous,
+		UnattributableThreads:  unknownUnresolved,
+	}, true
+}
+
+// collectAIEvidence gathers the formal reviews plus any current-head Codex
+// conversation receipt, so both evidence sources feed one chronological list.
+func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReviewNode, hasCurrentHeadCodexReview bool, latestCurrentHeadCodexAt time.Time) {
 	for _, r := range prData.Reviews.Nodes {
-		formalReviewNodes = append(formalReviewNodes, aiReviewNode{
+		formal = append(formal, aiReviewNode{
 			State:        r.State,
 			AuthorLogin:  r.Author.Login,
 			AuthorType:   r.Author.Typename,
@@ -421,9 +421,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			CommitOID:    r.Commit.OID,
 		})
 	}
-	aiNodes := append([]aiReviewNode(nil), formalReviewNodes...)
-	hasCurrentHeadCodexReview := false
-	var latestCurrentHeadCodexAt time.Time
+	aiNodes = append([]aiReviewNode(nil), formal...)
 	for _, comment := range prData.Comments.Nodes {
 		if node, ok := codexReviewNode(aiReviewComment{
 			Body:        comment.Body,
@@ -438,70 +436,99 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			}
 		}
 	}
-	sortAIReviewsChronologically(aiNodes)
+	return formal, aiNodes, hasCurrentHeadCodexReview, latestCurrentHeadCodexAt
+}
 
-	var aiThreads []aiReviewThread
+// parseReviewThreadStates maps review threads to their resolution state and
+// first-comment authorship, flagging unresolved threads whose author cannot
+// be attributed so AI status stays unknown for them.
+func parseReviewThreadStates(prData *supplementalNodeData) ([]aiReviewThread, bool) {
+	aiThreads := make([]aiReviewThread, 0, len(prData.ReviewThreads.Nodes))
+	unknownUnresolved := false
 	for _, t := range prData.ReviewThreads.Nodes {
 		var login, authorType string
 		if len(t.Comments.Nodes) > 0 {
 			login = t.Comments.Nodes[0].Author.Login
 			authorType = t.Comments.Nodes[0].Author.Typename
 		}
+		unknown := login == "" && authorType == ""
+		if unknown && !t.IsResolved {
+			unknownUnresolved = true
+		}
 		aiThreads = append(aiThreads, aiReviewThread{
-			AuthorLogin: login,
-			AuthorType:  authorType,
-			IsResolved:  t.IsResolved,
+			AuthorLogin:   login,
+			AuthorType:    authorType,
+			IsResolved:    t.IsResolved,
+			AuthorUnknown: unknown,
 		})
 	}
+	return aiThreads, unknownUnresolved
+}
 
-	var approverLogins []string
+// approverLogins collects the approved-review author logins for the PR.
+func approverLogins(prData *supplementalNodeData) []string {
+	logins := make([]string, 0, len(prData.ApprovedReviews.Nodes))
 	for _, r := range prData.ApprovedReviews.Nodes {
-		approverLogins = append(approverLogins, r.Author.Login)
+		logins = append(logins, r.Author.Login)
 	}
+	return logins
+}
 
-	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
-	commentsIncomplete := connectionIncomplete(
-		prData.Comments.TotalCount,
-		len(prData.Comments.Nodes),
-		hasCurrentHeadCodexReview,
-	)
-	reviewsIncomplete := connectionIncomplete(
-		prData.Reviews.TotalCount,
-		len(prData.Reviews.Nodes),
-		sufficientReviewEvidence(formalReviewNodes, prData.HeadRefOID, latestCurrentHeadCodexAt),
-	)
-	evidenceOrderAmbiguous := reviewEvidenceOrderAmbiguous(
-		formalReviewNodes,
-		prData.HeadRefOID,
-		latestCurrentHeadCodexAt,
-		hasCurrentHeadCodexReview,
-	)
-	incomplete := supplementalConnectionsIncomplete(
-		prData.ClosingIssuesReferences,
-		commentsIncomplete, threadsTruncated, reviewsIncomplete,
-	)
-	aiReview, aiClean := summarizeSupplementalReviews(
-		aiNodes,
-		aiThreads,
-		prData.HeadRefOID,
-		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous),
-	)
-
-	return prData.Number, prSupplementalInfo{
-		Threads: reviewThreadInfo{
-			Total:    prData.ReviewThreads.TotalCount,
-			Resolved: countResolvedThreads(aiThreads),
-		},
-		ThreadsTruncated:       threadsTruncated,
-		ClosingIssues:          closingIssueNodes(prData.ClosingIssuesReferences),
-		ClosingIssuesAvailable: prData.ClosingIssuesReferences.complete(),
-		AIReview:               aiReview,
-		AIClean:                aiClean,
-		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
-		Approvals:              countUniqueApprovers(approverLogins),
-		Incomplete:             incomplete,
-		EvidenceAmbiguous:      evidenceOrderAmbiguous,
-	}, true
+// supplementalNodeData mirrors the supplemental GraphQL query's per-PR shape.
+type supplementalNodeData struct {
+	Number                  int                        `json:"number"`
+	HeadRefOID              string                     `json:"headRefOid"`
+	ClosingIssuesReferences *linkedReferenceConnection `json:"closingIssuesReferences"`
+	Comments                struct {
+		TotalCount int `json:"totalCount"`
+		Nodes      []struct {
+			Body      string    `json:"body"`
+			CreatedAt time.Time `json:"createdAt"`
+			Author    struct {
+				Login    string `json:"login"`
+				Typename string `json:"__typename"`
+			} `json:"author"`
+		} `json:"nodes"`
+	} `json:"comments"`
+	ReviewThreads struct {
+		TotalCount int `json:"totalCount"`
+		Nodes      []struct {
+			IsResolved bool `json:"isResolved"`
+			Comments   struct {
+				Nodes []struct {
+					Author struct {
+						Login    string `json:"login"`
+						Typename string `json:"__typename"`
+					} `json:"author"`
+				} `json:"nodes"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	} `json:"reviewThreads"`
+	Reviews struct {
+		TotalCount int `json:"totalCount"`
+		Nodes      []struct {
+			State       string    `json:"state"`
+			SubmittedAt time.Time `json:"submittedAt"`
+			Commit      struct {
+				OID string `json:"oid"`
+			} `json:"commit"`
+			Author struct {
+				Login    string `json:"login"`
+				Typename string `json:"__typename"`
+			} `json:"author"`
+			Comments struct {
+				TotalCount int `json:"totalCount"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	} `json:"reviews"`
+	ApprovedReviews struct {
+		Nodes []struct {
+			Author struct {
+				Login    string `json:"login"`
+				Typename string `json:"__typename"`
+			} `json:"author"`
+		} `json:"nodes"`
+	} `json:"approvedReviews"`
 }
 
 // supplementalConnectionsPresent reports whether every connection the
