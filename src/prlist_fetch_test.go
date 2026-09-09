@@ -687,3 +687,37 @@ func TestSupplementalNotice(t *testing.T) {
 		t.Fatalf("notice must stay short for display, got %d chars", len(got))
 	}
 }
+
+func TestParseSupplementalNodeDropsPartialFieldFailure(t *testing.T) {
+	// A partial GraphQL failure nulls the failed field inside an otherwise
+	// valid PR object. The entry must not parse as available: unknown
+	// threads would otherwise render as empty comments and a clean AI
+	// review. Reproduces the Codex P1 finding on PR #89.
+	raw := json.RawMessage(`{"number":333,"headRefOid":"53b343204e072b22f6511ac68bf6284aa2c418c2","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":332,"url":"https://github.com/HemSoft/codexbar-ios/issues/332"}]},"comments":{"totalCount":2,"nodes":[{"body":"hi","author":{"login":"user","__typename":"User"}}]},"reviewThreads":null,"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]}}`)
+
+	envelope := `{"data":{"repository":{"pr333":` + string(raw) + `}},"errors":[{"type":"NOT_FOUND","path":["repository","pr333","reviewThreads"],"message":"Field failed"}]}`
+	infos, parseErr := parseSupplementalResponse([]byte(envelope))
+	if parseErr != nil {
+		t.Fatalf("envelope with partial errors must still parse: %v", parseErr)
+	}
+	if _, present := infos[333]; present {
+		t.Fatalf("PR 333 must stay out of the parsed set, got %#v", infos[333])
+	}
+
+	unavailable := unavailablePRNumbers([]int{333}, infos)
+	if !unavailable[333] {
+		t.Fatalf("PR 333 with a failed field must be unavailable, got %v", unavailable)
+	}
+
+	// The enrich path then renders unknown columns instead of empty data.
+	now := time.Date(2026, 9, 9, 4, 40, 0, 0, time.UTC)
+	rendered := enrichPullRequests(
+		[]pullRequest{{Number: 333, State: "OPEN", UpdatedAt: now}},
+		prSupplementalData{Info: infos, Unavailable: unavailable, Err: fmt.Errorf("gh api graphql: Field failed")},
+		nil, now,
+	)
+	if rendered[0].Comments != "?" || rendered[0].AIReview != "?" || rendered[0].Issues != "?" {
+		t.Fatalf("partial field failure must render unknown, got issues=%q comments=%q ai=%q",
+			rendered[0].Issues, rendered[0].Comments, rendered[0].AIReview)
+	}
+}

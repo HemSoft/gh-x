@@ -319,7 +319,7 @@ func TestParsePRSupplementalNodeTreatsIncompleteRelationshipsAsUnavailable(t *te
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			raw := json.RawMessage(`{"number":25,"closingIssuesReferences":` + test.connection + `}`)
+			raw := json.RawMessage(`{"number":25,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]},"closingIssuesReferences":` + test.connection + `}`)
 			_, info, ok := parsePRSupplementalNode(raw)
 			if !ok {
 				t.Fatal("incomplete relationship supplemental node should still parse")

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -329,6 +330,9 @@ func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, error) 
 	}
 	result := make(map[int]prSupplementalInfo)
 	for _, raw := range resp.Data.Repository {
+		if !supplementalConnectionsPresent(raw) {
+			continue
+		}
 		num, info, ok := parsePRSupplementalNode(raw)
 		if !ok {
 			continue
@@ -488,6 +492,33 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
 		Approvals:              countUniqueApprovers(approverLogins),
 	}, true
+}
+
+// supplementalConnectionsPresent reports whether every connection the
+// supplemental summary consumes was returned for this PR. GitHub nulls an
+// individual field of an otherwise valid object when that sub-query fails,
+// so an entry with a missing connection cannot prove its threads, comments,
+// or reviews and must stay unavailable. closingIssuesReferences keeps its
+// own per-field availability flag.
+func supplementalConnectionsPresent(raw json.RawMessage) bool {
+	var fields struct {
+		Comments        json.RawMessage `json:"comments"`
+		ReviewThreads   json.RawMessage `json:"reviewThreads"`
+		Reviews         json.RawMessage `json:"reviews"`
+		ApprovedReviews json.RawMessage `json:"approvedReviews"`
+	}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return false
+	}
+	return connectionReturned(fields.Comments) &&
+		connectionReturned(fields.ReviewThreads) &&
+		connectionReturned(fields.Reviews) &&
+		connectionReturned(fields.ApprovedReviews)
+}
+
+func connectionReturned(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
 func closingIssueNodes(connection *linkedReferenceConnection) []linkedReference {

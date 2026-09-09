@@ -392,6 +392,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 	t.Run("valid JSON", func(t *testing.T) {
 		raw := []byte(`{
 			"number": 42,
+			"comments": {"totalCount": 0, "nodes": []},
 			"reviewThreads": {
 				"totalCount": 2,
 				"nodes": [
@@ -438,6 +439,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 	t.Run("AI clean when latest review clean and prior comments resolved", func(t *testing.T) {
 		raw := []byte(`{
 			"number": 438,
+			"comments": {"totalCount": 0, "nodes": []},
 			"reviewThreads": {
 				"totalCount": 2,
 				"nodes": [
@@ -1032,7 +1034,7 @@ func TestParseSupplementalResponse(t *testing.T) {
 	}{
 		{
 			name:    "valid with one PR",
-			input:   `{"data":{"repository":{"pr42":{"number":42,"reviewThreads":{"totalCount":2,"nodes":[]},"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`,
+			input:   `{"data":{"repository":{"pr42":{"number":42,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":2,"nodes":[]},"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`,
 			wantLen: 1,
 		},
 		{
@@ -1069,6 +1071,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 	// Thread with empty Comments.Nodes — tests boundary mutation at line 967
 	emptyComments := `{"data":{"repository":{"pr42":{
 		"number":42,
+		"comments":{"totalCount":0,"nodes":[]},
 		"reviewThreads":{
 			"totalCount":1,
 			"nodes":[{"isResolved":false,"comments":{"nodes":[]}}]
@@ -1088,6 +1091,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 	// Thread with bot comments — tests negation mutation at line 967
 	botComments := `{"data":{"repository":{"pr42":{
 		"number":42,
+		"comments":{"totalCount":0,"nodes":[]},
 		"reviewThreads":{
 			"totalCount":1,
 			"nodes":[{
