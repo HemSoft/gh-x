@@ -542,8 +542,8 @@ func countedConnectionPresent(raw json.RawMessage) bool {
 
 // reviewThreadsPresent additionally validates the nested shape that drives
 // AI classification: every thread node must be an object carrying isResolved
-// and its comments connection, or a null node would silently classify as a
-// resolved non-AI thread.
+// and a comments connection that includes its nodes list, or a missing node
+// list would silently classify an unresolvable thread as resolved non-AI.
 func reviewThreadsPresent(raw json.RawMessage) bool {
 	if !countedConnectionPresent(raw) {
 		return false
@@ -557,12 +557,14 @@ func reviewThreadsPresent(raw json.RawMessage) bool {
 	for _, node := range connection.Nodes {
 		var thread struct {
 			IsResolved json.RawMessage `json:"isResolved"`
-			Comments   json.RawMessage `json:"comments"`
+			Comments   struct {
+				Nodes json.RawMessage `json:"nodes"`
+			} `json:"comments"`
 		}
 		if err := json.Unmarshal(node, &thread); err != nil {
 			return false
 		}
-		if !jsonValuePresent(thread.IsResolved) || !jsonValuePresent(thread.Comments) {
+		if !jsonValuePresent(thread.IsResolved) || !jsonValuePresent(thread.Comments.Nodes) {
 			return false
 		}
 	}

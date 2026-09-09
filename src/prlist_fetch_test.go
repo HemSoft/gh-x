@@ -940,6 +940,8 @@ func TestParseSupplementalResponseDropsBrokenThreadNodes(t *testing.T) {
 		{name: "null isResolved", brokenNode: `{"isResolved":null,"comments":{"nodes":[]}}`},
 		{name: "missing comments", brokenNode: `{"isResolved":false}`},
 		{name: "null comments", brokenNode: `{"isResolved":false,"comments":null}`},
+		{name: "comments without nodes", brokenNode: `{"isResolved":false,"comments":{}}`},
+		{name: "null comments nodes", brokenNode: `{"isResolved":false,"comments":{"nodes":null}}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
