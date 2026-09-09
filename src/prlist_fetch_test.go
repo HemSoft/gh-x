@@ -1183,3 +1183,27 @@ func TestNullRelationshipNodesStayUnavailable(t *testing.T) {
 		t.Fatalf("Issues = %q, want ? for a null relationship node", rendered[0].Issues)
 	}
 }
+
+func TestFetchErrorJoinsDerivedPerPRReasons(t *testing.T) {
+	saved := fetchPRSupplementalBatchFunc
+	defer func() { fetchPRSupplementalBatchFunc = saved }()
+
+	// One batch fails with a fetch error while a retained PR also carries
+	// truncated evidence; both reasons must reach the diagnostic.
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
+		return map[int]prSupplementalInfo{
+			2: {Incomplete: true},
+		}, map[int]bool{5: true}, errors.New("gh api graphql: rate limit")
+	}
+
+	data, _, _ := fetchSupplementalData("owner/repo", []pullRequest{{Number: 2}, {Number: 5}})
+	if data.Err == nil {
+		t.Fatal("combined failures must produce a diagnostic")
+	}
+	if !strings.Contains(data.Err.Error(), "rate limit") {
+		t.Fatalf("the fetch error must be carried, got %v", data.Err)
+	}
+	if !strings.Contains(data.Err.Error(), "truncated supplemental connections for pull request(s) 2") {
+		t.Fatalf("the per-PR reason must be joined beside the fetch error, got %v", data.Err)
+	}
+}

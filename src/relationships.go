@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -277,22 +276,10 @@ func issueAliasesFromErrors(errors []graphQLError) map[int]bool {
 			if json.Unmarshal(element, &name) != nil {
 				continue
 			}
-			if number, ok := issueAliasNumber(name); ok {
+			if number, ok := aliasNumber(name, "issue"); ok {
 				errored[number] = true
 			}
 		}
 	}
 	return errored
-}
-
-// issueAliasNumber extracts the issue number from a batch alias like "issue332".
-func issueAliasNumber(alias string) (int, bool) {
-	if !strings.HasPrefix(alias, "issue") {
-		return 0, false
-	}
-	number, err := strconv.Atoi(strings.TrimPrefix(alias, "issue"))
-	if err != nil {
-		return 0, false
-	}
-	return number, true
 }

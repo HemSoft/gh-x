@@ -44,13 +44,15 @@ func fetchSupplementalData(repo string, prs []pullRequest) (prSupplementalData, 
 	}
 	fetched, unavailable, fetchErr := fetchPRSupplemental(owner, name, repositoryTargetHost(repo), numbers)
 	data := prSupplementalData{Info: fetched, Unavailable: unavailable, Err: fetchErr}
-	if data.Err == nil {
-		data.Err = joinSupplementalReasons(
-			incompleteConnectionError(fetched),
-			evidenceAmbiguityError(fetched),
-			unattributableEvidenceError(fetched),
-		)
-	}
+	// Derived per-PR reasons join with any fetch error: a retained PR can
+	// still carry truncated or unattributable evidence while the batch also
+	// failed, and every rendered unknown column deserves its reason.
+	data.Err = joinSupplementalReasons(
+		fetchErr,
+		incompleteConnectionError(fetched),
+		evidenceAmbiguityError(fetched),
+		unattributableEvidenceError(fetched),
+	)
 	return data, owner, name
 }
 

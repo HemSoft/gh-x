@@ -369,7 +369,7 @@ func aliasesFromErrors(errors []graphQLError) map[int]bool {
 			if json.Unmarshal(element, &name) != nil {
 				continue
 			}
-			if number, ok := aliasNumber(name); ok {
+			if number, ok := aliasNumber(name, "pr"); ok {
 				errored[number] = true
 			}
 		}
@@ -377,12 +377,14 @@ func aliasesFromErrors(errors []graphQLError) map[int]bool {
 	return errored
 }
 
-// aliasNumber extracts the PR number from a batch alias like "pr333".
-func aliasNumber(alias string) (int, bool) {
-	if !strings.HasPrefix(alias, "pr") {
+// aliasNumber extracts the number from a batch alias like "pr333" or
+// "issue332", given the batch's prefix, so PR and issue enrichment share one
+// error-path parser.
+func aliasNumber(alias, prefix string) (int, bool) {
+	if !strings.HasPrefix(alias, prefix) {
 		return 0, false
 	}
-	number, err := strconv.Atoi(strings.TrimPrefix(alias, "pr"))
+	number, err := strconv.Atoi(strings.TrimPrefix(alias, prefix))
 	if err != nil {
 		return 0, false
 	}
