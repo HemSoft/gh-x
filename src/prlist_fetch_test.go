@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/mattn/go-runewidth"
 )
 
 func TestFetchPullRequestList(t *testing.T) {
@@ -1273,5 +1275,58 @@ func TestTrimTitleIsRuneSafe(t *testing.T) {
 	small := trimTitle(multibyte, 3)
 	if got := utf8.RuneCountInString(small); got != 3 {
 		t.Fatalf("trimTitle small rune count = %d, want 3", got)
+	}
+}
+
+func TestTrimCellTextRespectsDisplayWidth(t *testing.T) {
+	wide := strings.Repeat("字", 100)
+	trimmed := trimCellText(wide, 51)
+	if width := runewidth.StringWidth(trimmed); width > 51 {
+		t.Fatalf("wide cell width = %d, want at most 51", width)
+	}
+	if !strings.HasSuffix(trimmed, "...") {
+		t.Fatalf("trimmed cell should end with an ellipsis, got %q", trimmed)
+	}
+	if got := trimCellText("plain ascii title that exceeds the limit by far", 51); runewidth.StringWidth(got) > 51 {
+		t.Fatalf("ascii cell width = %d, want at most 51", runewidth.StringWidth(got))
+	}
+	if got := trimCellText("short", 51); got != "short" {
+		t.Fatalf("short cell = %q, want unchanged", got)
+	}
+}
+
+func TestWideTitleRendersWithoutPanic(t *testing.T) {
+	wide := strings.Repeat("字", 200)
+	prs := []displayPullRequest{buildDisplayPullRequest(pullRequest{
+		Number: 9, Title: wide, State: "OPEN", UpdatedAt: time.Now(),
+		BaseRefName: "main", HeadRefName: "feature", URL: "https://github.com/owner/repo/pull/9",
+	}, time.Now())}
+	var buf bytes.Buffer
+	if err := renderPullRequestRows(&buf, prs, false); err != nil {
+		t.Fatalf("renderPullRequestRows error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "字") {
+		t.Fatal("the wide title should still render truncated content")
+	}
+}
+
+func TestUnattributableEvidenceKeepsComputedFailure(t *testing.T) {
+	envelope := `{"data":{"repository":{"pr9":{"number":9,"headRefOid":"head","closingIssuesReferences":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":2,"nodes":[{"state":"COMMENTED","author":null,"commit":{"oid":"old"},"comments":{"totalCount":1}},{"state":"CHANGES_REQUESTED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"head"},"comments":{"totalCount":1}}]},"approvedReviews":{"nodes":[]}}}}}`
+	infos, errored, err := parseSupplementalResponse([]byte(envelope))
+	if err != nil {
+		t.Fatalf("parseSupplementalResponse error: %v", err)
+	}
+	if len(errored) != 0 {
+		t.Fatalf("no error paths expected, got %v", errored)
+	}
+	info, ok := infos[9]
+	if !ok {
+		t.Fatalf("the PR must parse, got %#v", infos)
+	}
+	if !info.UnattributableEvidence {
+		t.Fatal("expected the unattributable-evidence flag")
+	}
+	if info.AIReview != "fail" {
+		t.Fatalf("AIReview = %q, want the computed fail preserved over unknown evidence", info.AIReview)
 	}
 }

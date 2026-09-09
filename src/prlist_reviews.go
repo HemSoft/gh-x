@@ -737,7 +737,9 @@ func summarizeSupplementalReviews(
 	currentReviews := currentHeadReviewNodes(aiNodes, headRefOID)
 	aiReview = detectAIReview(currentReviews, aiThreads)
 	aiClean = isAIReviewClean(currentReviews, aiThreads)
-	if aiIncomplete {
+	if aiIncomplete && aiReview != "fail" {
+		// Unknown evidence widens an inconclusive result to unknown, but it
+		// cannot overturn a computed failure.
 		aiReview = "?"
 		aiClean = false
 	}

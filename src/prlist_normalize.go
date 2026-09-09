@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 )
 
 // supplementalNotice renders one actionable, secret-safe line that explains
@@ -156,7 +158,7 @@ func buildDisplayPullRequest(pullRequest pullRequest, now time.Time) displayPull
 	return displayPullRequest{
 		Number:    pullRequest.Number,
 		Issues:    "-",
-		Title:     trimTitle(pullRequest.Title, 51),
+		Title:     trimCellText(pullRequest.Title, 51),
 		Author:    authorName,
 		State:     normalizeState(pullRequest.State, pullRequest.IsDraft),
 		Review:    normalizeReviewDecision(pullRequest.ReviewDecision),
@@ -398,6 +400,23 @@ func countApprovals(reviews []review) int {
 		}
 	}
 	return count
+}
+
+// trimCellText truncates a string to a display-column budget for table
+// cells, so a wide-rune title cannot render wider than its column and force
+// negative cell padding.
+func trimCellText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(text) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return runewidth.Truncate(text, limit, "")
+	}
+	return runewidth.Truncate(text, limit-3, "") + "..."
 }
 
 func trimTitle(title string, limit int) string {

@@ -882,7 +882,7 @@ func renderStatusPullRequestSection(stdout io.Writer, styler tableStyler, dashbo
 		fmt.Fprintln(stdout, styler.dim(supplementalNotice(dashboard.PullRequestsSuppErr)).styled)
 	}
 	if dashboard.RequiredChecksErr != nil {
-		fmt.Fprintln(stdout, styler.dim("Required check rules unavailable: "+conciseStatusError(dashboard.RequiredChecksErr)).styled)
+		fmt.Fprintln(stdout, styler.dim("Required check rules unavailable: "+boundedSingleLine(dashboard.RequiredChecksErr.Error(), 500)).styled)
 	}
 	if len(dashboard.PullRequests) == 0 {
 		writeBacklogPraise(stdout)
