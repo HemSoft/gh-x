@@ -38,7 +38,7 @@ func TestDowngradeChecksIfMissing(t *testing.T) {
 
 	t.Run("not pass stays unchanged", func(t *testing.T) {
 		dp := displayPullRequest{Checks: "fail"}
-		downgradeChecksIfMissing(&dp, required, "main", nil)
+		downgradeChecksIfMissing(&dp, required, nil, "main", nil)
 		if dp.Checks != "fail" {
 			t.Fatalf("expected 'fail', got %q", dp.Checks)
 		}
@@ -50,7 +50,7 @@ func TestDowngradeChecksIfMissing(t *testing.T) {
 			{Typename: "CheckRun", Name: "ci/test"},
 			{Typename: "CheckRun", Name: "ci/lint"},
 		}
-		downgradeChecksIfMissing(&dp, required, "main", items)
+		downgradeChecksIfMissing(&dp, required, nil, "main", items)
 		if dp.Checks != "pass" {
 			t.Fatalf("expected 'pass', got %q", dp.Checks)
 		}
@@ -61,7 +61,7 @@ func TestDowngradeChecksIfMissing(t *testing.T) {
 		items := []checkItem{
 			{Typename: "CheckRun", Name: "ci/test"},
 		}
-		downgradeChecksIfMissing(&dp, required, "main", items)
+		downgradeChecksIfMissing(&dp, required, nil, "main", items)
 		if dp.Checks != "pending" {
 			t.Fatalf("expected 'pending', got %q", dp.Checks)
 		}
@@ -73,7 +73,7 @@ func TestDowngradeChecksIfMissing(t *testing.T) {
 			{Typename: "CheckRun", Name: "ci/test"},
 			{Typename: "CheckRun", Name: "cubic · AI code reviewer"},
 		}
-		downgradeChecksIfMissing(&dp, required, "main", items)
+		downgradeChecksIfMissing(&dp, required, nil, "main", items)
 		if dp.Checks != "pending" {
 			t.Fatalf("expected 'pending', got %q", dp.Checks)
 		}
@@ -86,7 +86,7 @@ func TestDowngradeChecksIfMissing(t *testing.T) {
 			{Typename: "CheckRun", Name: "ci/lint"},
 			{Typename: "CheckRun", Name: "cubic · AI code reviewer"},
 		}
-		downgradeChecksIfMissing(&dp, required, "main", items)
+		downgradeChecksIfMissing(&dp, required, nil, "main", items)
 		if dp.Checks != "review" {
 			t.Fatalf("expected 'review', got %q", dp.Checks)
 		}
@@ -94,7 +94,7 @@ func TestDowngradeChecksIfMissing(t *testing.T) {
 
 	t.Run("no required for branch stays pass", func(t *testing.T) {
 		dp := displayPullRequest{Checks: "pass"}
-		downgradeChecksIfMissing(&dp, required, "develop", nil)
+		downgradeChecksIfMissing(&dp, required, nil, "develop", nil)
 		if dp.Checks != "pass" {
 			t.Fatalf("expected 'pass', got %q", dp.Checks)
 		}
@@ -120,7 +120,7 @@ func TestEnrichPullRequestsUsesSuccessfulCubicCheckAsCurrentHeadAIReview(t *test
 		25: {Threads: reviewThreadInfo{Total: 11, Resolved: 11}, AIReview: "-"},
 	}
 
-	rendered := enrichPullRequests(prs, supp, false, nil, now)
+	rendered := enrichPullRequests(prs, prSupplementalData{Info: supp}, nil, nil, now)
 	if rendered[0].AIReview != "pass" {
 		t.Fatalf("AIReview = %q, want pass from current-head Cubic check", rendered[0].AIReview)
 	}
@@ -141,9 +141,9 @@ func TestEnrichPullRequestsDoesNotTrustCubicCheckWithoutSupplementalEntry(t *tes
 		}},
 	}}
 
-	rendered := enrichPullRequests(prs, map[int]prSupplementalInfo{}, false, nil, now)
-	if rendered[0].AIReview != "-" {
-		t.Fatalf("AIReview = %q, want - when supplemental PR data is missing", rendered[0].AIReview)
+	rendered := enrichPullRequests(prs, prSupplementalData{}, nil, nil, now)
+	if rendered[0].AIReview != "?" {
+		t.Fatalf("AIReview = %q, want ? when supplemental PR data is missing", rendered[0].AIReview)
 	}
 	if rendered[0].AIClean != nil {
 		t.Fatalf("expected missing supplemental PR data to leave AIClean unset, got %v", *rendered[0].AIClean)

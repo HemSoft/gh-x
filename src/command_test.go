@@ -163,7 +163,7 @@ func TestRunPrNoArgs(t *testing.T) {
 	// With no args, pr defaults to "list" subcommand
 	savedExecuteList := executeListFunc
 	defer func() { executeListFunc = savedExecuteList }()
-	executeListFunc = func(_ listOptions, _ io.Writer) error { return nil }
+	executeListFunc = func(_ listOptions, _, _ io.Writer) error { return nil }
 
 	var stdout, stderr bytes.Buffer
 	_, err := run([]string{"pr"}, &stdout, &stderr)

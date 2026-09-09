@@ -213,11 +213,11 @@ func TestFetchStatusDashboard(t *testing.T) {
 	statusRepoURLFunc = func(string) (string, error) { return "https://github.com/owner/repo", nil }
 	statusPathExistsFunc = func(string) bool { return true }
 	statusNowFunc = func() time.Time { return time.Date(2026, 8, 12, 16, 0, 0, 0, time.UTC) }
-	statusIssueListFunc = func(options issueListOptions, _ time.Time) ([]displayIssue, error) {
+	statusIssueListFunc = func(options issueListOptions, _ time.Time) (issueListResult, error) {
 		if options.limit != statusListLimit || options.state != "open" {
 			t.Fatalf("unexpected issue options: %#v", options)
 		}
-		return []displayIssue{{Number: 7, Title: "Status dashboard", State: "open"}}, nil
+		return issueListResult{Display: []displayIssue{{Number: 7, Title: "Status dashboard", State: "open"}}}, nil
 	}
 	statusPullRequestListFunc = func(options listOptions, _ time.Time) (pullRequestListResult, error) {
 		if options.limit != statusListLimit || options.state != "open" {
@@ -304,7 +304,7 @@ func TestFetchStatusDashboard(t *testing.T) {
 func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
 	defer saveStatusFuncs()()
 	statusRepoLabelFunc = func(string) string { return "owner/repo" }
-	statusIssueListFunc = func(issueListOptions, time.Time) ([]displayIssue, error) { return nil, nil }
+	statusIssueListFunc = func(issueListOptions, time.Time) (issueListResult, error) { return issueListResult{}, nil }
 	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
 		return pullRequestListResult{Entries: make([]pullRequest, statusListLimit)}, nil
 	}
@@ -325,8 +325,8 @@ func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
 func TestFetchStatusDashboardKeepsLocalHealthWhenGitHubFails(t *testing.T) {
 	defer saveStatusFuncs()()
 	statusRepoLabelFunc = func(string) string { return "owner/repo" }
-	statusIssueListFunc = func(issueListOptions, time.Time) ([]displayIssue, error) {
-		return nil, errors.New("issues offline")
+	statusIssueListFunc = func(issueListOptions, time.Time) (issueListResult, error) {
+		return issueListResult{}, errors.New("issues offline")
 	}
 	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
 		return pullRequestListResult{}, errors.New("pull requests offline")
@@ -384,7 +384,7 @@ func installStatusDashboardGitFixture() {
 func TestFetchStatusDashboardSkipsRepositoryURLWithoutColor(t *testing.T) {
 	defer saveStatusFuncs()()
 	statusRepoLabelFunc = func(string) string { return "owner/repo" }
-	statusIssueListFunc = func(issueListOptions, time.Time) ([]displayIssue, error) { return nil, nil }
+	statusIssueListFunc = func(issueListOptions, time.Time) (issueListResult, error) { return issueListResult{}, nil }
 	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
 		return pullRequestListResult{}, nil
 	}
@@ -763,4 +763,108 @@ func successfulWorkflowRuns(count int) []workflowRun {
 		runs[i] = workflowRun{Status: "completed", Conclusion: "success"}
 	}
 	return runs
+}
+
+func TestRenderStatusShowsSupplementalDiagnostics(t *testing.T) {
+	dashboard := statusDashboard{
+		Repository:    "owner/repo",
+		DefaultBranch: "main",
+		Branches:      statusBranchInventory{Local: map[string]statusBranchRef{}},
+		Issues: []displayIssue{
+			{Number: 332, Title: "Linked issue", State: "open", PullRequests: "?"},
+			{Number: 300, Title: "Healthy issue", State: "open", PullRequests: "#333"},
+		},
+		IssuesRelErr: fmt.Errorf("gh api graphql: Could not resolve to a Issue with the number of 998."),
+		PullRequests: []displayPullRequest{
+			{Number: 333, Title: "Open PR", State: "open", AIReview: "?", Comments: "?", Checks: "pending", Branch: "feature", Updated: "2m"},
+		},
+		PullRequestsSuppErr: errors.New("gh api graphql: You have exceeded a secondary rate limit."),
+	}
+
+	var buf bytes.Buffer
+	if err := renderStatus(&buf, dashboard, false); err != nil {
+		t.Fatalf("renderStatus error: %v", err)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "Supplemental data unavailable: gh api graphql: You have exceeded a secondary rate limit.") {
+		t.Fatalf("pull-request section must explain unavailable supplemental data:\n%s", output)
+	}
+	if !strings.Contains(output, "Pull request relationships unavailable: gh api graphql: Could not resolve to a Issue with the number of 998.") {
+		t.Fatalf("issue section must explain unavailable relationships:\n%s", output)
+	}
+	// The healthy issue relationship still renders beside the diagnostic.
+	if !strings.Contains(output, "#300") {
+		t.Fatalf("healthy issue row must keep its relationship:\n%s", output)
+	}
+}
+
+func TestFetchStatusDashboardKeepsSupplementalDiagnostics(t *testing.T) {
+	defer saveStatusFuncs()()
+	statusRepoLabelFunc = func(string) string { return "owner/repo" }
+	statusIssueListFunc = func(issueListOptions, time.Time) (issueListResult, error) {
+		return issueListResult{
+			Display: []displayIssue{{Number: 7, State: "open", PullRequests: "?"}},
+			RelErr:  errors.New("relationships offline"),
+		}, nil
+	}
+	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
+		return pullRequestListResult{
+			Entries:            []pullRequest{{HeadRefName: "feature"}},
+			Rendered:           []displayPullRequest{{Number: 2, Title: "Open PR", State: "open", AIReview: "?", Comments: "?"}},
+			SupplementalFailed: true,
+			SupplementalErr:    errors.New("supplemental offline"),
+		}, nil
+	}
+	statusWorkflowRunListFunc = func(runListOptions, time.Time) (workflowRunListResult, error) {
+		return workflowRunListResult{}, nil
+	}
+	installStatusDashboardGitFixture()
+
+	dashboard, err := fetchStatusDashboard(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.IssuesRelErr == nil || dashboard.IssuesRelErr.Error() != "relationships offline" {
+		t.Fatalf("IssuesRelErr = %v, want relationships offline", dashboard.IssuesRelErr)
+	}
+	if dashboard.PullRequestsSuppErr == nil || dashboard.PullRequestsSuppErr.Error() != "supplemental offline" {
+		t.Fatalf("PullRequestsSuppErr = %v, want supplemental offline", dashboard.PullRequestsSuppErr)
+	}
+}
+
+func TestRenderStatusPullRequestNoticeWithNoRows(t *testing.T) {
+	dashboard := statusDashboard{
+		Repository:          "owner/repo",
+		DefaultBranch:       "main",
+		Branches:            statusBranchInventory{Local: map[string]statusBranchRef{}},
+		PullRequestsSuppErr: errors.New("gh api graphql: You have exceeded a secondary rate limit."),
+	}
+	var buf bytes.Buffer
+	if err := renderStatus(&buf, dashboard, false); err != nil {
+		t.Fatalf("renderStatus error: %v", err)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "Supplemental data unavailable: gh api graphql: You have exceeded a secondary rate limit.") {
+		t.Fatalf("empty PR list must still print the supplemental diagnostic:\n%s", output)
+	}
+	if !strings.Contains(output, "Open pull requests (0)") {
+		t.Fatalf("expected the zero-count section header:\n%s", output)
+	}
+}
+
+func TestRenderStatusShowsRequiredChecksNotice(t *testing.T) {
+	dashboard := statusDashboard{
+		Repository:        "owner/repo",
+		DefaultBranch:     "main",
+		Branches:          statusBranchInventory{Local: map[string]statusBranchRef{}},
+		PullRequests:      []displayPullRequest{{Number: 2, Title: "PR", State: "open", Checks: "pending"}},
+		RequiredChecksErr: errors.New("base main: rules offline"),
+	}
+	var buf bytes.Buffer
+	if err := renderStatus(&buf, dashboard, false); err != nil {
+		t.Fatalf("renderStatus error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Required check rules unavailable: base main: rules offline") {
+		t.Fatalf("status must explain the required-checks downgrade:\n%s", buf.String())
+	}
 }

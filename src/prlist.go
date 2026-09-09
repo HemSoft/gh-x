@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 )
@@ -106,9 +107,10 @@ type pullRequestListResult struct {
 	Entries                []pullRequest
 	Rendered               []displayPullRequest
 	SupplementalFailed     bool
+	SupplementalErr        error
+	RequiredChecksErr      error
 	RequiredChecksFailed   bool
 	FailedRequiredCheckPRs map[int]bool
-	AuxiliaryErr           error
 }
 
 func defaultListOptions() listOptions {
@@ -118,7 +120,7 @@ func defaultListOptions() listOptions {
 	}
 }
 
-func executeList(options listOptions, stdout io.Writer) error {
+func executeList(options listOptions, stdout io.Writer, stderr io.Writer) error {
 	result, err := fetchPullRequestList(options, time.Now().UTC())
 	if err != nil {
 		return err
@@ -126,7 +128,13 @@ func executeList(options listOptions, stdout io.Writer) error {
 	if options.web {
 		return nil
 	}
-	return renderListOutput(stdout, options, result.Rendered)
+	if err := renderListOutput(stdout, options, result.Rendered); err != nil {
+		return err
+	}
+	if err := writeSupplementalNotice(stdout, stderr, options.json, result.SupplementalErr); err != nil {
+		return err
+	}
+	return writeRequiredChecksNotice(stdout, stderr, options.json, result.RequiredChecksErr)
 }
 
 func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListResult, error) {
@@ -142,24 +150,44 @@ func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListRe
 	if err := json.Unmarshal(commandOutput.Bytes(), &pullRequests); err != nil {
 		return pullRequestListResult{}, fmt.Errorf("decode gh pr list output: %w", err)
 	}
-	supplemental, supplementalFailed, repoOwner, repoName := fetchSupplementalData(options.repo, pullRequests)
+	supplemental, repoOwner, repoName := fetchSupplementalData(options.repo, pullRequests)
 	requiredByBranch, failedRequiredBranches := fetchRequiredChecks(repoOwner, repoName, pullRequests)
 	failedRequiredPRs := make(map[int]bool)
 	for _, pr := range pullRequests {
-		if failedRequiredBranches[pr.BaseRefName] {
+		if failedRequiredBranches[pr.BaseRefName] != nil {
 			failedRequiredPRs[pr.Number] = true
 		}
 	}
 	requiredChecksFailed := len(failedRequiredBranches) > 0
-	rendered := enrichPullRequests(pullRequests, supplemental, supplementalFailed, requiredByBranch, now)
+	rendered := enrichPullRequests(pullRequests, supplemental, requiredByBranch, failedRequiredBranches, now)
 	return pullRequestListResult{
 		Entries:                pullRequests,
 		Rendered:               rendered,
-		SupplementalFailed:     supplementalFailed,
+		SupplementalFailed:     len(supplemental.Unavailable) > 0,
+		SupplementalErr:        supplemental.Err,
+		RequiredChecksErr:      requiredChecksError(failedRequiredBranches),
 		RequiredChecksFailed:   requiredChecksFailed,
 		FailedRequiredCheckPRs: failedRequiredPRs,
-		AuxiliaryErr:           auxiliaryRefreshError(supplementalFailed, requiredChecksFailed),
 	}, nil
+}
+
+// requiredChecksError turns failed required-check rules lookups into the
+// diagnostic the Checks downgrade needs, preserving each branch's failure
+// reason so a pass downgraded to pending always says why.
+func requiredChecksError(failedBranches map[string]error) error {
+	if len(failedBranches) == 0 {
+		return nil
+	}
+	branches := make([]string, 0, len(failedBranches))
+	for branch := range failedBranches {
+		branches = append(branches, branch)
+	}
+	sort.Strings(branches)
+	parts := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		parts = append(parts, fmt.Sprintf("base %s: %s", branch, boundedSingleLine(failedBranches[branch].Error(), 80)))
+	}
+	return fmt.Errorf("%s", strings.Join(parts, "; "))
 }
 
 func wrapExecError(err error, stderr string) error {
@@ -191,7 +219,7 @@ func parseViewArgs(args []string) (number, repo string, err error) {
 	return number, repo, nil
 }
 
-func runView(args []string, stdout io.Writer, _ io.Writer) error {
+func runView(args []string, stdout io.Writer, stderr io.Writer) error {
 	number, repo, err := parseViewArgs(args)
 	if err != nil {
 		return err
@@ -213,15 +241,21 @@ func runView(args []string, stdout io.Writer, _ io.Writer) error {
 	}
 
 	prs := []pullRequest{pr}
-	supplemental, supplementalFailed, repoOwner, repoName := fetchSupplementalData(repo, prs)
-	requiredByBranch, _ := fetchRequiredChecks(repoOwner, repoName, prs)
-	rendered := enrichPullRequests(prs, supplemental, supplementalFailed, requiredByBranch, time.Now().UTC())
+	supplemental, repoOwner, repoName := fetchSupplementalData(repo, prs)
+	requiredByBranch, failedRequiredBranches := fetchRequiredChecks(repoOwner, repoName, prs)
+	rendered := enrichPullRequests(prs, supplemental, requiredByBranch, failedRequiredBranches, time.Now().UTC())
 
 	// Render as a single-row table with no limit footer
 	opts := defaultListOptions()
 	opts.repo = repo
 	opts.limit = 0 // suppress "limit reached" footer
-	return renderTable(stdout, opts, rendered)
+	if err := renderTable(stdout, opts, rendered); err != nil {
+		return err
+	}
+	if err := writeSupplementalNotice(stdout, stderr, false, supplemental.Err); err != nil {
+		return err
+	}
+	return writeRequiredChecksNotice(stdout, stderr, false, requiredChecksError(failedRequiredBranches))
 }
 
 // appendNonEmpty appends a flag and its value only when value is non-empty.

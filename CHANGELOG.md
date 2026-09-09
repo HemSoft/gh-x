@@ -12,6 +12,8 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+- fix: restore available supplemental data with fail-closed diagnostics
+
 ## [0.12.0] - 2026-09-06
 
 - feat: show local date and time in status header (#84)

@@ -59,8 +59,7 @@ func TestSupplementalApprovalsOverridesCountApprovals(t *testing.T) {
 	}
 
 	// Supplemental data says there IS an approval (from reviews(states: APPROVED)).
-	supplemental := map[int]prSupplementalInfo{28: {Approvals: 1}}
-	applySupplementalInfo(&dp, supplemental, 28, false)
+	applySupplementalInfo(&dp, prSupplementalInfo{Approvals: 1}, false)
 	if dp.Approvals != 1 {
 		t.Fatalf("expected supplemental override = 1, got %d", dp.Approvals)
 	}
@@ -310,23 +309,20 @@ func TestIsAIReviewClean(t *testing.T) {
 }
 
 func TestApplySupplementalInfo(t *testing.T) {
-	t.Run("failed", func(t *testing.T) {
+	t.Run("unavailable", func(t *testing.T) {
 		dp := displayPullRequest{}
-		applySupplementalInfo(&dp, nil, 1, true)
+		applySupplementalInfo(&dp, prSupplementalInfo{}, true)
 		if dp.Comments != "?" || dp.AIReview != "?" {
-			t.Fatalf("expected ? for failed supplemental, got comments=%q aiReview=%q", dp.Comments, dp.AIReview)
+			t.Fatalf("expected ? for unavailable supplemental, got comments=%q aiReview=%q", dp.Comments, dp.AIReview)
 		}
 		if dp.AIClean != nil {
-			t.Fatalf("expected AIClean=nil for failed supplemental, got %v", *dp.AIClean)
+			t.Fatalf("expected AIClean=nil for unavailable supplemental, got %v", *dp.AIClean)
 		}
 	})
 
 	t.Run("success with data", func(t *testing.T) {
-		supp := map[int]prSupplementalInfo{
-			42: {Threads: reviewThreadInfo{Total: 3, Resolved: 2}, AIReview: "pass", Approvals: 1},
-		}
 		dp := displayPullRequest{}
-		applySupplementalInfo(&dp, supp, 42, false)
+		applySupplementalInfo(&dp, prSupplementalInfo{Threads: reviewThreadInfo{Total: 3, Resolved: 2}, AIReview: "pass", Approvals: 1}, false)
 		if dp.Comments != "2/3" {
 			t.Fatalf("expected comments '2/3', got %q", dp.Comments)
 		}
@@ -339,20 +335,16 @@ func TestApplySupplementalInfo(t *testing.T) {
 	})
 
 	t.Run("empty ai review defaults to dash", func(t *testing.T) {
-		supp := map[int]prSupplementalInfo{1: {}}
 		dp := displayPullRequest{}
-		applySupplementalInfo(&dp, supp, 1, false)
+		applySupplementalInfo(&dp, prSupplementalInfo{}, false)
 		if dp.AIReview != "-" {
 			t.Fatalf("expected '-' for empty aiReview, got %q", dp.AIReview)
 		}
 	})
 
 	t.Run("ai clean propagates", func(t *testing.T) {
-		supp := map[int]prSupplementalInfo{
-			7: {Threads: reviewThreadInfo{Total: 2, Resolved: 2}, AIReview: "pass", AIClean: true, Approvals: 1},
-		}
 		dp := displayPullRequest{}
-		applySupplementalInfo(&dp, supp, 7, false)
+		applySupplementalInfo(&dp, prSupplementalInfo{Threads: reviewThreadInfo{Total: 2, Resolved: 2}, AIReview: "pass", AIClean: true, Approvals: 1}, false)
 		if dp.AIClean == nil || !*dp.AIClean {
 			t.Fatalf("expected AIClean=true, got %v", dp.AIClean)
 		}
@@ -362,11 +354,8 @@ func TestApplySupplementalInfo(t *testing.T) {
 	})
 
 	t.Run("ai not clean omits pointer", func(t *testing.T) {
-		supp := map[int]prSupplementalInfo{
-			8: {Threads: reviewThreadInfo{Total: 1, Resolved: 0}, AIReview: "fail", AIClean: false, Approvals: 0},
-		}
 		dp := displayPullRequest{}
-		applySupplementalInfo(&dp, supp, 8, false)
+		applySupplementalInfo(&dp, prSupplementalInfo{Threads: reviewThreadInfo{Total: 1, Resolved: 0}, AIReview: "fail", AIClean: false, Approvals: 0}, false)
 		if dp.AIClean != nil {
 			t.Fatalf("expected AIClean=nil when not clean, got %v", *dp.AIClean)
 		}
@@ -384,15 +373,18 @@ func TestEnrichPullRequests(t *testing.T) {
 	}
 	required := map[string]map[string]bool{}
 
-	rendered := enrichPullRequests(prs, supp, false, required, now)
+	rendered := enrichPullRequests(prs, prSupplementalData{Info: supp}, required, nil, now)
 	if len(rendered) != 2 {
 		t.Fatalf("expected 2, got %d", len(rendered))
 	}
 	if rendered[0].AIReview != "pass" {
 		t.Fatalf("expected 'pass' for PR1, got %q", rendered[0].AIReview)
 	}
-	if rendered[1].AIReview != "-" {
-		t.Fatalf("expected '-' for PR2 (no supp data), got %q", rendered[1].AIReview)
+	if rendered[1].AIReview != "?" {
+		t.Fatalf("expected '?' for PR2 (unknown supplemental data), got %q", rendered[1].AIReview)
+	}
+	if rendered[1].Comments != "?" {
+		t.Fatalf("expected '?' comments for PR2, got %q", rendered[1].Comments)
 	}
 }
 
@@ -400,6 +392,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 	t.Run("valid JSON", func(t *testing.T) {
 		raw := []byte(`{
 			"number": 42,
+			"comments": {"totalCount": 0, "nodes": []},
 			"reviewThreads": {
 				"totalCount": 2,
 				"nodes": [
@@ -408,9 +401,10 @@ func TestParsePRSupplementalNode(t *testing.T) {
 				]
 			},
 			"reviews": {
+				"totalCount": 2,
 				"nodes": [
-					{"state": "APPROVED", "author": {"login": "copilot[bot]", "__typename": "Bot"}, "comments": {"totalCount": 0}},
-					{"state": "APPROVED", "author": {"login": "carol", "__typename": "User"}, "comments": {"totalCount": 0}}
+					{"state": "APPROVED", "author": {"login": "copilot[bot]", "__typename": "Bot"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 0}},
+					{"state": "APPROVED", "author": {"login": "carol", "__typename": "User"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 0}}
 				]
 			},
 			"approvedReviews": {
@@ -446,6 +440,7 @@ func TestParsePRSupplementalNode(t *testing.T) {
 	t.Run("AI clean when latest review clean and prior comments resolved", func(t *testing.T) {
 		raw := []byte(`{
 			"number": 438,
+			"comments": {"totalCount": 0, "nodes": []},
 			"reviewThreads": {
 				"totalCount": 2,
 				"nodes": [
@@ -454,9 +449,10 @@ func TestParsePRSupplementalNode(t *testing.T) {
 				]
 			},
 			"reviews": {
+				"totalCount": 2,
 				"nodes": [
-					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "comments": {"totalCount": 2}},
-					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "comments": {"totalCount": 0}}
+					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 2}},
+					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 0}}
 				]
 			},
 			"approvedReviews": {"nodes": []}
@@ -1040,7 +1036,7 @@ func TestParseSupplementalResponse(t *testing.T) {
 	}{
 		{
 			name:    "valid with one PR",
-			input:   `{"data":{"repository":{"pr42":{"number":42,"reviewThreads":{"totalCount":2,"nodes":[]},"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`,
+			input:   `{"data":{"repository":{"pr42":{"number":42,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":2,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`,
 			wantLen: 1,
 		},
 		{
@@ -1056,7 +1052,8 @@ func TestParseSupplementalResponse(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := parseSupplementalResponse([]byte(tc.input))
+			result, errored, err := parseSupplementalResponse([]byte(tc.input))
+			_ = errored
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got result with %d entries", len(result))
@@ -1077,15 +1074,16 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 	// Thread with empty Comments.Nodes — tests boundary mutation at line 967
 	emptyComments := `{"data":{"repository":{"pr42":{
 		"number":42,
+		"comments":{"totalCount":0,"nodes":[]},
 		"reviewThreads":{
 			"totalCount":1,
 			"nodes":[{"isResolved":false,"comments":{"nodes":[]}}]
 		},
-		"reviews":{"nodes":[]},
+		"reviews":{"totalCount":0,"nodes":[]},
 		"approvedReviews":{"nodes":[]}
 	}}}}`
 
-	result, err := parseSupplementalResponse([]byte(emptyComments))
+	result, _, err := parseSupplementalResponse([]byte(emptyComments))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1096,6 +1094,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 	// Thread with bot comments — tests negation mutation at line 967
 	botComments := `{"data":{"repository":{"pr42":{
 		"number":42,
+		"comments":{"totalCount":0,"nodes":[]},
 		"reviewThreads":{
 			"totalCount":1,
 			"nodes":[{
@@ -1105,15 +1104,16 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 				}]}
 			}]
 		},
-		"reviews":{"nodes":[{
+		"reviews":{"totalCount":1,"nodes":[{
 			"state":"COMMENTED",
 			"author":{"login":"copilot-pull-request-reviewer[bot]"},
+			"commit":{"oid":"abc"},
 			"comments":{"totalCount":1}
 		}]},
 		"approvedReviews":{"nodes":[]}
 	}}}}`
 
-	result2, err := parseSupplementalResponse([]byte(botComments))
+	result2, _, err := parseSupplementalResponse([]byte(botComments))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

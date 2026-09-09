@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 )
@@ -25,15 +26,19 @@ func extractReportedContexts(items []checkItem) map[string]bool {
 }
 
 // fetchRequiredCheckContexts returns the set of required status check context
-// names for a branch, derived from repository rulesets. Best-effort: returns
-// nil on error so callers fall back to per-item normalization only.
-func fetchRequiredCheckContexts(owner, name, branch string) (map[string]bool, bool) {
+// names for a branch, derived from repository rulesets. Best-effort: an
+// error carries the failure reason so the Checks downgrade can say why.
+func fetchRequiredCheckContexts(owner, name, branch string) (map[string]bool, bool, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/rules/branches/%s", owner, name, url.PathEscape(branch))
-	stdout, _, err := ghExecFunc("api", endpoint)
+	stdout, stderr, err := ghExecFunc("api", endpoint)
 	if err != nil {
-		return nil, false
+		return nil, false, wrapExecError(fmt.Errorf("required check rules: %w", err), stderr.String())
 	}
-	return parseRequiredCheckRulesResult(stdout.Bytes())
+	contexts, ok := parseRequiredCheckRulesResult(stdout.Bytes())
+	if !ok {
+		return nil, false, errors.New("required check rules: malformed response")
+	}
+	return contexts, true, nil
 }
 
 func parseRequiredCheckRulesResult(data []byte) (map[string]bool, bool) {

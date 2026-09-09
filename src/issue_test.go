@@ -562,8 +562,8 @@ func TestExecuteIssueListHappyPath(t *testing.T) {
 			},
 		}, nil
 	}
-	fetchIssueRelationshipsFunc = func(_, _, _ string, numbers []int) (map[int][]linkedReference, error) {
-		return map[int][]linkedReference{numbers[0]: {{Number: 9, URL: "https://github.com/org/repo/pull/9"}}}, nil
+	fetchIssueRelationshipsFunc = func(_, _, _ string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+		return map[int][]linkedReference{numbers[0]: {{Number: 9, URL: "https://github.com/org/repo/pull/9"}}}, nil, nil
 	}
 
 	var buf bytes.Buffer
@@ -703,8 +703,8 @@ func TestExecuteIssueListAuthorResolution(t *testing.T) {
 			{Number: 1, Title: "Test", State: "OPEN", UpdatedAt: now},
 		}, nil
 	}
-	fetchIssueRelationshipsFunc = func(_, _, _ string, numbers []int) (map[int][]linkedReference, error) {
-		return map[int][]linkedReference{numbers[0]: {}}, nil
+	fetchIssueRelationshipsFunc = func(_, _, _ string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+		return map[int][]linkedReference{numbers[0]: {}}, nil, nil
 	}
 
 	var buf bytes.Buffer
@@ -734,7 +734,7 @@ func TestFetchDisplayIssuesRelationships(t *testing.T) {
 	fetchIssuesFunc = func(_ issueListOptions) ([]issueEntry, error) {
 		return []issueEntry{{Number: 7}, {Number: 9}}, nil
 	}
-	fetchIssueRelationshipsFunc = func(owner, name, host string, numbers []int) (map[int][]linkedReference, error) {
+	fetchIssueRelationshipsFunc = func(owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
 		if owner != "owner" || name != "repo" || host != "ghe.example.com" {
 			t.Fatalf("relationship target = %s/%s on %s", owner, name, host)
 		}
@@ -744,15 +744,15 @@ func TestFetchDisplayIssuesRelationships(t *testing.T) {
 		return map[int][]linkedReference{
 			7: {{Number: 25}, {Number: 3}},
 			9: {},
-		}, nil
+		}, nil, nil
 	}
 
-	issues, err := fetchDisplayIssues(issueListOptions{repo: "ghe.example.com/owner/repo"}, now)
+	result, err := fetchDisplayIssues(issueListOptions{repo: "ghe.example.com/owner/repo"}, now)
 	if err != nil {
 		t.Fatalf("fetchDisplayIssues returned error: %v", err)
 	}
-	if issues[0].PullRequests != "#3, #25" || issues[1].PullRequests != "-" {
-		t.Fatalf("relationship displays = %q and %q", issues[0].PullRequests, issues[1].PullRequests)
+	if result.Display[0].PullRequests != "#3, #25" || result.Display[1].PullRequests != "-" {
+		t.Fatalf("relationship displays = %q and %q", result.Display[0].PullRequests, result.Display[1].PullRequests)
 	}
 }
 
@@ -767,16 +767,19 @@ func TestFetchDisplayIssuesRelationshipFailure(t *testing.T) {
 	fetchIssuesFunc = func(_ issueListOptions) ([]issueEntry, error) {
 		return []issueEntry{{Number: 7}}, nil
 	}
-	fetchIssueRelationshipsFunc = func(_, _, _ string, _ []int) (map[int][]linkedReference, error) {
-		return nil, fmt.Errorf("graphql unavailable")
+	fetchIssueRelationshipsFunc = func(_, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
+		return nil, nil, fmt.Errorf("graphql unavailable")
 	}
 
-	issues, err := fetchDisplayIssues(issueListOptions{repo: "owner/repo"}, time.Time{})
+	result, err := fetchDisplayIssues(issueListOptions{repo: "owner/repo"}, time.Time{})
 	if err != nil {
 		t.Fatalf("relationship failure should not fail issue list: %v", err)
 	}
-	if issues[0].PullRequests != "?" {
-		t.Fatalf("failed relationship display = %q, want ?", issues[0].PullRequests)
+	if result.Display[0].PullRequests != "?" {
+		t.Fatalf("failed relationship display = %q, want ?", result.Display[0].PullRequests)
+	}
+	if result.RelErr == nil {
+		t.Fatal("expected relationship failure to be carried for display")
 	}
 }
 

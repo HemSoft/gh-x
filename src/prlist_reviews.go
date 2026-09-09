@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,12 +17,16 @@ type reviewThreadInfo struct {
 
 type prSupplementalInfo struct {
 	Threads                reviewThreadInfo
+	ThreadsTruncated       bool
 	ClosingIssues          []linkedReference
 	ClosingIssuesAvailable bool
 	AIReview               string
 	AIClean                bool
 	HasUnresolvedAIThreads bool
 	Approvals              int
+	Incomplete             bool
+	EvidenceAmbiguous      bool
+	UnattributableEvidence bool
 }
 
 // aiReviewNode holds the fields needed to detect bot reviewer status.
@@ -318,84 +324,101 @@ func latestAIReview(reviews []aiReviewNode) (aiReviewNode, bool) {
 	return aiReviewNode{}, false
 }
 
-func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, error) {
+// graphQLError is one entry from a GraphQL response's errors array.
+type graphQLError struct {
+	Path []json.RawMessage `json:"path"`
+}
+
+// parseSupplementalResponse parses the batch envelope into per-PR info plus
+// the aliases the GraphQL errors paths mark as failed. GitHub nulls the
+// affected field or object for every error and reports its path, so an error
+// path through an alias means that alias's data must stay unavailable even
+// when a parseable object survived.
+func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, map[int]bool, error) {
 	var resp struct {
 		Data struct {
 			Repository map[string]json.RawMessage `json:"repository"`
 		} `json:"data"`
+		Errors []graphQLError `json:"errors"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	result := make(map[int]prSupplementalInfo)
 	for _, raw := range resp.Data.Repository {
+		if !supplementalConnectionsPresent(raw) {
+			continue
+		}
 		num, info, ok := parsePRSupplementalNode(raw)
 		if !ok {
 			continue
 		}
 		result[num] = info
 	}
-	return result, nil
+	return result, aliasesFromErrors(resp.Errors), nil
+}
+
+// aliasesFromErrors walks each GraphQL error path for the batch's prN alias
+// names, because an error path through an alias marks that alias's data as
+// failed even when the object survived the failure. An error confined to
+// closingIssuesReferences is excluded: that connection keeps its own
+// per-field availability flag, so the healthy review and thread data stays
+// rendered instead of being replaced wholesale with unknown columns.
+func aliasesFromErrors(errors []graphQLError) map[int]bool {
+	errored := make(map[int]bool)
+	for _, gqlErr := range errors {
+		alias, firstField := aliasAndFirstField(gqlErr.Path, "pr")
+		if alias <= 0 || firstField == "closingIssuesReferences" {
+			continue
+		}
+		errored[alias] = true
+	}
+	return errored
+}
+
+// aliasAndFirstField walks one GraphQL error path and returns the batch alias
+// number plus the first field element after it, skipping index elements.
+func aliasAndFirstField(path []json.RawMessage, prefix string) (int, string) {
+	number := 0
+	firstField := ""
+	sawAlias := false
+	for _, element := range path {
+		var name string
+		if json.Unmarshal(element, &name) != nil {
+			continue
+		}
+		if !sawAlias {
+			if n, ok := aliasNumber(name, prefix); ok {
+				number = n
+				sawAlias = true
+			}
+			continue
+		}
+		if firstField == "" {
+			firstField = name
+		}
+	}
+	return number, firstField
+}
+
+// aliasNumber extracts the number from a batch alias like "pr333" or
+// "issue332", given the batch's prefix, so PR and issue enrichment share one
+// error-path parser.
+func aliasNumber(alias, prefix string) (int, bool) {
+	if !strings.HasPrefix(alias, prefix) {
+		return 0, false
+	}
+	number, err := strconv.Atoi(strings.TrimPrefix(alias, prefix))
+	if err != nil {
+		return 0, false
+	}
+	return number, true
 }
 
 // parsePRSupplementalNode parses a single PR's supplemental data from raw JSON.
 // Returns the PR number, supplemental info, and whether parsing succeeded.
 func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool) {
-	var prData struct {
-		Number                  int                        `json:"number"`
-		HeadRefOID              string                     `json:"headRefOid"`
-		ClosingIssuesReferences *linkedReferenceConnection `json:"closingIssuesReferences"`
-		Comments                struct {
-			TotalCount int `json:"totalCount"`
-			Nodes      []struct {
-				Body      string    `json:"body"`
-				CreatedAt time.Time `json:"createdAt"`
-				Author    struct {
-					Login    string `json:"login"`
-					Typename string `json:"__typename"`
-				} `json:"author"`
-			} `json:"nodes"`
-		} `json:"comments"`
-		ReviewThreads struct {
-			TotalCount int `json:"totalCount"`
-			Nodes      []struct {
-				IsResolved bool `json:"isResolved"`
-				Comments   struct {
-					Nodes []struct {
-						Author struct {
-							Login    string `json:"login"`
-							Typename string `json:"__typename"`
-						} `json:"author"`
-					} `json:"nodes"`
-				} `json:"comments"`
-			} `json:"nodes"`
-		} `json:"reviewThreads"`
-		Reviews struct {
-			TotalCount int `json:"totalCount"`
-			Nodes      []struct {
-				State       string    `json:"state"`
-				SubmittedAt time.Time `json:"submittedAt"`
-				Commit      struct {
-					OID string `json:"oid"`
-				} `json:"commit"`
-				Author struct {
-					Login    string `json:"login"`
-					Typename string `json:"__typename"`
-				} `json:"author"`
-				Comments struct {
-					TotalCount int `json:"totalCount"`
-				} `json:"comments"`
-			} `json:"nodes"`
-		} `json:"reviews"`
-		ApprovedReviews struct {
-			Nodes []struct {
-				Author struct {
-					Login    string `json:"login"`
-					Typename string `json:"__typename"`
-				} `json:"author"`
-			} `json:"nodes"`
-		} `json:"approvedReviews"`
-	}
+	var prData supplementalNodeData
 	if err := json.Unmarshal(raw, &prData); err != nil {
 		return 0, prSupplementalInfo{}, false
 	}
@@ -403,9 +426,68 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		return 0, prSupplementalInfo{}, false
 	}
 
-	var formalReviewNodes []aiReviewNode
+	formal, aiNodes, hasCurrentHeadCodexReview, latestCurrentHeadCodexAt, unattributableReview := collectAIEvidence(&prData)
+	sortAIReviewsChronologically(aiNodes)
+	aiThreads, unknownUnresolved := parseReviewThreadStates(&prData)
+
+	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
+	commentsIncomplete := connectionIncomplete(
+		prData.Comments.TotalCount,
+		len(prData.Comments.Nodes),
+		hasCurrentHeadCodexReview,
+	)
+	reviewsIncomplete := connectionIncomplete(
+		prData.Reviews.TotalCount,
+		len(prData.Reviews.Nodes),
+		sufficientReviewEvidence(formal, prData.HeadRefOID, latestCurrentHeadCodexAt),
+	)
+	evidenceOrderAmbiguous := reviewEvidenceOrderAmbiguous(
+		formal,
+		prData.HeadRefOID,
+		latestCurrentHeadCodexAt,
+		hasCurrentHeadCodexReview,
+	)
+	closingIssuesAvailable := closingIssuesConnectionPresent(raw) && prData.ClosingIssuesReferences.complete()
+	incomplete := supplementalConnectionsIncomplete(
+		closingIssuesAvailable,
+		commentsIncomplete, threadsTruncated, reviewsIncomplete,
+	)
+	aiReview, aiClean := summarizeSupplementalReviews(
+		aiNodes,
+		aiThreads,
+		prData.HeadRefOID,
+		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous) || unknownUnresolved || unattributableReview,
+	)
+
+	return prData.Number, prSupplementalInfo{
+		Threads: reviewThreadInfo{
+			Total:    prData.ReviewThreads.TotalCount,
+			Resolved: countResolvedThreads(aiThreads),
+		},
+		ThreadsTruncated:       threadsTruncated,
+		ClosingIssues:          closingIssueNodes(prData.ClosingIssuesReferences),
+		ClosingIssuesAvailable: closingIssuesAvailable,
+		AIReview:               aiReview,
+		AIClean:                aiClean,
+		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
+		Approvals:              countUniqueApprovers(approverLogins(&prData)),
+		Incomplete:             incomplete,
+		EvidenceAmbiguous:      evidenceOrderAmbiguous,
+		UnattributableEvidence: unknownUnresolved || unattributableReview,
+	}, true
+}
+
+// collectAIEvidence gathers the formal reviews plus any current-head Codex
+// conversation receipt, so both evidence sources feed one chronological list.
+func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReviewNode, hasCurrentHeadCodexReview bool, latestCurrentHeadCodexAt time.Time, unattributableReview bool) {
 	for _, r := range prData.Reviews.Nodes {
-		formalReviewNodes = append(formalReviewNodes, aiReviewNode{
+		if (r.Author.Login == "" && r.Author.Typename == "") || r.State == "" {
+			// A review without attributable authorship or a state may be bot
+			// evidence that cannot be classified. A PENDING review carries no
+			// commit by design, so commit absence stays legitimate.
+			unattributableReview = true
+		}
+		formal = append(formal, aiReviewNode{
 			State:        r.State,
 			AuthorLogin:  r.Author.Login,
 			AuthorType:   r.Author.Typename,
@@ -414,9 +496,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			CommitOID:    r.Commit.OID,
 		})
 	}
-	aiNodes := append([]aiReviewNode(nil), formalReviewNodes...)
-	hasCurrentHeadCodexReview := false
-	var latestCurrentHeadCodexAt time.Time
+	aiNodes = append([]aiReviewNode(nil), formal...)
 	for _, comment := range prData.Comments.Nodes {
 		if node, ok := codexReviewNode(aiReviewComment{
 			Body:        comment.Body,
@@ -431,14 +511,24 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			}
 		}
 	}
-	sortAIReviewsChronologically(aiNodes)
+	return formal, aiNodes, hasCurrentHeadCodexReview, latestCurrentHeadCodexAt, unattributableReview
+}
 
-	var aiThreads []aiReviewThread
+// parseReviewThreadStates maps review threads to their resolution state and
+// first-comment authorship, flagging unresolved threads whose author cannot
+// be attributed so AI status stays unknown for them.
+func parseReviewThreadStates(prData *supplementalNodeData) ([]aiReviewThread, bool) {
+	aiThreads := make([]aiReviewThread, 0, len(prData.ReviewThreads.Nodes))
+	unknownUnresolved := false
 	for _, t := range prData.ReviewThreads.Nodes {
 		var login, authorType string
 		if len(t.Comments.Nodes) > 0 {
 			login = t.Comments.Nodes[0].Author.Login
 			authorType = t.Comments.Nodes[0].Author.Typename
+		}
+		unknown := login == "" && authorType == ""
+		if unknown && !t.IsResolved {
+			unknownUnresolved = true
 		}
 		aiThreads = append(aiThreads, aiReviewThread{
 			AuthorLogin: login,
@@ -446,48 +536,157 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			IsResolved:  t.IsResolved,
 		})
 	}
+	return aiThreads, unknownUnresolved
+}
 
-	var approverLogins []string
+// approverLogins collects the approved-review author logins for the PR.
+func approverLogins(prData *supplementalNodeData) []string {
+	logins := make([]string, 0, len(prData.ApprovedReviews.Nodes))
 	for _, r := range prData.ApprovedReviews.Nodes {
-		approverLogins = append(approverLogins, r.Author.Login)
+		logins = append(logins, r.Author.Login)
 	}
+	return logins
+}
 
-	threadsTruncated := prData.ReviewThreads.TotalCount > len(prData.ReviewThreads.Nodes)
-	commentsIncomplete := connectionIncomplete(
-		prData.Comments.TotalCount,
-		len(prData.Comments.Nodes),
-		hasCurrentHeadCodexReview,
-	)
-	reviewsIncomplete := connectionIncomplete(
-		prData.Reviews.TotalCount,
-		len(prData.Reviews.Nodes),
-		sufficientReviewEvidence(formalReviewNodes, prData.HeadRefOID, latestCurrentHeadCodexAt),
-	)
-	evidenceOrderAmbiguous := reviewEvidenceOrderAmbiguous(
-		formalReviewNodes,
-		prData.HeadRefOID,
-		latestCurrentHeadCodexAt,
-		hasCurrentHeadCodexReview,
-	)
-	aiReview, aiClean := summarizeSupplementalReviews(
-		aiNodes,
-		aiThreads,
-		prData.HeadRefOID,
-		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous),
-	)
+// supplementalNodeData mirrors the supplemental GraphQL query's per-PR shape.
+type supplementalNodeData struct {
+	Number                  int                        `json:"number"`
+	HeadRefOID              string                     `json:"headRefOid"`
+	ClosingIssuesReferences *linkedReferenceConnection `json:"closingIssuesReferences"`
+	Comments                struct {
+		TotalCount int `json:"totalCount"`
+		Nodes      []struct {
+			Body      string    `json:"body"`
+			CreatedAt time.Time `json:"createdAt"`
+			Author    struct {
+				Login    string `json:"login"`
+				Typename string `json:"__typename"`
+			} `json:"author"`
+		} `json:"nodes"`
+	} `json:"comments"`
+	ReviewThreads struct {
+		TotalCount int `json:"totalCount"`
+		Nodes      []struct {
+			IsResolved bool `json:"isResolved"`
+			Comments   struct {
+				Nodes []struct {
+					Author struct {
+						Login    string `json:"login"`
+						Typename string `json:"__typename"`
+					} `json:"author"`
+				} `json:"nodes"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	} `json:"reviewThreads"`
+	Reviews struct {
+		TotalCount int `json:"totalCount"`
+		Nodes      []struct {
+			State       string    `json:"state"`
+			SubmittedAt time.Time `json:"submittedAt"`
+			Commit      struct {
+				OID string `json:"oid"`
+			} `json:"commit"`
+			Author struct {
+				Login    string `json:"login"`
+				Typename string `json:"__typename"`
+			} `json:"author"`
+			Comments struct {
+				TotalCount int `json:"totalCount"`
+			} `json:"comments"`
+		} `json:"nodes"`
+	} `json:"reviews"`
+	ApprovedReviews struct {
+		Nodes []struct {
+			Author struct {
+				Login    string `json:"login"`
+				Typename string `json:"__typename"`
+			} `json:"author"`
+		} `json:"nodes"`
+	} `json:"approvedReviews"`
+}
 
-	return prData.Number, prSupplementalInfo{
-		Threads: reviewThreadInfo{
-			Total:    prData.ReviewThreads.TotalCount,
-			Resolved: countResolvedThreads(aiThreads),
-		},
-		ClosingIssues:          closingIssueNodes(prData.ClosingIssuesReferences),
-		ClosingIssuesAvailable: prData.ClosingIssuesReferences.complete(),
-		AIReview:               aiReview,
-		AIClean:                aiClean,
-		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
-		Approvals:              countUniqueApprovers(approverLogins),
-	}, true
+// supplementalConnectionsPresent reports whether every connection the
+// supplemental summary consumes was fully returned for this PR. GitHub nulls
+// an individual field of an otherwise valid object when that sub-query fails
+// and can also return a connection object with absent counts, so an entry
+// with an incomplete connection cannot prove its threads, comments, or
+// reviews and must stay unavailable. closingIssuesReferences keeps its own
+// per-field availability flag.
+func supplementalConnectionsPresent(raw json.RawMessage) bool {
+	var fields struct {
+		Comments        json.RawMessage `json:"comments"`
+		ReviewThreads   json.RawMessage `json:"reviewThreads"`
+		Reviews         json.RawMessage `json:"reviews"`
+		ApprovedReviews json.RawMessage `json:"approvedReviews"`
+	}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return false
+	}
+	return countedConnectionPresent(fields.Comments) &&
+		reviewThreadsPresent(fields.ReviewThreads) &&
+		countedConnectionPresent(fields.Reviews) &&
+		nodeConnectionPresent(fields.ApprovedReviews)
+}
+
+// countedConnectionPresent requires both totalCount and nodes; a missing
+// count would default the summary to a false zero.
+func countedConnectionPresent(raw json.RawMessage) bool {
+	var connection struct {
+		TotalCount json.RawMessage `json:"totalCount"`
+		Nodes      json.RawMessage `json:"nodes"`
+	}
+	if err := json.Unmarshal(raw, &connection); err != nil {
+		return false
+	}
+	return jsonValuePresent(connection.TotalCount) && jsonValuePresent(connection.Nodes)
+}
+
+// reviewThreadsPresent additionally validates the nested shape that drives
+// AI classification: every thread node must be an object carrying isResolved
+// and a comments connection that includes its nodes list, or a missing node
+// list would silently classify an unresolvable thread as resolved non-AI.
+func reviewThreadsPresent(raw json.RawMessage) bool {
+	if !countedConnectionPresent(raw) {
+		return false
+	}
+	var connection struct {
+		Nodes []json.RawMessage `json:"nodes"`
+	}
+	if err := json.Unmarshal(raw, &connection); err != nil {
+		return false
+	}
+	for _, node := range connection.Nodes {
+		var thread struct {
+			IsResolved json.RawMessage `json:"isResolved"`
+			Comments   struct {
+				Nodes json.RawMessage `json:"nodes"`
+			} `json:"comments"`
+		}
+		if err := json.Unmarshal(node, &thread); err != nil {
+			return false
+		}
+		if !jsonValuePresent(thread.IsResolved) || !jsonValuePresent(thread.Comments.Nodes) {
+			return false
+		}
+	}
+	return true
+}
+
+// nodeConnectionPresent requires only nodes; approvedReviews carries no
+// count in the supplemental query.
+func nodeConnectionPresent(raw json.RawMessage) bool {
+	var connection struct {
+		Nodes json.RawMessage `json:"nodes"`
+	}
+	if err := json.Unmarshal(raw, &connection); err != nil {
+		return false
+	}
+	return jsonValuePresent(connection.Nodes)
+}
+
+func jsonValuePresent(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
 func closingIssueNodes(connection *linkedReferenceConnection) []linkedReference {
@@ -495,6 +694,25 @@ func closingIssueNodes(connection *linkedReferenceConnection) []linkedReference 
 		return nil
 	}
 	return connection.Nodes
+}
+
+// supplementalConnectionsIncomplete reports whether any consumed connection
+// was truncated or absent, so rendered unknown columns need a diagnostic.
+func supplementalConnectionsIncomplete(closingIssuesAvailable bool, truncated ...bool) bool {
+	return anyConnectionTruncated(truncated...) || !closingIssuesAvailable
+}
+
+// closingIssuesConnectionPresent requires the connection's totalCount and
+// nodes keys, so a failed closingIssuesReferences sub-query is not mistaken
+// for a legitimately empty relationship.
+func closingIssuesConnectionPresent(raw json.RawMessage) bool {
+	var fields struct {
+		ClosingIssues json.RawMessage `json:"closingIssuesReferences"`
+	}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return false
+	}
+	return countedConnectionPresent(fields.ClosingIssues)
 }
 
 func anyConnectionTruncated(truncated ...bool) bool {
@@ -519,7 +737,9 @@ func summarizeSupplementalReviews(
 	currentReviews := currentHeadReviewNodes(aiNodes, headRefOID)
 	aiReview = detectAIReview(currentReviews, aiThreads)
 	aiClean = isAIReviewClean(currentReviews, aiThreads)
-	if aiIncomplete {
+	if aiIncomplete && aiReview != "fail" {
+		// Unknown evidence widens an inconclusive result to unknown, but it
+		// cannot overturn a computed failure.
 		aiReview = "?"
 		aiClean = false
 	}

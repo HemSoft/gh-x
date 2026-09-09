@@ -191,22 +191,37 @@ func executeIssueList(options issueListOptions, stdout io.Writer, now time.Time)
 		return nil
 	}
 
-	displayIssues, err := fetchDisplayIssues(options, now)
+	result, err := fetchDisplayIssues(options, now)
 	if err != nil {
 		return err
 	}
 
 	colorEnabled := term.FromEnv().IsColorEnabled()
-	return renderIssueTable(stdout, displayIssues, options, colorEnabled)
+	if err := renderIssueTable(stdout, result.Display, options, colorEnabled); err != nil {
+		return err
+	}
+	if result.RelErr != nil {
+		styler := newTableStyler(stdout, colorEnabled)
+		fmt.Fprintln(stdout, styler.dim("Pull request relationships unavailable: "+conciseStatusError(result.RelErr)).styled)
+	}
+	return nil
 }
 
-func fetchDisplayIssues(options issueListOptions, now time.Time) ([]displayIssue, error) {
+// issueListResult carries the rendered issue rows plus the relationship
+// enrichment failure so callers can surface an actionable diagnostic without
+// conflating it with a whole-list failure.
+type issueListResult struct {
+	Display []displayIssue
+	RelErr  error
+}
+
+func fetchDisplayIssues(options issueListOptions, now time.Time) (issueListResult, error) {
 	issues, err := fetchIssuesFunc(options)
 	if err != nil {
-		return nil, err
+		return issueListResult{}, err
 	}
 
-	relationships, relationshipsFailed := fetchIssueRelationshipData(options.repo, issues)
+	relationships, unavailable, relErr := fetchIssueRelationshipData(options.repo, issues)
 
 	displayIssues := make([]displayIssue, len(issues))
 	for i, entry := range issues {
@@ -214,29 +229,30 @@ func fetchDisplayIssues(options issueListOptions, now time.Time) ([]displayIssue
 		refs, found := relationships[entry.Number]
 		displayIssues[i].PullRequests, displayIssues[i].pullRequestRefs = relationshipDisplay(
 			refs,
-			relationshipsFailed || !found,
+			unavailable[entry.Number] || !found,
 		)
 	}
-	return displayIssues, nil
+	return issueListResult{Display: displayIssues, RelErr: relErr}, nil
 }
 
-func fetchIssueRelationshipData(repo string, issues []issueEntry) (map[int][]linkedReference, bool) {
+func fetchIssueRelationshipData(repo string, issues []issueEntry) (map[int][]linkedReference, map[int]bool, error) {
 	if len(issues) == 0 {
-		return nil, false
+		return nil, nil, nil
 	}
 	owner, name, err := resolveRepo(repo)
 	if err != nil {
-		return nil, true
+		unavailable := make(map[int]bool, len(issues))
+		for _, issue := range issues {
+			unavailable[issue.Number] = true
+		}
+		return nil, unavailable, err
 	}
 	numbers := make([]int, len(issues))
 	for i, issue := range issues {
 		numbers[i] = issue.Number
 	}
-	relationships, err := fetchIssueRelationshipsFunc(owner, name, repositoryTargetHost(repo), numbers)
-	if err != nil {
-		return nil, true
-	}
-	return relationships, false
+	relationships, unavailable, relErr := fetchIssueRelationshipsFunc(owner, name, repositoryTargetHost(repo), numbers)
+	return relationships, unavailable, relErr
 }
 
 func buildDisplayIssue(entry issueEntry, now time.Time) displayIssue {

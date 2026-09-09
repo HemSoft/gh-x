@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/cli/go-gh/v2/pkg/repository"
 	"net/url"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -16,38 +19,129 @@ var ghExecFunc = execGH
 // fetchPRSupplementalBatchFunc is swapped in tests to avoid real API calls.
 var fetchPRSupplementalBatchFunc = fetchPRSupplementalBatch
 
+// prSupplementalData merges parsed supplemental info with the set of PRs whose
+// enrichment failed or stayed incomplete. Unavailable PRs render unknown
+// columns; every error is carried for display instead of being swallowed.
+type prSupplementalData struct {
+	Info        map[int]prSupplementalInfo
+	Unavailable map[int]bool
+	Err         error
+}
+
 // fetchSupplementalData retrieves supplemental PR data via GraphQL (best-effort).
-func fetchSupplementalData(repo string, prs []pullRequest) (map[int]prSupplementalInfo, bool, string, string) {
+func fetchSupplementalData(repo string, prs []pullRequest) (prSupplementalData, string, string) {
 	owner, name, err := resolveRepo(repo)
 	if err != nil {
-		return nil, true, "", ""
+		unavailable := make(map[int]bool, len(prs))
+		for _, pr := range prs {
+			unavailable[pr.Number] = true
+		}
+		return prSupplementalData{Unavailable: unavailable, Err: err}, "", ""
 	}
 	numbers := make([]int, len(prs))
 	for i, pr := range prs {
 		numbers[i] = pr.Number
 	}
-	fetched, err := fetchPRSupplemental(owner, name, repositoryTargetHost(repo), numbers)
-	if err != nil {
-		return nil, true, owner, name
+	fetched, unavailable, fetchErr := fetchPRSupplemental(owner, name, repositoryTargetHost(repo), numbers)
+	data := prSupplementalData{Info: fetched, Unavailable: unavailable, Err: fetchErr}
+	// Derived per-PR reasons join with any fetch error: a retained PR can
+	// still carry truncated or unattributable evidence while the batch also
+	// failed, and every rendered unknown column deserves its reason.
+	data.Err = joinSupplementalReasons(
+		fetchErr,
+		incompleteConnectionError(fetched),
+		evidenceAmbiguityError(fetched),
+		unattributableEvidenceError(fetched),
+	)
+	return data, owner, name
+}
+
+// joinSupplementalReasons renders every distinct enrichment problem in one
+// diagnostic line, so truncated connections and unordered evidence both get
+// named when they apply to the same batch. External gh messages are capped
+// where they are created; the self-generated per-PR reasons stay whole so
+// their PR number lists survive the joined notice.
+func joinSupplementalReasons(reasons ...error) error {
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if reason != nil {
+			parts = append(parts, reason.Error())
+		}
 	}
-	return fetched, false, owner, name
+	if len(parts) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s", strings.Join(parts, "; "))
+}
+
+// incompleteConnectionError explains rendered unknown columns that come from
+// truncated connections instead of a failed fetch, so a PR with more
+// supplemental rows than one page holds still says why parts stay unknown.
+func incompleteConnectionError(infos map[int]prSupplementalInfo) error {
+	numbers := incompleteInfoNumbers(infos, func(info prSupplementalInfo) bool { return info.Incomplete })
+	if len(numbers) == 0 {
+		return nil
+	}
+	return fmt.Errorf("truncated supplemental connections for pull request(s) %s", joinPRNumbers(numbers))
+}
+
+// evidenceAmbiguityError names PRs whose AI evidence cannot be ordered, so
+// an unknown AI column is not misreported as truncated data.
+func evidenceAmbiguityError(infos map[int]prSupplementalInfo) error {
+	numbers := incompleteInfoNumbers(infos, func(info prSupplementalInfo) bool { return info.EvidenceAmbiguous })
+	if len(numbers) == 0 {
+		return nil
+	}
+	return fmt.Errorf("cannot order AI review evidence for pull request(s) %s", joinPRNumbers(numbers))
+}
+
+// unattributableEvidenceError names PRs whose review evidence cannot be
+// attributed to an author, so an unknown AI column is not misread as a
+// confirmed pass or failure.
+func unattributableEvidenceError(infos map[int]prSupplementalInfo) error {
+	numbers := incompleteInfoNumbers(infos, func(info prSupplementalInfo) bool { return info.UnattributableEvidence })
+	if len(numbers) == 0 {
+		return nil
+	}
+	return fmt.Errorf("unattributable review evidence for pull request(s) %s", joinPRNumbers(numbers))
+}
+
+func incompleteInfoNumbers(infos map[int]prSupplementalInfo, marked func(prSupplementalInfo) bool) []int {
+	numbers := make([]int, 0, len(infos))
+	for number, info := range infos {
+		if marked(info) {
+			numbers = append(numbers, number)
+		}
+	}
+	sort.Ints(numbers)
+	return numbers
+}
+
+func joinPRNumbers(numbers []int) string {
+	parts := make([]string, len(numbers))
+	for i, number := range numbers {
+		parts[i] = strconv.Itoa(number)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // fetchRequiredChecks retrieves required check contexts per base branch (best-effort).
-func fetchRequiredChecks(owner, name string, prs []pullRequest) (map[string]map[string]bool, map[string]bool) {
+func fetchRequiredChecks(owner, name string, prs []pullRequest) (map[string]map[string]bool, map[string]error) {
 	result := make(map[string]map[string]bool)
-	failed := make(map[string]bool)
+	failed := make(map[string]error)
 	if owner == "" {
 		for _, base := range uniqueBaseBranches(prs) {
-			failed[base] = true
+			failed[base] = errors.New("repository unavailable")
 		}
 		return result, failed
 	}
 	for _, base := range uniqueBaseBranches(prs) {
-		if ctx, ok := fetchRequiredCheckContexts(owner, name, base); ok && len(ctx) > 0 {
+		ctx, ok, err := fetchRequiredCheckContexts(owner, name, base)
+		switch {
+		case err == nil && ok && len(ctx) > 0:
 			result[base] = ctx
-		} else if !ok {
-			failed[base] = true
+		case err != nil:
+			failed[base] = err
 		}
 	}
 	return result, failed
@@ -154,31 +248,46 @@ func resolveAuthorFromOrg(name, org string) string {
 	return ""
 }
 
-func fetchPRSupplemental(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+func fetchPRSupplemental(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
 	if len(prNumbers) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Batch PRs to avoid exceeding Windows command-line length limits (~32K chars).
 	// Each PR's query fragment is ~350 chars; batches of 30 stay well under the limit.
 	result := make(map[int]prSupplementalInfo)
+	unavailable := make(map[int]bool)
+	var firstErr error
 	for i := 0; i < len(prNumbers); i += relationshipBatchSize {
 		end := i + relationshipBatchSize
 		if end > len(prNumbers) {
 			end = len(prNumbers)
 		}
-		batch, err := fetchPRSupplementalBatchFunc(owner, name, host, prNumbers[i:end])
-		if err != nil {
-			return nil, err
-		}
+		batch, batchUnavailable, err := fetchPRSupplementalBatchFunc(owner, name, host, prNumbers[i:end])
 		for k, v := range batch {
 			result[k] = v
 		}
+		for number := range batchUnavailable {
+			unavailable[number] = true
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return result, nil
+	return result, unavailable, firstPartialFetchError(firstErr, unavailable, len(prNumbers), "pull requests")
 }
 
-func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+// firstPartialFetchError guarantees a diagnostic whenever requested items
+// stayed unavailable: a recovered payload that omitted aliases, or a
+// structurally empty response, must not render unknown columns silently.
+func firstPartialFetchError(firstErr error, unavailable map[int]bool, requested int, kind string) error {
+	if firstErr != nil || len(unavailable) == 0 {
+		return firstErr
+	}
+	return fmt.Errorf("%d of %d requested %s returned no supplemental data", len(unavailable), requested, kind)
+}
+
+func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
@@ -193,8 +302,30 @@ func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[in
 	)
 
 	data, err := fetchGraphQL(host, query)
-	if err != nil {
-		return nil, err
+	unavailable := unavailablePRNumbers(prNumbers, nil)
+	if data == nil {
+		return nil, unavailable, err
 	}
-	return parseSupplementalResponse(data)
+	infos, errored, parseErr := parseSupplementalResponse(data)
+	if parseErr != nil {
+		return nil, unavailable, parseErr
+	}
+	unavailable = unavailablePRNumbers(prNumbers, infos)
+	for number := range errored {
+		unavailable[number] = true
+	}
+	return infos, unavailable, err
+}
+
+// unavailablePRNumbers lists requested PRs that produced no parsed
+// supplemental info, so a partially failed batch fails closed for exactly
+// those PRs instead of every PR in the batch.
+func unavailablePRNumbers(prNumbers []int, infos map[int]prSupplementalInfo) map[int]bool {
+	unavailable := make(map[int]bool, len(prNumbers))
+	for _, number := range prNumbers {
+		if _, ok := infos[number]; !ok {
+			unavailable[number] = true
+		}
+	}
+	return unavailable
 }

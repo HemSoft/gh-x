@@ -4,20 +4,19 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 )
 
-func auxiliaryRefreshError(supplementalFailed, requiredChecksFailed bool) error {
-	failed := make([]string, 0, 2)
-	if supplementalFailed {
-		failed = append(failed, "supplemental pull request data")
+// supplementalNotice renders one actionable, secret-safe line that explains
+// why unknown columns appear. Text stays single-line and bounded; the
+// generous limit keeps every joined per-PR reason, including its number
+// list, visible.
+func supplementalNotice(reason error) string {
+	if reason == nil {
+		return ""
 	}
-	if requiredChecksFailed {
-		failed = append(failed, "required check rules")
-	}
-	if len(failed) == 0 {
-		return nil
-	}
-	return fmt.Errorf("partial refresh: %s unavailable", strings.Join(failed, " and "))
+	return "Supplemental data unavailable: " + boundedSingleLine(reason.Error(), 500)
 }
 
 func uniqueBaseBranches(prs []pullRequest) []string {
@@ -33,32 +32,40 @@ func uniqueBaseBranches(prs []pullRequest) []string {
 }
 
 // enrichPullRequests builds display PRs by merging supplemental data and
-// applying required-check downgrade logic.
-func enrichPullRequests(prs []pullRequest, supplemental map[int]prSupplementalInfo, supplementalFailed bool, requiredByBranch map[string]map[string]bool, now time.Time) []displayPullRequest {
+// applying required-check downgrade logic. PRs whose enrichment is unknown
+// fail closed with unknown columns; their rows never report clean or empty
+// supplemental values.
+func enrichPullRequests(prs []pullRequest, supplemental prSupplementalData, requiredByBranch map[string]map[string]bool, failedRuleBranches map[string]error, now time.Time) []displayPullRequest {
 	rendered := make([]displayPullRequest, 0, len(prs))
 	for _, pr := range prs {
 		dp := buildDisplayPullRequest(pr, now)
-		info, supplementalFound := supplemental[pr.Number]
-		applySupplementalInfo(&dp, supplemental, pr.Number, supplementalFailed)
+		info, found := supplemental.Info[pr.Number]
+		unavailable := supplemental.Unavailable[pr.Number] || !found
+		applySupplementalInfo(&dp, info, unavailable)
 		dp.Issues, dp.issueRefs = relationshipDisplay(
 			info.ClosingIssues,
-			supplementalFailed || !supplementalFound || !info.ClosingIssuesAvailable,
+			unavailable || !info.ClosingIssuesAvailable,
 		)
-		applyAIReviewCheck(&dp, info, pr.StatusCheckRollup, supplementalFailed || !supplementalFound)
-		downgradeChecksIfMissing(&dp, requiredByBranch, pr.BaseRefName, pr.StatusCheckRollup)
+		applyAIReviewCheck(&dp, info, pr.StatusCheckRollup, unavailable)
+		downgradeChecksIfMissing(&dp, requiredByBranch, failedRuleBranches, pr.BaseRefName, pr.StatusCheckRollup)
 		rendered = append(rendered, dp)
 	}
 	return rendered
 }
 
-func applySupplementalInfo(dp *displayPullRequest, supplemental map[int]prSupplementalInfo, number int, failed bool) {
-	if failed {
+func applySupplementalInfo(dp *displayPullRequest, info prSupplementalInfo, unavailable bool) {
+	if unavailable {
 		dp.Comments = "?"
 		dp.AIReview = "?"
 		return
 	}
-	info := supplemental[number]
-	dp.Comments = formatComments(info.Threads)
+	if info.ThreadsTruncated {
+		// The resolved count comes from a partial page; rendering it against
+		// the full total would report a precise-looking wrong value.
+		dp.Comments = "?"
+	} else {
+		dp.Comments = formatComments(info.Threads)
+	}
 	dp.AIReview = info.AIReview
 	if info.AIClean {
 		dp.AIClean = &info.AIClean
@@ -111,8 +118,21 @@ func detectAIReviewCheck(checks []checkItem) string {
 	return "-"
 }
 
-func downgradeChecksIfMissing(dp *displayPullRequest, requiredByBranch map[string]map[string]bool, base string, checkItems []checkItem) {
+// downgradeChecksIfMissing downgrades a pass or review Checks value to
+// pending when repository required checks have not all reported: either the
+// fetched rules list a context that is missing from the rollup, or the
+// rules themselves could not be fetched, so the pass is unverified. A rules
+// fetch failure confirms nothing about the rollup, so it downgrades only a
+// pass; the review state keeps marking a pending recognized AI reviewer.
+func downgradeChecksIfMissing(dp *displayPullRequest, requiredByBranch map[string]map[string]bool, failedRuleBranches map[string]error, base string, checkItems []checkItem) {
 	if dp.Checks != "pass" && dp.Checks != "review" {
+		return
+	}
+	if failedRuleBranches[base] != nil {
+		if dp.Checks == "pass" {
+			dp.Checks = "pending"
+			dp.checksDowngraded = true
+		}
 		return
 	}
 	required, ok := requiredByBranch[base]
@@ -138,7 +158,7 @@ func buildDisplayPullRequest(pullRequest pullRequest, now time.Time) displayPull
 	return displayPullRequest{
 		Number:    pullRequest.Number,
 		Issues:    "-",
-		Title:     trimTitle(pullRequest.Title, 51),
+		Title:     trimCellText(pullRequest.Title, 51),
 		Author:    authorName,
 		State:     normalizeState(pullRequest.State, pullRequest.IsDraft),
 		Review:    normalizeReviewDecision(pullRequest.ReviewDecision),
@@ -382,15 +402,33 @@ func countApprovals(reviews []review) int {
 	return count
 }
 
+// trimCellText truncates a string to a display-column budget for table
+// cells, so a wide-rune title cannot render wider than its column and force
+// negative cell padding.
+func trimCellText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if limit <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(text) <= limit {
+		return text
+	}
+	if limit <= 3 {
+		return runewidth.Truncate(text, limit, "")
+	}
+	return runewidth.Truncate(text, limit-3, "") + "..."
+}
+
 func trimTitle(title string, limit int) string {
 	title = strings.TrimSpace(title)
-	if limit <= 0 || len(title) <= limit {
+	runes := []rune(title)
+	if limit <= 0 || len(runes) <= limit {
 		return title
 	}
 
 	if limit <= 3 {
-		return title[:limit]
+		return string(runes[:limit])
 	}
 
-	return title[:limit-3] + "..."
+	return string(runes[:limit-3]) + "..."
 }

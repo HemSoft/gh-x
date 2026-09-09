@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"github.com/muesli/termenv"
 	"strings"
 	"testing"
@@ -273,5 +274,43 @@ func TestCommentsCell(t *testing.T) {
 				t.Fatalf("styled mismatch for %q (aiClean=%v): got %q, want %s %q", tc.input, tc.aiClean, got.styled, tc.wantKind, wantStyled)
 			}
 		})
+	}
+}
+
+func TestWriteSupplementalNoticeJSONGoesToStderr(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	reason := errors.New("gh api graphql: You have exceeded a secondary rate limit.")
+	if err := writeSupplementalNotice(&stdout, &stderr, true, reason); err != nil {
+		t.Fatalf("writeSupplementalNotice error: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("JSON stdout must stay machine-readable, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Supplemental data unavailable: gh api graphql: You have exceeded a secondary rate limit.") {
+		t.Fatalf("stderr must carry the actionable diagnostic, got %q", stderr.String())
+	}
+}
+
+func TestWriteSupplementalNoticeTableGoesToStdout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	reason := errors.New("gh api graphql: Could not resolve to a PullRequest with the number of 99999.")
+	if err := writeSupplementalNotice(&stdout, &stderr, false, reason); err != nil {
+		t.Fatalf("writeSupplementalNotice error: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("table diagnostics belong on stdout, got stderr %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Supplemental data unavailable: gh api graphql: Could not resolve to a PullRequest with the number of 99999.") {
+		t.Fatalf("stdout must carry the diagnostic, got %q", stdout.String())
+	}
+}
+
+func TestWriteSupplementalNoticeSilentWhenComplete(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := writeSupplementalNotice(&stdout, &stderr, false, nil); err != nil {
+		t.Fatalf("writeSupplementalNotice error: %v", err)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("complete enrichment must print no diagnostic, got stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
