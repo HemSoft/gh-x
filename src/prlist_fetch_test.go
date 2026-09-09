@@ -929,3 +929,103 @@ func TestEnrichPullRequestsDowngradesChecksOnFailedRules(t *testing.T) {
 		t.Fatal("expected the failed-rules downgrade to be recorded")
 	}
 }
+
+func TestParseSupplementalResponseDropsBrokenThreadNodes(t *testing.T) {
+	tests := []struct {
+		name       string
+		brokenNode string
+	}{
+		{name: "null thread node", brokenNode: `null`},
+		{name: "missing isResolved", brokenNode: `{"comments":{"nodes":[{"author":{"login":"bot[bot]","__typename":"Bot"}}]}}`},
+		{name: "null isResolved", brokenNode: `{"isResolved":null,"comments":{"nodes":[]}}`},
+		{name: "missing comments", brokenNode: `{"isResolved":false}`},
+		{name: "null comments", brokenNode: `{"isResolved":false,"comments":null}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			envelope := fmt.Sprintf(`{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":1,"nodes":[%s]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`, test.brokenNode)
+			infos, err := parseSupplementalResponse([]byte(envelope))
+			if err != nil {
+				t.Fatalf("parseSupplementalResponse error: %v", err)
+			}
+			if _, present := infos[9]; present {
+				t.Fatalf("PR 9 with broken thread node %s must not parse as available: %#v", test.brokenNode, infos[9])
+			}
+		})
+	}
+}
+
+func TestTruncatedThreadsRenderUnknownComments(t *testing.T) {
+	now := time.Date(2026, 9, 9, 4, 40, 0, 0, time.UTC)
+	prs := []pullRequest{{Number: 8, State: "OPEN", UpdatedAt: now}}
+	rendered := enrichPullRequests(prs, prSupplementalData{Info: map[int]prSupplementalInfo{
+		8: {Threads: reviewThreadInfo{Total: 101, Resolved: 100}, ThreadsTruncated: true, AIReview: "pass"},
+	}}, nil, nil, now)
+	if rendered[0].Comments != "?" {
+		t.Fatalf("Comments = %q, want ? for a truncated thread page", rendered[0].Comments)
+	}
+	if rendered[0].AIReview != "pass" {
+		t.Fatalf("healthy AI data must stay rendered beside truncated threads, got %q", rendered[0].AIReview)
+	}
+}
+
+func TestEvidenceAmbiguityCarriesOwnDiagnostic(t *testing.T) {
+	saved := fetchPRSupplementalBatchFunc
+	defer func() { fetchPRSupplementalBatchFunc = saved }()
+
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
+		return map[int]prSupplementalInfo{
+			3: {EvidenceAmbiguous: true},
+		}, nil, nil
+	}
+
+	data, _, _ := fetchSupplementalData("owner/repo", []pullRequest{{Number: 3}})
+	if data.Err == nil {
+		t.Fatal("evidence ambiguity must produce a diagnostic when no fetch error exists")
+	}
+	if !strings.Contains(data.Err.Error(), "cannot order AI review evidence for pull request(s) 3") {
+		t.Fatalf("diagnostic should name ambiguity specifically, got %v", data.Err)
+	}
+	if strings.Contains(data.Err.Error(), "truncated supplemental connections") {
+		t.Fatalf("ambiguity alone must not be reported as truncation, got %v", data.Err)
+	}
+}
+
+func TestJoinSupplementalReasons(t *testing.T) {
+	if joinSupplementalReasons(nil, nil) != nil {
+		t.Fatal("no reasons must join to nil")
+	}
+	joined := joinSupplementalReasons(nil, errors.New("b"))
+	if joined == nil || joined.Error() != "b" {
+		t.Fatalf("single reason must survive joining, got %v", joined)
+	}
+	joined = joinSupplementalReasons(errors.New("a"), errors.New("b"))
+	if joined == nil || !strings.Contains(joined.Error(), "a; b") {
+		t.Fatalf("multiple reasons must join with ; got %v", joined)
+	}
+}
+
+func TestEnrichPullRequestsKeepsReviewStateOnFailedRules(t *testing.T) {
+	now := time.Date(2026, 9, 9, 4, 40, 0, 0, time.UTC)
+	prs := []pullRequest{{
+		Number:      50,
+		State:       "OPEN",
+		UpdatedAt:   now,
+		BaseRefName: "main",
+		StatusCheckRollup: []checkItem{{
+			Typename: "CheckRun", Name: "cubic · AI code reviewer", WorkflowName: "Cubic",
+			Status: "IN_PROGRESS",
+		}},
+	}}
+
+	rendered := enrichPullRequests(prs, prSupplementalData{}, nil, map[string]error{"main": errors.New("required check rules: malformed response")}, now)
+	if rendered[0].Checks != "review" {
+		t.Fatalf("Checks = %q, want review kept when rules fetch fails while an AI reviewer runs", rendered[0].Checks)
+	}
+
+	rendered[0].Checks = "pass"
+	downgradeChecksIfMissing(&rendered[0], nil, map[string]error{"main": errors.New("offline")}, "main", nil)
+	if rendered[0].Checks != "pending" || !rendered[0].checksDowngraded {
+		t.Fatalf("a pass under failed rules must still downgrade to pending, got %q", rendered[0].Checks)
+	}
+}

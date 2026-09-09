@@ -16,6 +16,7 @@ type reviewThreadInfo struct {
 
 type prSupplementalInfo struct {
 	Threads                reviewThreadInfo
+	ThreadsTruncated       bool
 	ClosingIssues          []linkedReference
 	ClosingIssuesAvailable bool
 	AIReview               string
@@ -23,6 +24,7 @@ type prSupplementalInfo struct {
 	HasUnresolvedAIThreads bool
 	Approvals              int
 	Incomplete             bool
+	EvidenceAmbiguous      bool
 }
 
 // aiReviewNode holds the fields needed to detect bot reviewer status.
@@ -476,7 +478,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 	)
 	incomplete := supplementalConnectionsIncomplete(
 		prData.ClosingIssuesReferences,
-		commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous,
+		commentsIncomplete, threadsTruncated, reviewsIncomplete,
 	)
 	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
@@ -490,6 +492,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 			Total:    prData.ReviewThreads.TotalCount,
 			Resolved: countResolvedThreads(aiThreads),
 		},
+		ThreadsTruncated:       threadsTruncated,
 		ClosingIssues:          closingIssueNodes(prData.ClosingIssuesReferences),
 		ClosingIssuesAvailable: prData.ClosingIssuesReferences.complete(),
 		AIReview:               aiReview,
@@ -497,6 +500,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
 		Approvals:              countUniqueApprovers(approverLogins),
 		Incomplete:             incomplete,
+		EvidenceAmbiguous:      evidenceOrderAmbiguous,
 	}, true
 }
 
@@ -518,7 +522,7 @@ func supplementalConnectionsPresent(raw json.RawMessage) bool {
 		return false
 	}
 	return countedConnectionPresent(fields.Comments) &&
-		countedConnectionPresent(fields.ReviewThreads) &&
+		reviewThreadsPresent(fields.ReviewThreads) &&
 		countedConnectionPresent(fields.Reviews) &&
 		nodeConnectionPresent(fields.ApprovedReviews)
 }
@@ -534,6 +538,35 @@ func countedConnectionPresent(raw json.RawMessage) bool {
 		return false
 	}
 	return jsonValuePresent(connection.TotalCount) && jsonValuePresent(connection.Nodes)
+}
+
+// reviewThreadsPresent additionally validates the nested shape that drives
+// AI classification: every thread node must be an object carrying isResolved
+// and its comments connection, or a null node would silently classify as a
+// resolved non-AI thread.
+func reviewThreadsPresent(raw json.RawMessage) bool {
+	if !countedConnectionPresent(raw) {
+		return false
+	}
+	var connection struct {
+		Nodes []json.RawMessage `json:"nodes"`
+	}
+	if err := json.Unmarshal(raw, &connection); err != nil {
+		return false
+	}
+	for _, node := range connection.Nodes {
+		var thread struct {
+			IsResolved json.RawMessage `json:"isResolved"`
+			Comments   json.RawMessage `json:"comments"`
+		}
+		if err := json.Unmarshal(node, &thread); err != nil {
+			return false
+		}
+		if !jsonValuePresent(thread.IsResolved) || !jsonValuePresent(thread.Comments) {
+			return false
+		}
+	}
+	return true
 }
 
 // nodeConnectionPresent requires only nodes; approvedReviews carries no

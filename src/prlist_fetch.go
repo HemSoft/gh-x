@@ -45,26 +45,65 @@ func fetchSupplementalData(repo string, prs []pullRequest) (prSupplementalData, 
 	fetched, unavailable, fetchErr := fetchPRSupplemental(owner, name, repositoryTargetHost(repo), numbers)
 	data := prSupplementalData{Info: fetched, Unavailable: unavailable, Err: fetchErr}
 	if data.Err == nil {
-		data.Err = incompleteConnectionError(fetched)
+		data.Err = joinSupplementalReasons(incompleteConnectionError(fetched), evidenceAmbiguityError(fetched))
 	}
 	return data, owner, name
+}
+
+// joinSupplementalReasons renders every distinct enrichment problem in one
+// diagnostic line, so truncated connections and unordered evidence both get
+// named when they apply to the same batch.
+func joinSupplementalReasons(reasons ...error) error {
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if reason != nil {
+			parts = append(parts, reason.Error())
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s", strings.Join(parts, "; "))
 }
 
 // incompleteConnectionError explains rendered unknown columns that come from
 // truncated connections instead of a failed fetch, so a PR with more
 // supplemental rows than one page holds still says why parts stay unknown.
 func incompleteConnectionError(infos map[int]prSupplementalInfo) error {
-	numbers := make([]string, 0, len(infos))
-	for number, info := range infos {
-		if info.Incomplete {
-			numbers = append(numbers, strconv.Itoa(number))
-		}
-	}
+	numbers := incompleteInfoNumbers(infos, func(info prSupplementalInfo) bool { return info.Incomplete })
 	if len(numbers) == 0 {
 		return nil
 	}
-	sort.Strings(numbers)
-	return fmt.Errorf("truncated supplemental connections for pull request(s) %s", strings.Join(numbers, ", "))
+	return fmt.Errorf("truncated supplemental connections for pull request(s) %s", joinPRNumbers(numbers))
+}
+
+// evidenceAmbiguityError names PRs whose AI evidence cannot be ordered, so
+// an unknown AI column is not misreported as truncated data.
+func evidenceAmbiguityError(infos map[int]prSupplementalInfo) error {
+	numbers := incompleteInfoNumbers(infos, func(info prSupplementalInfo) bool { return info.EvidenceAmbiguous })
+	if len(numbers) == 0 {
+		return nil
+	}
+	return fmt.Errorf("cannot order AI review evidence for pull request(s) %s", joinPRNumbers(numbers))
+}
+
+func incompleteInfoNumbers(infos map[int]prSupplementalInfo, marked func(prSupplementalInfo) bool) []int {
+	numbers := make([]int, 0, len(infos))
+	for number, info := range infos {
+		if marked(info) {
+			numbers = append(numbers, number)
+		}
+	}
+	sort.Ints(numbers)
+	return numbers
+}
+
+func joinPRNumbers(numbers []int) string {
+	parts := make([]string, len(numbers))
+	for i, number := range numbers {
+		parts[i] = strconv.Itoa(number)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // fetchRequiredChecks retrieves required check contexts per base branch (best-effort).

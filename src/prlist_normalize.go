@@ -56,7 +56,13 @@ func applySupplementalInfo(dp *displayPullRequest, info prSupplementalInfo, unav
 		dp.AIReview = "?"
 		return
 	}
-	dp.Comments = formatComments(info.Threads)
+	if info.ThreadsTruncated {
+		// The resolved count comes from a partial page; rendering it against
+		// the full total would report a precise-looking wrong value.
+		dp.Comments = "?"
+	} else {
+		dp.Comments = formatComments(info.Threads)
+	}
 	dp.AIReview = info.AIReview
 	if info.AIClean {
 		dp.AIClean = &info.AIClean
@@ -112,14 +118,18 @@ func detectAIReviewCheck(checks []checkItem) string {
 // downgradeChecksIfMissing downgrades a pass or review Checks value to
 // pending when repository required checks have not all reported: either the
 // fetched rules list a context that is missing from the rollup, or the
-// rules themselves could not be fetched, so the pass is unverified.
+// rules themselves could not be fetched, so the pass is unverified. A rules
+// fetch failure confirms nothing about the rollup, so it downgrades only a
+// pass; the review state keeps marking a pending recognized AI reviewer.
 func downgradeChecksIfMissing(dp *displayPullRequest, requiredByBranch map[string]map[string]bool, failedRuleBranches map[string]error, base string, checkItems []checkItem) {
 	if dp.Checks != "pass" && dp.Checks != "review" {
 		return
 	}
 	if failedRuleBranches[base] != nil {
-		dp.Checks = "pending"
-		dp.checksDowngraded = true
+		if dp.Checks == "pass" {
+			dp.Checks = "pending"
+			dp.checksDowngraded = true
+		}
 		return
 	}
 	required, ok := requiredByBranch[base]
