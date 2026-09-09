@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestFetchPullRequestList(t *testing.T) {
@@ -686,8 +687,11 @@ func TestSupplementalNotice(t *testing.T) {
 	if strings.ContainsAny(got, "\n\r") {
 		t.Fatalf("notice must stay single-line, got %q", got)
 	}
-	if len(got) > 200 {
-		t.Fatalf("notice must stay short for display, got %d chars", len(got))
+	if len(got) > 531 {
+		t.Fatalf("notice must stay bounded, got %d chars", len(got))
+	}
+	if !strings.Contains(got, "Supplemental data unavailable: gh: ") {
+		t.Fatalf("notice should keep its prefix, got %q", got)
 	}
 }
 
@@ -1254,5 +1258,20 @@ func TestJoinedReasonsStayBoundedPerReason(t *testing.T) {
 	}
 	if len(text) > 500 {
 		t.Fatalf("the joined notice must stay bounded, got %d chars", len(text))
+	}
+}
+
+func TestTrimTitleIsRuneSafe(t *testing.T) {
+	multibyte := strings.Repeat("字", 200)
+	trimmed := trimTitle(multibyte, 150)
+	if got := utf8.RuneCountInString(trimmed); got != 150 {
+		t.Fatalf("trimTitle rune count = %d, want 150", got)
+	}
+	if !strings.HasSuffix(trimmed, "...") {
+		t.Fatalf("trimTitle should end with an ellipsis, got suffix %q", trimmed[len(trimmed)-6:])
+	}
+	small := trimTitle(multibyte, 3)
+	if got := utf8.RuneCountInString(small); got != 3 {
+		t.Fatalf("trimTitle small rune count = %d, want 3", got)
 	}
 }

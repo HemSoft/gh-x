@@ -131,12 +131,20 @@ func writeSupplementalNotice(stdout, stderr io.Writer, jsonMode bool, reason err
 
 // writeRequiredChecksNotice prints the required-check-rules diagnostic with
 // the same channel rules as the supplemental notice, so a pass downgraded to
-// pending always says why.
+// pending always says why. The generous limit keeps every failed branch and
+// its reason visible.
 func writeRequiredChecksNotice(stdout, stderr io.Writer, jsonMode bool, reason error) error {
 	if reason == nil {
 		return nil
 	}
-	return writeUnavailableNotice(stdout, stderr, jsonMode, "Required check rules unavailable: "+conciseStatusError(reason))
+	return writeUnavailableNotice(stdout, stderr, jsonMode, "Required check rules unavailable: "+boundedSingleLine(reason.Error(), 500))
+}
+
+// boundedSingleLine flattens text to one line and caps it at limit runes, so
+// multi-line gh output cannot disrupt table, JSON, or status rendering while
+// multi-byte characters stay intact.
+func boundedSingleLine(text string, limit int) string {
+	return trimTitle(strings.Join(strings.Fields(text), " "), limit)
 }
 
 func writeUnavailableNotice(stdout, stderr io.Writer, jsonMode bool, text string) error {

@@ -185,7 +185,7 @@ func requiredChecksError(failedBranches map[string]error) error {
 	sort.Strings(branches)
 	parts := make([]string, 0, len(branches))
 	for _, branch := range branches {
-		parts = append(parts, fmt.Sprintf("base %s: %s", branch, conciseStatusError(failedBranches[branch])))
+		parts = append(parts, fmt.Sprintf("base %s: %s", branch, boundedSingleLine(failedBranches[branch].Error(), 80)))
 	}
 	return fmt.Errorf("%s", strings.Join(parts, "; "))
 }

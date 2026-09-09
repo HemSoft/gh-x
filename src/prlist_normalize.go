@@ -7,13 +7,14 @@ import (
 )
 
 // supplementalNotice renders one actionable, secret-safe line that explains
-// why unknown columns appear. Text stays single-line and capped so it cannot
-// disrupt table or JSON output.
+// why unknown columns appear. Text stays single-line and bounded; the
+// generous limit keeps every joined per-PR reason, including its number
+// list, visible.
 func supplementalNotice(reason error) string {
 	if reason == nil {
 		return ""
 	}
-	return "Supplemental data unavailable: " + conciseStatusError(reason)
+	return "Supplemental data unavailable: " + boundedSingleLine(reason.Error(), 500)
 }
 
 func uniqueBaseBranches(prs []pullRequest) []string {
@@ -401,13 +402,14 @@ func countApprovals(reviews []review) int {
 
 func trimTitle(title string, limit int) string {
 	title = strings.TrimSpace(title)
-	if limit <= 0 || len(title) <= limit {
+	runes := []rune(title)
+	if limit <= 0 || len(runes) <= limit {
 		return title
 	}
 
 	if limit <= 3 {
-		return title[:limit]
+		return string(runes[:limit])
 	}
 
-	return title[:limit-3] + "..."
+	return string(runes[:limit-3]) + "..."
 }
