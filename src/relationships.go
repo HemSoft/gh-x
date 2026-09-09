@@ -21,7 +21,18 @@ type linkedReferenceConnection struct {
 }
 
 func (c *linkedReferenceConnection) complete() bool {
-	return c != nil && c.TotalCount != nil && *c.TotalCount <= len(c.Nodes)
+	if c == nil || c.TotalCount == nil || *c.TotalCount > len(c.Nodes) {
+		return false
+	}
+	// A null or malformed node cannot be attributed to a real reference and
+	// would normalize into a discarded zero value, so the connection cannot
+	// prove its contents.
+	for _, node := range c.Nodes {
+		if node.Number <= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func relationshipDisplay(refs []linkedReference, unavailable bool) (string, []linkedReference) {

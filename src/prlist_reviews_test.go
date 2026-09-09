@@ -403,8 +403,8 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			"reviews": {
 				"totalCount": 2,
 				"nodes": [
-					{"state": "APPROVED", "author": {"login": "copilot[bot]", "__typename": "Bot"}, "comments": {"totalCount": 0}},
-					{"state": "APPROVED", "author": {"login": "carol", "__typename": "User"}, "comments": {"totalCount": 0}}
+					{"state": "APPROVED", "author": {"login": "copilot[bot]", "__typename": "Bot"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 0}},
+					{"state": "APPROVED", "author": {"login": "carol", "__typename": "User"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 0}}
 				]
 			},
 			"approvedReviews": {
@@ -451,8 +451,8 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			"reviews": {
 				"totalCount": 2,
 				"nodes": [
-					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "comments": {"totalCount": 2}},
-					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "comments": {"totalCount": 0}}
+					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 2}},
+					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 0}}
 				]
 			},
 			"approvedReviews": {"nodes": []}
@@ -1106,6 +1106,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 		"reviews":{"totalCount":1,"nodes":[{
 			"state":"COMMENTED",
 			"author":{"login":"copilot-pull-request-reviewer[bot]"},
+			"commit":{"oid":"abc"},
 			"comments":{"totalCount":1}
 		}]},
 		"approvedReviews":{"nodes":[]}

@@ -1091,3 +1091,65 @@ func TestUnattributableFormalReviewForcesUnknownAI(t *testing.T) {
 		t.Fatalf("diagnostic should name unattributable evidence, got %v", data.Err)
 	}
 }
+
+func TestUnattributableFormalReviewFieldsForceUnknownAI(t *testing.T) {
+	tests := []struct {
+		name   string
+		review string
+	}{
+		{name: "null commit", review: `{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":null,"comments":{"totalCount":0}}`},
+		{name: "missing state", review: `{"author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"abc"},"comments":{"totalCount":0}}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			envelope := fmt.Sprintf(`{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[%s]},"approvedReviews":{"nodes":[]}}}}}`, test.review)
+			infos, err := parseSupplementalResponse([]byte(envelope))
+			if err != nil {
+				t.Fatalf("parseSupplementalResponse error: %v", err)
+			}
+			info, ok := infos[9]
+			if !ok {
+				t.Fatalf("a review with a nulled consumed field must parse, got %#v", infos)
+			}
+			if info.AIReview != "?" {
+				t.Fatalf("AIReview = %q, want ? when a consumed review field is unreadable", info.AIReview)
+			}
+			if !info.UnattributableEvidence {
+				t.Fatal("expected the unattributable-evidence flag to be set")
+			}
+		})
+	}
+}
+
+func TestNullRelationshipNodesStayUnavailable(t *testing.T) {
+	// Issue side: a null node inside the connection must not render "-" (no
+	// linked PRs); the issue stays unknown instead.
+	issueEnvelope := `{"data":{"repository":{"issue7":{"number":7,"closedByPullRequestsReferences":{"totalCount":1,"nodes":[null]}}}}}`
+	refs, err := parseIssueRelationships([]byte(issueEnvelope))
+	if err != nil {
+		t.Fatalf("parseIssueRelationships error: %v", err)
+	}
+	if _, present := refs[7]; present {
+		t.Fatalf("issue 7 with a null relationship node must stay unavailable, got %#v", refs[7])
+	}
+
+	// PR side: the closing-issues connection with a null node is unavailable,
+	// so the relationship column renders ? rather than a false empty value.
+	prEnvelope := `{"data":{"repository":{"pr9":{"number":9,"closingIssuesReferences":{"totalCount":1,"nodes":[null]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`
+	infos, err := parseSupplementalResponse([]byte(prEnvelope))
+	if err != nil {
+		t.Fatalf("parseSupplementalResponse error: %v", err)
+	}
+	info, ok := infos[9]
+	if !ok {
+		t.Fatalf("the PR itself must still parse, got %#v", infos)
+	}
+	if info.ClosingIssuesAvailable {
+		t.Fatal("closing-issues connection with a null node must be unavailable")
+	}
+	now := time.Date(2026, 9, 9, 4, 40, 0, 0, time.UTC)
+	rendered := enrichPullRequests([]pullRequest{{Number: 9, State: "OPEN", UpdatedAt: now}}, prSupplementalData{Info: infos}, nil, nil, now)
+	if rendered[0].Issues != "?" {
+		t.Fatalf("Issues = %q, want ? for a null relationship node", rendered[0].Issues)
+	}
+}

@@ -411,9 +411,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 // conversation receipt, so both evidence sources feed one chronological list.
 func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReviewNode, hasCurrentHeadCodexReview bool, latestCurrentHeadCodexAt time.Time, unattributableReview bool) {
 	for _, r := range prData.Reviews.Nodes {
-		if r.Author.Login == "" && r.Author.Typename == "" {
-			// A review without attributable authorship may be a bot review
-			// whose evidence cannot be classified.
+		if r.Author.Login == "" && r.Author.Typename == "" || r.State == "" || r.Commit.OID == "" {
+			// A review whose authorship, state, or commit cannot be read may
+			// be bot evidence that cannot be classified.
 			unattributableReview = true
 		}
 		formal = append(formal, aiReviewNode{
