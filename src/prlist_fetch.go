@@ -16,21 +16,31 @@ var ghExecFunc = execGH
 // fetchPRSupplementalBatchFunc is swapped in tests to avoid real API calls.
 var fetchPRSupplementalBatchFunc = fetchPRSupplementalBatch
 
+// prSupplementalData merges parsed supplemental info with the set of PRs whose
+// enrichment failed or stayed incomplete. Unavailable PRs render unknown
+// columns; every error is carried for display instead of being swallowed.
+type prSupplementalData struct {
+	Info        map[int]prSupplementalInfo
+	Unavailable map[int]bool
+	Err         error
+}
+
 // fetchSupplementalData retrieves supplemental PR data via GraphQL (best-effort).
-func fetchSupplementalData(repo string, prs []pullRequest) (map[int]prSupplementalInfo, bool, string, string) {
+func fetchSupplementalData(repo string, prs []pullRequest) (prSupplementalData, string, string) {
 	owner, name, err := resolveRepo(repo)
 	if err != nil {
-		return nil, true, "", ""
+		unavailable := make(map[int]bool, len(prs))
+		for _, pr := range prs {
+			unavailable[pr.Number] = true
+		}
+		return prSupplementalData{Unavailable: unavailable, Err: err}, "", ""
 	}
 	numbers := make([]int, len(prs))
 	for i, pr := range prs {
 		numbers[i] = pr.Number
 	}
-	fetched, err := fetchPRSupplemental(owner, name, repositoryTargetHost(repo), numbers)
-	if err != nil {
-		return nil, true, owner, name
-	}
-	return fetched, false, owner, name
+	fetched, unavailable, fetchErr := fetchPRSupplemental(owner, name, repositoryTargetHost(repo), numbers)
+	return prSupplementalData{Info: fetched, Unavailable: unavailable, Err: fetchErr}, owner, name
 }
 
 // fetchRequiredChecks retrieves required check contexts per base branch (best-effort).
@@ -154,31 +164,36 @@ func resolveAuthorFromOrg(name, org string) string {
 	return ""
 }
 
-func fetchPRSupplemental(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+func fetchPRSupplemental(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
 	if len(prNumbers) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Batch PRs to avoid exceeding Windows command-line length limits (~32K chars).
 	// Each PR's query fragment is ~350 chars; batches of 30 stay well under the limit.
 	result := make(map[int]prSupplementalInfo)
+	unavailable := make(map[int]bool)
+	var firstErr error
 	for i := 0; i < len(prNumbers); i += relationshipBatchSize {
 		end := i + relationshipBatchSize
 		if end > len(prNumbers) {
 			end = len(prNumbers)
 		}
-		batch, err := fetchPRSupplementalBatchFunc(owner, name, host, prNumbers[i:end])
-		if err != nil {
-			return nil, err
-		}
+		batch, batchUnavailable, err := fetchPRSupplementalBatchFunc(owner, name, host, prNumbers[i:end])
 		for k, v := range batch {
 			result[k] = v
 		}
+		for number := range batchUnavailable {
+			unavailable[number] = true
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return result, nil
+	return result, unavailable, firstErr
 }
 
-func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
@@ -193,8 +208,26 @@ func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[in
 	)
 
 	data, err := fetchGraphQL(host, query)
-	if err != nil {
-		return nil, err
+	unavailable := unavailablePRNumbers(prNumbers, nil)
+	if data == nil {
+		return nil, unavailable, err
 	}
-	return parseSupplementalResponse(data)
+	infos, parseErr := parseSupplementalResponse(data)
+	if parseErr != nil {
+		return nil, unavailable, parseErr
+	}
+	return infos, unavailablePRNumbers(prNumbers, infos), err
+}
+
+// unavailablePRNumbers lists requested PRs that produced no parsed
+// supplemental info, so a partially failed batch fails closed for exactly
+// those PRs instead of every PR in the batch.
+func unavailablePRNumbers(prNumbers []int, infos map[int]prSupplementalInfo) map[int]bool {
+	unavailable := make(map[int]bool, len(prNumbers))
+	for _, number := range prNumbers {
+		if _, ok := infos[number]; !ok {
+			unavailable[number] = true
+		}
+	}
+	return unavailable
 }

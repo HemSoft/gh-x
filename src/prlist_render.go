@@ -117,6 +117,24 @@ func renderListOutput(stdout io.Writer, options listOptions, rendered []displayP
 	return renderTable(stdout, options, rendered)
 }
 
+// writeSupplementalNotice prints the supplemental-data diagnostic after the
+// rendered rows. JSON consumers read a machine-readable stdout, so the notice
+// goes to stderr in JSON mode; table output keeps it on stdout with the other
+// human-facing text. Unavailable columns are already per-row in both modes.
+func writeSupplementalNotice(stdout, stderr io.Writer, jsonMode bool, reason error) error {
+	if reason == nil {
+		return nil
+	}
+	text := supplementalNotice(reason)
+	if jsonMode {
+		fmt.Fprintln(stderr, text)
+		return nil
+	}
+	styler := newTableStyler(stdout, term.FromEnv().IsColorEnabled())
+	fmt.Fprintln(stdout, styler.dim(text).styled)
+	return nil
+}
+
 func renderTable(stdout io.Writer, options listOptions, pullRequests []displayPullRequest) error {
 	if len(pullRequests) > 0 {
 		if repoLabel := resolveRepoLabel(options.repo); repoLabel != "" {

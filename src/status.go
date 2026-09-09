@@ -78,8 +78,10 @@ type statusDashboard struct {
 	Worktrees           []statusWorktree
 	Issues              []displayIssue
 	IssuesErr           error
+	IssuesRelErr        error
 	PullRequests        []displayPullRequest
 	PullRequestsErr     error
+	PullRequestsSuppErr error
 	WorkflowRuns        []displayWorkflowRun
 	WorkflowRunsPerfect bool
 	WorkflowRunsErr     error
@@ -182,7 +184,12 @@ func fetchStatusDashboard(colorEnabled bool) (statusDashboard, error) {
 
 	now := statusNowFunc()
 	issueOptions := issueListOptions{limit: statusListLimit, state: "open"}
-	dashboard.Issues, dashboard.IssuesErr = statusIssueListFunc(issueOptions, now)
+	issueResult, issueErr := statusIssueListFunc(issueOptions, now)
+	dashboard.IssuesErr = issueErr
+	if issueErr == nil {
+		dashboard.Issues = issueResult.Display
+		dashboard.IssuesRelErr = issueResult.RelErr
+	}
 
 	prOptions := defaultListOptions()
 	prOptions.limit = statusListLimit
@@ -191,6 +198,7 @@ func fetchStatusDashboard(colorEnabled bool) (statusDashboard, error) {
 	dashboard.PullRequestsErr = prErr
 	if prErr == nil {
 		dashboard.PullRequests = prResult.Rendered
+		dashboard.PullRequestsSuppErr = prResult.SupplementalErr
 	}
 
 	runOptions := runListOptions{limit: statusWorkflowRunLimit}
@@ -851,6 +859,9 @@ func renderStatusIssueSection(stdout io.Writer, styler tableStyler, dashboard st
 	if err := renderIssueRows(stdout, dashboard.Issues, styler.colorEnabled); err != nil {
 		return err
 	}
+	if dashboard.IssuesRelErr != nil {
+		fmt.Fprintln(stdout, styler.dim("Pull request relationships unavailable: "+conciseStatusError(dashboard.IssuesRelErr)).styled)
+	}
 	if len(dashboard.Issues) >= statusListLimit {
 		fmt.Fprintf(stdout, "\nShowing %d issues (limit reached). Use gh x issue list --limit to show more.\n", statusListLimit)
 	}
@@ -871,6 +882,9 @@ func renderStatusPullRequestSection(stdout io.Writer, styler tableStyler, dashbo
 	}
 	if err := renderPullRequestRows(stdout, dashboard.PullRequests, styler.colorEnabled); err != nil {
 		return err
+	}
+	if dashboard.PullRequestsSuppErr != nil {
+		fmt.Fprintln(stdout, styler.dim(supplementalNotice(dashboard.PullRequestsSuppErr)).styled)
 	}
 	if len(dashboard.PullRequests) >= statusListLimit {
 		fmt.Fprintf(stdout, "\nShowing %d pull requests (limit reached). Use gh x pr list --limit to show more.\n", statusListLimit)

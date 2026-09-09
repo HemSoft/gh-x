@@ -6,18 +6,14 @@ import (
 	"time"
 )
 
-func auxiliaryRefreshError(supplementalFailed, requiredChecksFailed bool) error {
-	failed := make([]string, 0, 2)
-	if supplementalFailed {
-		failed = append(failed, "supplemental pull request data")
+// supplementalNotice renders one actionable, secret-safe line that explains
+// why unknown columns appear. Text stays single-line and capped so it cannot
+// disrupt table or JSON output.
+func supplementalNotice(reason error) string {
+	if reason == nil {
+		return ""
 	}
-	if requiredChecksFailed {
-		failed = append(failed, "required check rules")
-	}
-	if len(failed) == 0 {
-		return nil
-	}
-	return fmt.Errorf("partial refresh: %s unavailable", strings.Join(failed, " and "))
+	return "Supplemental data unavailable: " + conciseStatusError(reason)
 }
 
 func uniqueBaseBranches(prs []pullRequest) []string {
@@ -33,31 +29,33 @@ func uniqueBaseBranches(prs []pullRequest) []string {
 }
 
 // enrichPullRequests builds display PRs by merging supplemental data and
-// applying required-check downgrade logic.
-func enrichPullRequests(prs []pullRequest, supplemental map[int]prSupplementalInfo, supplementalFailed bool, requiredByBranch map[string]map[string]bool, now time.Time) []displayPullRequest {
+// applying required-check downgrade logic. PRs whose enrichment is unknown
+// fail closed with unknown columns; their rows never report clean or empty
+// supplemental values.
+func enrichPullRequests(prs []pullRequest, supplemental prSupplementalData, requiredByBranch map[string]map[string]bool, now time.Time) []displayPullRequest {
 	rendered := make([]displayPullRequest, 0, len(prs))
 	for _, pr := range prs {
 		dp := buildDisplayPullRequest(pr, now)
-		info, supplementalFound := supplemental[pr.Number]
-		applySupplementalInfo(&dp, supplemental, pr.Number, supplementalFailed)
+		info, found := supplemental.Info[pr.Number]
+		unavailable := supplemental.Unavailable[pr.Number] || !found
+		applySupplementalInfo(&dp, info, unavailable)
 		dp.Issues, dp.issueRefs = relationshipDisplay(
 			info.ClosingIssues,
-			supplementalFailed || !supplementalFound || !info.ClosingIssuesAvailable,
+			unavailable || !info.ClosingIssuesAvailable,
 		)
-		applyAIReviewCheck(&dp, info, pr.StatusCheckRollup, supplementalFailed || !supplementalFound)
+		applyAIReviewCheck(&dp, info, pr.StatusCheckRollup, unavailable)
 		downgradeChecksIfMissing(&dp, requiredByBranch, pr.BaseRefName, pr.StatusCheckRollup)
 		rendered = append(rendered, dp)
 	}
 	return rendered
 }
 
-func applySupplementalInfo(dp *displayPullRequest, supplemental map[int]prSupplementalInfo, number int, failed bool) {
-	if failed {
+func applySupplementalInfo(dp *displayPullRequest, info prSupplementalInfo, unavailable bool) {
+	if unavailable {
 		dp.Comments = "?"
 		dp.AIReview = "?"
 		return
 	}
-	info := supplemental[number]
 	dp.Comments = formatComments(info.Threads)
 	dp.AIReview = info.AIReview
 	if info.AIClean {

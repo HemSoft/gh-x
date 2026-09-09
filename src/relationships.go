@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -111,36 +112,83 @@ func fetchGraphQL(host, query string) ([]byte, error) {
 		args = append(args, "--hostname", host)
 	}
 	args = append(args, "graphql", "-f", fmt.Sprintf("query=%s", query))
-	stdout, _, err := ghExecFunc(args...)
-	if err != nil {
-		return nil, err
+	stdout, stderr, err := ghExecFunc(args...)
+	if err == nil {
+		return stdout.Bytes(), nil
 	}
-	return stdout.Bytes(), nil
+	// gh exits nonzero even when the GraphQL response carries valid data
+	// beside partial errors, so hand back the payload when one exists and
+	// let callers fail closed for exactly the aliases it lacks.
+	wrappedErr := ghGraphQLError(err, stderr.String())
+	if hasGraphQLDataEnvelope(stdout.Bytes()) {
+		return stdout.Bytes(), wrappedErr
+	}
+	return nil, wrappedErr
+}
+
+// ghGraphQLError turns a failed gh subprocess into a display-safe error that
+// names the real reason. gh's stderr carries the actionable text; the exit
+// status alone is not useful to a reader. gh error output contains request
+// results and standard CLI messages, never credentials.
+func ghGraphQLError(err error, stderr string) error {
+	message := strings.TrimSpace(stderr)
+	if message == "" {
+		return fmt.Errorf("gh api graphql: %w", err)
+	}
+	return fmt.Errorf("gh api graphql: %s", firstLine(message))
+}
+
+// firstLine trims a message to its first non-empty line so diagnostics stay
+// single-line in table, JSON, and status output.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if index := strings.IndexAny(s, "\r\n"); index >= 0 {
+		return s[:index]
+	}
+	return s
+}
+
+// hasGraphQLDataEnvelope reports whether raw is a JSON object carrying a
+// non-null GraphQL "data" member, the shape gh returns for a partially
+// successful batch query.
+func hasGraphQLDataEnvelope(raw []byte) bool {
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return false
+	}
+	return len(envelope.Data) > 0 && !bytes.Equal(bytes.TrimSpace(envelope.Data), []byte("null"))
 }
 
 var fetchIssueRelationshipsBatchFunc = fetchIssueRelationshipsBatch
 var fetchIssueRelationshipsFunc = fetchIssueRelationships
 
-func fetchIssueRelationships(owner, name, host string, issueNumbers []int) (map[int][]linkedReference, error) {
+func fetchIssueRelationships(owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {
 	if len(issueNumbers) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	result := make(map[int][]linkedReference)
+	unavailable := make(map[int]bool)
+	var firstErr error
 	for start := 0; start < len(issueNumbers); start += relationshipBatchSize {
 		end := min(start+relationshipBatchSize, len(issueNumbers))
-		batch, err := fetchIssueRelationshipsBatchFunc(owner, name, host, issueNumbers[start:end])
-		if err != nil {
-			return nil, err
-		}
+		batch, batchUnavailable, err := fetchIssueRelationshipsBatchFunc(owner, name, host, issueNumbers[start:end])
 		for number, refs := range batch {
 			result[number] = refs
 		}
+		for number := range batchUnavailable {
+			unavailable[number] = true
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return result, nil
+	return result, unavailable, firstErr
 }
 
-func fetchIssueRelationshipsBatch(owner, name, host string, issueNumbers []int) (map[int][]linkedReference, error) {
+func fetchIssueRelationshipsBatch(owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {
 	queryParts := make([]string, 0, len(issueNumbers))
 	for _, number := range issueNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
@@ -153,10 +201,28 @@ func fetchIssueRelationshipsBatch(owner, name, host string, issueNumbers []int) 
 		owner, name, strings.Join(queryParts, " "),
 	)
 	data, err := fetchGraphQL(host, query)
-	if err != nil {
-		return nil, err
+	unavailable := unavailableIssueNumbers(issueNumbers, nil)
+	if data == nil {
+		return nil, unavailable, err
 	}
-	return parseIssueRelationships(data)
+	refs, parseErr := parseIssueRelationships(data)
+	if parseErr != nil {
+		return nil, unavailable, parseErr
+	}
+	return refs, unavailableIssueNumbers(issueNumbers, refs), err
+}
+
+// unavailableIssueNumbers lists requested issues that produced no parsed
+// relationship data, so a partially failed batch fails closed for exactly
+// those issues instead of every issue in the batch.
+func unavailableIssueNumbers(issueNumbers []int, refs map[int][]linkedReference) map[int]bool {
+	unavailable := make(map[int]bool, len(issueNumbers))
+	for _, number := range issueNumbers {
+		if _, ok := refs[number]; !ok {
+			unavailable[number] = true
+		}
+	}
+	return unavailable
 }
 
 func parseIssueRelationships(data []byte) (map[int][]linkedReference, error) {

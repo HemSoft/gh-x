@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -239,11 +240,11 @@ func TestResolveAuthorLogin_SearchReturnsNull(t *testing.T) {
 }
 
 func TestFetchPRSupplemental_Empty(t *testing.T) {
-	result, err := fetchPRSupplemental("owner", "repo", "github.com", nil)
+	result, unavailable, err := fetchPRSupplemental("owner", "repo", "github.com", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != nil {
+	if result != nil || unavailable != nil {
 		t.Fatalf("expected nil for empty input, got %v", result)
 	}
 }
@@ -252,20 +253,20 @@ func TestFetchPRSupplemental_SingleBatch(t *testing.T) {
 	saved := fetchPRSupplementalBatchFunc
 	defer func() { fetchPRSupplementalBatchFunc = saved }()
 
-	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
 		result := make(map[int]prSupplementalInfo)
 		for _, n := range prNumbers {
 			result[n] = prSupplementalInfo{AIReview: "clean"}
 		}
-		return result, nil
+		return result, nil, nil
 	}
 
-	result, err := fetchPRSupplemental("owner", "repo", "github.com", []int{1, 2, 3})
+	result, unavailable, err := fetchPRSupplemental("owner", "repo", "github.com", []int{1, 2, 3})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result) != 3 {
-		t.Fatalf("expected 3 results, got %d", len(result))
+	if len(result) != 3 || len(unavailable) != 0 {
+		t.Fatalf("expected 3 results with none unavailable, got %d results, %d unavailable", len(result), len(unavailable))
 	}
 	for _, n := range []int{1, 2, 3} {
 		if result[n].AIReview != "clean" {
@@ -279,13 +280,13 @@ func TestFetchPRSupplemental_MultipleBatches(t *testing.T) {
 	defer func() { fetchPRSupplementalBatchFunc = saved }()
 
 	batchCalls := 0
-	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
 		batchCalls++
 		result := make(map[int]prSupplementalInfo)
 		for _, n := range prNumbers {
 			result[n] = prSupplementalInfo{Approvals: batchCalls}
 		}
-		return result, nil
+		return result, nil, nil
 	}
 
 	// Create 35 PRs to force 2 batches (batch size is 30)
@@ -294,15 +295,15 @@ func TestFetchPRSupplemental_MultipleBatches(t *testing.T) {
 		prs[i] = i + 1
 	}
 
-	result, err := fetchPRSupplemental("owner", "repo", "github.com", prs)
+	result, unavailable, err := fetchPRSupplemental("owner", "repo", "github.com", prs)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if batchCalls != 2 {
 		t.Fatalf("expected 2 batch calls, got %d", batchCalls)
 	}
-	if len(result) != 35 {
-		t.Fatalf("expected 35 results, got %d", len(result))
+	if len(result) != 35 || len(unavailable) != 0 {
+		t.Fatalf("expected 35 results with none unavailable, got %d results, %d unavailable", len(result), len(unavailable))
 	}
 }
 
@@ -310,12 +311,379 @@ func TestFetchPRSupplemental_BatchError(t *testing.T) {
 	saved := fetchPRSupplementalBatchFunc
 	defer func() { fetchPRSupplementalBatchFunc = saved }()
 
-	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, error) {
-		return nil, fmt.Errorf("graphql error")
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
+		return nil, map[int]bool{1: true, 2: true}, fmt.Errorf("graphql error")
 	}
 
-	_, err := fetchPRSupplemental("owner", "repo", "github.com", []int{1, 2})
+	result, unavailable, err := fetchPRSupplemental("owner", "repo", "github.com", []int{1, 2})
 	if err == nil || err.Error() != "graphql error" {
 		t.Fatalf("expected graphql error, got %v", err)
+	}
+	if len(result) != 0 || !unavailable[1] || !unavailable[2] {
+		t.Fatalf("failed batches must keep every PR unavailable, got result=%v unavailable=%v", result, unavailable)
+	}
+}
+
+// capturedCodexbarSupplementalResponse is the supplemental GraphQL response
+// captured from HemSoft/codexbar-ios pull request #333 on 2026-09-09 while
+// investigating issue #88. Comment prose past 90 characters is truncated;
+// every field the parser consumes is verbatim: the closing relationship to
+// issue #332, four review threads (one unresolved, Codex-authored), the
+// completed current-head Codex review, and zero approvals.
+const capturedCodexbarSupplementalResponse = `{
+ "data": {
+  "repository": {
+   "pr333": {
+    "number": 333,
+    "headRefOid": "53b343204e072b22f6511ac68bf6284aa2c418c2",
+    "closingIssuesReferences": {
+     "totalCount": 1,
+     "nodes": [
+      {
+       "number": 332,
+       "url": "https://github.com/HemSoft/codexbar-ios/issues/332"
+      }
+     ]
+    },
+    "comments": {
+     "totalCount": 6,
+     "nodes": [
+      {
+       "body": "<!-- codex-pull-request-review-summary -->\n\n## Codex Review Summary\n\nThis comment shows th... [truncated]",
+       "createdAt": "2026-09-09T04:26:19Z",
+       "author": {
+        "login": "chatgpt-codex-connector",
+        "__typename": "Bot"
+       }
+      },
+      {
+       "body": "@coderabbitai review",
+       "createdAt": "2026-09-09T04:26:34Z",
+       "author": {
+        "login": "HemSoft",
+        "__typename": "User"
+       }
+      },
+      {
+       "body": "cursor review",
+       "createdAt": "2026-09-09T04:26:35Z",
+       "author": {
+        "login": "HemSoft",
+        "__typename": "User"
+       }
+      },
+      {
+       "body": "<!-- BUGBOT_FREE_TIER_DISABLED_UPSELL -->\nBugbot is not enabled for your account, so this ... [truncated]",
+       "createdAt": "2026-09-09T04:26:39Z",
+       "author": {
+        "login": "cursor",
+        "__typename": "Bot"
+       }
+      },
+      {
+       "body": "@codex review",
+       "createdAt": "2026-09-09T05:20:29Z",
+       "author": {
+        "login": "HemSoft",
+        "__typename": "User"
+       }
+      },
+      {
+       "body": "@coderabbitai review",
+       "createdAt": "2026-09-09T05:20:30Z",
+       "author": {
+        "login": "HemSoft",
+        "__typename": "User"
+       }
+      }
+     ]
+    },
+    "reviewThreads": {
+     "totalCount": 4,
+     "nodes": [
+      {
+       "isResolved": true,
+       "comments": {
+        "nodes": [
+         {
+          "author": {
+           "login": "chatgpt-codex-connector",
+           "__typename": "Bot"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "isResolved": true,
+       "comments": {
+        "nodes": [
+         {
+          "author": {
+           "login": "cubic-dev-ai",
+           "__typename": "Bot"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "isResolved": true,
+       "comments": {
+        "nodes": [
+         {
+          "author": {
+           "login": "cubic-dev-ai",
+           "__typename": "Bot"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "isResolved": false,
+       "comments": {
+        "nodes": [
+         {
+          "author": {
+           "login": "chatgpt-codex-connector",
+           "__typename": "Bot"
+          }
+         }
+        ]
+       }
+      }
+     ]
+    },
+    "reviews": {
+     "totalCount": 6,
+     "nodes": [
+      {
+       "state": "COMMENTED",
+       "submittedAt": "2026-09-09T04:30:06Z",
+       "commit": {
+        "oid": "c90b97e5274838c271b3ed3e110da2d49448c013"
+       },
+       "author": {
+        "login": "chatgpt-codex-connector",
+        "__typename": "Bot"
+       },
+       "comments": {
+        "totalCount": 1
+       }
+      },
+      {
+       "state": "COMMENTED",
+       "submittedAt": "2026-09-09T04:40:02Z",
+       "commit": {
+        "oid": "c90b97e5274838c271b3ed3e110da2d49448c013"
+       },
+       "author": {
+        "login": "cubic-dev-ai",
+        "__typename": "Bot"
+       },
+       "comments": {
+        "totalCount": 2
+       }
+      },
+      {
+       "state": "COMMENTED",
+       "submittedAt": "2026-09-09T05:20:13Z",
+       "commit": {
+        "oid": "53b343204e072b22f6511ac68bf6284aa2c418c2"
+       },
+       "author": {
+        "login": "HemSoft",
+        "__typename": "User"
+       },
+       "comments": {
+        "totalCount": 1
+       }
+      },
+      {
+       "state": "COMMENTED",
+       "submittedAt": "2026-09-09T05:20:16Z",
+       "commit": {
+        "oid": "53b343204e072b22f6511ac68bf6284aa2c418c2"
+       },
+       "author": {
+        "login": "HemSoft",
+        "__typename": "User"
+       },
+       "comments": {
+        "totalCount": 1
+       }
+      },
+      {
+       "state": "COMMENTED",
+       "submittedAt": "2026-09-09T05:20:18Z",
+       "commit": {
+        "oid": "53b343204e072b22f6511ac68bf6284aa2c418c2"
+       },
+       "author": {
+        "login": "HemSoft",
+        "__typename": "User"
+       },
+       "comments": {
+        "totalCount": 1
+       }
+      },
+      {
+       "state": "COMMENTED",
+       "submittedAt": "2026-09-09T05:25:08Z",
+       "commit": {
+        "oid": "53b343204e072b22f6511ac68bf6284aa2c418c2"
+       },
+       "author": {
+        "login": "chatgpt-codex-connector",
+        "__typename": "Bot"
+       },
+       "comments": {
+        "totalCount": 1
+       }
+      }
+     ]
+    },
+    "approvedReviews": {
+     "nodes": []
+    }
+   }
+  }
+ }
+}`
+
+func TestEnrichRendersCapturedCodexbarFixture(t *testing.T) {
+	infos, err := parseSupplementalResponse([]byte(capturedCodexbarSupplementalResponse))
+	if err != nil {
+		t.Fatalf("parseSupplementalResponse returned error: %v", err)
+	}
+	if _, ok := infos[333]; !ok {
+		t.Fatalf("fixture must parse PR 333, got %v", infos)
+	}
+
+	now := time.Date(2026, 9, 9, 4, 40, 0, 0, time.UTC)
+	prs := []pullRequest{{
+		Number:    333,
+		Title:     "Show reset times on Gemini coding quota metrics",
+		State:     "OPEN",
+		UpdatedAt: now,
+		StatusCheckRollup: []checkItem{{
+			Typename: "CheckRun", Name: "build", WorkflowName: "CI", Status: "IN_PROGRESS",
+		}},
+	}}
+	rendered := enrichPullRequests(prs, prSupplementalData{Info: infos}, nil, now)
+	row := rendered[0]
+	if row.Issues != "#332" {
+		t.Fatalf("Issues = %q, want #332 from captured closing relationship", row.Issues)
+	}
+	if len(row.issueRefs) != 1 || row.issueRefs[0].Number != 332 {
+		t.Fatalf("issueRefs = %#v, want issue #332", row.issueRefs)
+	}
+	if row.Comments != "3/4" {
+		t.Fatalf("Comments = %q, want 3/4 from captured threads", row.Comments)
+	}
+	if row.AIReview != "fail" {
+		t.Fatalf("AIReview = %q, want fail for the completed current-head Codex review with an unresolved finding", row.AIReview)
+	}
+	if row.Checks != "pending" {
+		t.Fatalf("Checks = %q, want pending reported independently of enrichment", row.Checks)
+	}
+
+	// Table and JSON outputs must agree on the same rendered rows.
+	var jsonBuf bytes.Buffer
+	if err := renderListOutput(&jsonBuf, listOptions{json: true}, rendered); err != nil {
+		t.Fatalf("renderListOutput(json) error: %v", err)
+	}
+	var decoded []displayPullRequest
+	if err := json.Unmarshal(jsonBuf.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode JSON output: %v", err)
+	}
+	if len(decoded) != 1 {
+		t.Fatalf("JSON rows = %d, want 1", len(decoded))
+	}
+	if decoded[0].Issues != row.Issues || decoded[0].Comments != row.Comments ||
+		decoded[0].AIReview != row.AIReview || decoded[0].Checks != row.Checks {
+		t.Fatalf("JSON row %#v disagrees with table row %#v", decoded[0], row)
+	}
+}
+
+func TestFetchPRSupplementalBatchRecoversHealthyAliasesFromPartialError(t *testing.T) {
+	saved := ghExecFunc
+	defer func() { ghExecFunc = saved }()
+
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		body := `{"data":{"repository":{"pr333":{"number":333,"headRefOid":"53b343204e072b22f6511ac68bf6284aa2c418c2","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":332,"url":"https://github.com/HemSoft/codexbar-ios/issues/332"}]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}},"pr999":null}},"errors":[{"type":"NOT_FOUND","path":["repository","pr999"],"message":"Could not resolve to a PullRequest with the number of 99999."}]}`
+		return *bytes.NewBufferString(body), *bytes.NewBufferString("gh: Could not resolve to a PullRequest with the number of 99999.\n"), errors.New("exit status 1")
+	}
+
+	infos, unavailable, err := fetchPRSupplementalBatch("HemSoft", "codexbar-ios", "github.com", []int{333, 999})
+	if err == nil {
+		t.Fatal("partial GraphQL error must be carried for display")
+	}
+	if !strings.Contains(err.Error(), "Could not resolve to a PullRequest") {
+		t.Fatalf("error should carry the gh diagnostic, got %v", err)
+	}
+	if len(infos[333].ClosingIssues) != 1 || infos[333].ClosingIssues[0].Number != 332 {
+		t.Fatalf("healthy alias data must survive a partial batch error, got %#v", infos[333])
+	}
+	if !unavailable[999] {
+		t.Fatalf("unparsed alias 999 must be unavailable, got %v", unavailable)
+	}
+	if unavailable[333] {
+		t.Fatal("healthy alias 333 must not be marked unavailable")
+	}
+}
+
+func TestFetchGraphQLKeepsGenuineFailureClosed(t *testing.T) {
+	saved := ghExecFunc
+	defer func() { ghExecFunc = saved }()
+
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		return bytes.Buffer{}, *bytes.NewBufferString("gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again.\n"), errors.New("exit status 1")
+	}
+
+	data, err := fetchGraphQL("github.com", "query { repository { id } }")
+	if err == nil {
+		t.Fatal("failure without a data envelope must return an error")
+	}
+	if data != nil {
+		t.Fatalf("failure without a data envelope must not return data, got %s", data)
+	}
+	if !strings.Contains(err.Error(), "secondary rate limit") {
+		t.Fatalf("error should carry the actionable gh diagnostic, got %v", err)
+	}
+}
+
+func TestFetchSupplementalDataFailsClosedWhenRepoUnresolved(t *testing.T) {
+	saved := ghExecFunc
+	defer func() { ghExecFunc = saved }()
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		return bytes.Buffer{}, bytes.Buffer{}, errors.New("repo resolution failed")
+	}
+
+	prs := []pullRequest{{Number: 7}, {Number: 9}}
+	data, owner, name := fetchSupplementalData("no-slash", prs)
+	if owner != "" || name != "" {
+		t.Fatalf("owner/name = %q/%q, want empty", owner, name)
+	}
+	if !data.Unavailable[7] || !data.Unavailable[9] {
+		t.Fatalf("unresolved repo must fail closed for every PR, got %v", data.Unavailable)
+	}
+	if data.Err == nil {
+		t.Fatal("expected the resolution error to be carried for display")
+	}
+}
+
+func TestSupplementalNotice(t *testing.T) {
+	if got := supplementalNotice(nil); got != "" {
+		t.Fatalf("supplementalNotice(nil) = %q, want empty", got)
+	}
+	long := errors.New("gh: " + strings.Repeat("boom ", 60))
+	got := supplementalNotice(long)
+	if strings.ContainsAny(got, "\n\r") {
+		t.Fatalf("notice must stay single-line, got %q", got)
+	}
+	if len(got) > 200 {
+		t.Fatalf("notice must stay short for display, got %d chars", len(got))
 	}
 }

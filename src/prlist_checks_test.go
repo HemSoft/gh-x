@@ -120,7 +120,7 @@ func TestEnrichPullRequestsUsesSuccessfulCubicCheckAsCurrentHeadAIReview(t *test
 		25: {Threads: reviewThreadInfo{Total: 11, Resolved: 11}, AIReview: "-"},
 	}
 
-	rendered := enrichPullRequests(prs, supp, false, nil, now)
+	rendered := enrichPullRequests(prs, prSupplementalData{Info: supp}, nil, now)
 	if rendered[0].AIReview != "pass" {
 		t.Fatalf("AIReview = %q, want pass from current-head Cubic check", rendered[0].AIReview)
 	}
@@ -141,9 +141,9 @@ func TestEnrichPullRequestsDoesNotTrustCubicCheckWithoutSupplementalEntry(t *tes
 		}},
 	}}
 
-	rendered := enrichPullRequests(prs, map[int]prSupplementalInfo{}, false, nil, now)
-	if rendered[0].AIReview != "-" {
-		t.Fatalf("AIReview = %q, want - when supplemental PR data is missing", rendered[0].AIReview)
+	rendered := enrichPullRequests(prs, prSupplementalData{}, nil, now)
+	if rendered[0].AIReview != "?" {
+		t.Fatalf("AIReview = %q, want ? when supplemental PR data is missing", rendered[0].AIReview)
 	}
 	if rendered[0].AIClean != nil {
 		t.Fatalf("expected missing supplemental PR data to leave AIClean unset, got %v", *rendered[0].AIClean)

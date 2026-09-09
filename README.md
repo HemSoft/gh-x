@@ -126,8 +126,11 @@ the command never deletes or prunes a worktree.
 Open issues, enriched open pull requests, and the five most recent workflow
 runs appear in separate tables below the header. Workflow runs keep the same
 status, title, workflow, branch, event, linked ID, elapsed-time, and age columns
-as `gh x run list`. Local Git status still renders when GitHub data is
-unavailable.
+as `gh x run list`. Local Git status still renders
+when GitHub data is unavailable. When supplemental pull request data or issue
+relationships are unavailable, the affected section prints the same
+`unavailable` diagnostic line as `gh x pr list` while healthy rows keep their
+data.
 When either unfiltered open-work section is empty, it prints one randomly
 selected celebration from the same pool used by the list commands.
 When all five recent workflow runs completed successfully, status prints one
@@ -145,10 +148,10 @@ Compared to `gh pr list`, this command keeps all existing filters but renders a 
 | **Author**| PR author login |
 | **State**| `open`, `draft`, `closed`, or `merged` |
 | **Rev**  | Overall review decision: `✓` approved, `✗` changes requested, or `•` review required |
-| **AI**   | AI reviewer status: `pass` (approved/no issues), `fail` (issues found), or `-` (no AI review). Detects CodeRabbit, Copilot PR reviewer, other `[bot]` reviewers, and Cubic's AI reviewer check |
+| **AI**   | AI reviewer status: `pass` (approved/no issues), `fail` (issues found), `?` (review data unavailable), or `-` (no AI review). Detects CodeRabbit, Copilot PR reviewer, other `[bot]` reviewers, and Cubic's AI reviewer check |
 | **Appv** | Count of unique formal approvals, including bot reviewers |
 | **Checks**| CI status: `pass`, `review`, `fail`, `pending`, `merge`, or `-`. `review` (green) means every non-review check passed and only a recognized AI reviewer check remains. `merge` (red) indicates merge conflicts with the base branch. Includes required checks from repo rulesets that haven't reported yet |
-| **Cmts** | Review thread resolution: `resolved/total` (e.g., `3/5`). `-` if no threads |
+| **Cmts** | Review thread resolution: `resolved/total` (e.g., `3/5`). `-` if no threads, `?` if thread data was unavailable |
 | **Branch**| Head branch name |
 | **Upd**  | Relative time: `12m`, `3h`, `2d`, `4mo` |
 
@@ -184,6 +187,26 @@ gh x pr list --json
 An empty, unfiltered open backlog prints one randomly selected celebration from
 the shared pool. Narrowed or historical queries keep the factual
 `No pull requests found.` message, and JSON output remains unchanged.
+
+### Unknown supplemental data
+
+The relationship, AI, and comment columns depend on a supplemental GraphQL
+query that runs after `gh pr list`. When GitHub cannot serve that query, the
+affected rows show `?` instead of guessing: a failed fetch never renders as an
+empty relationship or a clean review. One pull request with a failed alias no
+longer hides the data GitHub did supply for the rest of the batch; only the
+failed aliases stay unknown.
+
+Every affected table prints one diagnostic line explaining the reason, for
+example `gh api graphql: You have exceeded a secondary rate limit...`. In
+`--json` mode the stdout array stays machine-readable and the diagnostic goes
+to stderr. The message carries gh's own error text, which contains request
+results and standard CLI messages, not credentials.
+
+A completed current-head AI review still decides the `AI` column on its own:
+a review with an unresolved actionable finding reports `fail` even when other
+enrichment is unknown, and pending CI keeps reporting `pending` independently
+of supplemental enrichment.
 
 ## What `gh x monitor` adds
 

@@ -336,7 +336,7 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) error {
 		options.author = resolved
 	}
 
-	return executeListFunc(options, stdout)
+	return executeListFunc(options, stdout, stderr)
 }
 
 func parseListOptions(args []string, stderr io.Writer) (listOptions, error) {

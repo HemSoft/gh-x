@@ -90,7 +90,7 @@ func TestResolveAuthorLoginFunc_Integration(t *testing.T) {
 	savedExec := executeListFunc
 	t.Cleanup(func() { executeListFunc = savedExec })
 	var receivedAuthor string
-	executeListFunc = func(options listOptions, _ io.Writer) error {
+	executeListFunc = func(options listOptions, _ io.Writer, _ io.Writer) error {
 		receivedAuthor = options.author
 		return nil
 	}
