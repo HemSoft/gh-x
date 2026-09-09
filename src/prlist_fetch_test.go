@@ -797,8 +797,8 @@ func TestExecuteListRendersAuxiliaryNotices(t *testing.T) {
 	if !strings.Contains(table, "#42") {
 		t.Fatalf("table should render the listed PR:\n%s", table)
 	}
-	if !strings.Contains(table, "Supplemental data unavailable: gh api graphql: gh: You have exceeded a secondary rate limit.") {
-		t.Fatalf("table should print the supplemental diagnostic:\n%s", table)
+	if !strings.Contains(table, "Supplemental data unavailable: gh api graphql: gh: You have exceeded a secondary rate li...") {
+		t.Fatalf("table should print the capped supplemental diagnostic:\n%s", table)
 	}
 	if !strings.Contains(table, "Required check rules unavailable: base main: required check rules: malformed response") {
 		t.Fatalf("table should print the required-checks diagnostic:\n%s", table)
@@ -1205,5 +1205,50 @@ func TestFetchErrorJoinsDerivedPerPRReasons(t *testing.T) {
 	}
 	if !strings.Contains(data.Err.Error(), "truncated supplemental connections for pull request(s) 2") {
 		t.Fatalf("the per-PR reason must be joined beside the fetch error, got %v", data.Err)
+	}
+}
+
+func TestClosingIssueErrorPathsKeepHealthyData(t *testing.T) {
+	// An error confined to closingIssuesReferences keeps the healthy review
+	// and thread data rendered; only the Issues column goes unknown.
+	envelope := `{"data":{"repository":{"pr9":{"number":9,"headRefOid":"abc","closingIssuesReferences":null,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}},"errors":[{"type":"NOT_FOUND","path":["repository","pr9","closingIssuesReferences"],"message":"Field failed"}]}`
+	infos, errored, err := parseSupplementalResponse([]byte(envelope))
+	if err != nil {
+		t.Fatalf("parseSupplementalResponse error: %v", err)
+	}
+	if errored[9] {
+		t.Fatalf("a closing-issues-only error path must not mark the whole alias, got %v", errored)
+	}
+	info, ok := infos[9]
+	if !ok {
+		t.Fatalf("the PR must parse, got %#v", infos)
+	}
+	if info.ClosingIssuesAvailable {
+		t.Fatal("the closing-issues connection must stay unavailable per field")
+	}
+	if info.AIReview != "pass" {
+		t.Fatalf("AIReview = %q, want the healthy bot review preserved", info.AIReview)
+	}
+
+	// The same path into a different connection still marks the whole alias.
+	threadsEnvelope := `{"data":{"repository":{"pr9":{"number":9,"headRefOid":"abc","closingIssuesReferences":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":null,"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}},"errors":[{"type":"NOT_FOUND","path":["repository","pr9","reviewThreads"],"message":"Field failed"}]}`
+	_, errored, err = parseSupplementalResponse([]byte(threadsEnvelope))
+	if err != nil {
+		t.Fatalf("parseSupplementalResponse error: %v", err)
+	}
+	if !errored[9] {
+		t.Fatalf("an error through reviewThreads must mark the alias, got %v", errored)
+	}
+}
+
+func TestJoinedReasonsStayBoundedPerReason(t *testing.T) {
+	long := errors.New("gh api graphql: gh: " + strings.Repeat("very long rate limit detail ", 20))
+	joined := joinSupplementalReasons(long, errors.New("truncated supplemental connections for pull request(s) 2"))
+	text := joined.Error()
+	if !strings.Contains(text, "truncated supplemental connections for pull request(s) 2") {
+		t.Fatalf("the per-PR reason must survive beside a long fetch error, got %q", text)
+	}
+	if !strings.Contains(text, "...") {
+		t.Fatalf("the long fetch error should be capped with an ellipsis, got %q", text)
 	}
 }

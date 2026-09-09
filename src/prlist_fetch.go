@@ -58,13 +58,15 @@ func fetchSupplementalData(repo string, prs []pullRequest) (prSupplementalData, 
 
 // joinSupplementalReasons renders every distinct enrichment problem in one
 // diagnostic line, so truncated connections and unordered evidence both get
-// named when they apply to the same batch.
+// named when they apply to the same batch. Each reason is capped separately
+// so one long GitHub message cannot crowd a per-PR reason out of the notice.
 func joinSupplementalReasons(reasons ...error) error {
 	parts := make([]string, 0, len(reasons))
 	for _, reason := range reasons {
-		if reason != nil {
-			parts = append(parts, reason.Error())
+		if reason == nil {
+			continue
 		}
+		parts = append(parts, trimTitle(conciseStatusError(reason), 60))
 	}
 	if len(parts) == 0 {
 		return nil

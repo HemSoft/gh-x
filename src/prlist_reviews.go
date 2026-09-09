@@ -360,21 +360,45 @@ func parseSupplementalResponse(data []byte) (map[int]prSupplementalInfo, map[int
 
 // aliasesFromErrors walks each GraphQL error path for the batch's prN alias
 // names, because an error path through an alias marks that alias's data as
-// failed even when the object survived the failure.
+// failed even when the object survived the failure. An error confined to
+// closingIssuesReferences is excluded: that connection keeps its own
+// per-field availability flag, so the healthy review and thread data stays
+// rendered instead of being replaced wholesale with unknown columns.
 func aliasesFromErrors(errors []graphQLError) map[int]bool {
 	errored := make(map[int]bool)
 	for _, gqlErr := range errors {
-		for _, element := range gqlErr.Path {
-			var name string
-			if json.Unmarshal(element, &name) != nil {
-				continue
-			}
-			if number, ok := aliasNumber(name, "pr"); ok {
-				errored[number] = true
-			}
+		alias, firstField := aliasAndFirstField(gqlErr.Path, "pr")
+		if alias <= 0 || firstField == "closingIssuesReferences" {
+			continue
 		}
+		errored[alias] = true
 	}
 	return errored
+}
+
+// aliasAndFirstField walks one GraphQL error path and returns the batch alias
+// number plus the first field element after it, skipping index elements.
+func aliasAndFirstField(path []json.RawMessage, prefix string) (int, string) {
+	number := 0
+	firstField := ""
+	sawAlias := false
+	for _, element := range path {
+		var name string
+		if json.Unmarshal(element, &name) != nil {
+			continue
+		}
+		if !sawAlias {
+			if n, ok := aliasNumber(name, prefix); ok {
+				number = n
+				sawAlias = true
+			}
+			continue
+		}
+		if firstField == "" {
+			firstField = name
+		}
+	}
+	return number, firstField
 }
 
 // aliasNumber extracts the number from a batch alias like "pr333" or
