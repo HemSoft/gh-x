@@ -797,8 +797,8 @@ func TestExecuteListRendersAuxiliaryNotices(t *testing.T) {
 	if !strings.Contains(table, "#42") {
 		t.Fatalf("table should render the listed PR:\n%s", table)
 	}
-	if !strings.Contains(table, "Supplemental data unavailable: gh api graphql: gh: You have exceeded a secondary rate li...") {
-		t.Fatalf("table should print the capped supplemental diagnostic:\n%s", table)
+	if !strings.Contains(table, "Supplemental data unavailable: gh api graphql: gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again.") {
+		t.Fatalf("table should print the supplemental diagnostic:\n%s", table)
 	}
 	if !strings.Contains(table, "Required check rules unavailable: base main: required check rules: malformed response") {
 		t.Fatalf("table should print the required-checks diagnostic:\n%s", table)
@@ -1242,13 +1242,17 @@ func TestClosingIssueErrorPathsKeepHealthyData(t *testing.T) {
 }
 
 func TestJoinedReasonsStayBoundedPerReason(t *testing.T) {
-	long := errors.New("gh api graphql: gh: " + strings.Repeat("very long rate limit detail ", 20))
-	joined := joinSupplementalReasons(long, errors.New("truncated supplemental connections for pull request(s) 2"))
+	longStderr := "gh: " + strings.Repeat("very long rate limit detail ", 20)
+	fetchErr := ghGraphQLError(errors.New("exit status 1"), longStderr)
+	joined := joinSupplementalReasons(fetchErr, errors.New("truncated supplemental connections for pull request(s) 2"))
 	text := joined.Error()
 	if !strings.Contains(text, "truncated supplemental connections for pull request(s) 2") {
-		t.Fatalf("the per-PR reason must survive beside a long fetch error, got %q", text)
+		t.Fatalf("the per-PR reason must keep its full number list beside the capped fetch error, got %q", text)
 	}
-	if !strings.Contains(text, "...") {
-		t.Fatalf("the long fetch error should be capped with an ellipsis, got %q", text)
+	if strings.HasSuffix(text, "2; ") {
+		t.Fatal("joined reasons must not gain a trailing separator")
+	}
+	if len(text) > 500 {
+		t.Fatalf("the joined notice must stay bounded, got %d chars", len(text))
 	}
 }

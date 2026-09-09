@@ -447,8 +447,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		latestCurrentHeadCodexAt,
 		hasCurrentHeadCodexReview,
 	)
+	closingIssuesAvailable := closingIssuesConnectionPresent(raw) && prData.ClosingIssuesReferences.complete()
 	incomplete := supplementalConnectionsIncomplete(
-		prData.ClosingIssuesReferences,
+		closingIssuesAvailable,
 		commentsIncomplete, threadsTruncated, reviewsIncomplete,
 	)
 	aiReview, aiClean := summarizeSupplementalReviews(
@@ -465,7 +466,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		},
 		ThreadsTruncated:       threadsTruncated,
 		ClosingIssues:          closingIssueNodes(prData.ClosingIssuesReferences),
-		ClosingIssuesAvailable: prData.ClosingIssuesReferences.complete(),
+		ClosingIssuesAvailable: closingIssuesAvailable,
 		AIReview:               aiReview,
 		AIClean:                aiClean,
 		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
@@ -697,8 +698,21 @@ func closingIssueNodes(connection *linkedReferenceConnection) []linkedReference 
 
 // supplementalConnectionsIncomplete reports whether any consumed connection
 // was truncated or absent, so rendered unknown columns need a diagnostic.
-func supplementalConnectionsIncomplete(closingIssues *linkedReferenceConnection, truncated ...bool) bool {
-	return anyConnectionTruncated(truncated...) || !closingIssues.complete()
+func supplementalConnectionsIncomplete(closingIssuesAvailable bool, truncated ...bool) bool {
+	return anyConnectionTruncated(truncated...) || !closingIssuesAvailable
+}
+
+// closingIssuesConnectionPresent requires the connection's totalCount and
+// nodes keys, so a failed closingIssuesReferences sub-query is not mistaken
+// for a legitimately empty relationship.
+func closingIssuesConnectionPresent(raw json.RawMessage) bool {
+	var fields struct {
+		ClosingIssues json.RawMessage `json:"closingIssuesReferences"`
+	}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return false
+	}
+	return countedConnectionPresent(fields.ClosingIssues)
 }
 
 func anyConnectionTruncated(truncated ...bool) bool {

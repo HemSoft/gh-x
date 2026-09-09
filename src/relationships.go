@@ -140,13 +140,14 @@ func fetchGraphQL(host, query string) ([]byte, error) {
 // ghGraphQLError turns a failed gh subprocess into a display-safe error that
 // names the real reason. gh's stderr carries the actionable text; the exit
 // status alone is not useful to a reader. gh error output contains request
-// results and standard CLI messages, never credentials.
+// results and standard CLI messages, never credentials. The message is capped
+// here so the joined enrichment notice keeps room for per-PR reasons.
 func ghGraphQLError(err error, stderr string) error {
 	message := strings.TrimSpace(stderr)
 	if message == "" {
 		return fmt.Errorf("gh api graphql: %w", err)
 	}
-	return fmt.Errorf("gh api graphql: %s", firstLine(message))
+	return fmt.Errorf("gh api graphql: %s", trimTitle(firstLine(message), 150))
 }
 
 // firstLine trims a message to its first non-empty line so diagnostics stay
