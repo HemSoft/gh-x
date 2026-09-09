@@ -612,7 +612,7 @@ func TestFetchPRSupplementalBatchRecoversHealthyAliasesFromPartialError(t *testi
 	defer func() { ghExecFunc = saved }()
 
 	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
-		body := `{"data":{"repository":{"pr333":{"number":333,"headRefOid":"53b343204e072b22f6511ac68bf6284aa2c418c2","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":332,"url":"https://github.com/HemSoft/codexbar-ios/issues/332"}]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}},"pr999":null}},"errors":[{"type":"NOT_FOUND","path":["repository","pr999"],"message":"Could not resolve to a PullRequest with the number of 99999."}]}`
+		body := `{"data":{"repository":{"pr333":{"number":333,"headRefOid":"53b343204e072b22f6511ac68bf6284aa2c418c2","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":332,"url":"https://github.com/HemSoft/codexbar-ios/issues/332"}]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}},"pr999":null}},"errors":[{"type":"NOT_FOUND","path":["repository","pr999"],"message":"Could not resolve to a PullRequest with the number of 999."}]}`
 		return *bytes.NewBufferString(body), *bytes.NewBufferString("gh: Could not resolve to a PullRequest with the number of 99999.\n"), errors.New("exit status 1")
 	}
 
@@ -719,5 +719,41 @@ func TestParseSupplementalNodeDropsPartialFieldFailure(t *testing.T) {
 	if rendered[0].Comments != "?" || rendered[0].AIReview != "?" || rendered[0].Issues != "?" {
 		t.Fatalf("partial field failure must render unknown, got issues=%q comments=%q ai=%q",
 			rendered[0].Issues, rendered[0].Comments, rendered[0].AIReview)
+	}
+}
+
+func TestFetchPRSupplementalSynthesizesPartialPayloadError(t *testing.T) {
+	saved := fetchPRSupplementalBatchFunc
+	defer func() { fetchPRSupplementalBatchFunc = saved }()
+
+	// A recovered payload that omitted the alias renders ? rows; the wrapper
+	// must still produce a diagnostic instead of failing silently.
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
+		return nil, map[int]bool{5: true}, nil
+	}
+
+	result, unavailable, err := fetchPRSupplemental("owner", "repo", "github.com", []int{5, 6})
+	if err == nil {
+		t.Fatal("unavailable aliases without an underlying error must synthesize a diagnostic")
+	}
+	if !strings.Contains(err.Error(), "1 of 2 requested pull requests") {
+		t.Fatalf("synthesized error should count unavailable aliases, got %v", err)
+	}
+	if !unavailable[5] || len(result) != 0 {
+		t.Fatalf("expected PR 5 unavailable, got result=%v unavailable=%v", result, unavailable)
+	}
+}
+
+func TestRequiredChecksError(t *testing.T) {
+	if got := requiredChecksError(nil); got != nil {
+		t.Fatalf("requiredChecksError(nil) = %v, want nil", got)
+	}
+	err := requiredChecksError(map[string]bool{"main": true, "develop": true})
+	text := err.Error()
+	if !strings.Contains(text, "develop") || !strings.Contains(text, "main") || !strings.Contains(text, "no rules returned") {
+		t.Fatalf("requiredChecksError text = %q, want both branches and reason", text)
+	}
+	if strings.Index(text, "develop") > strings.Index(text, "main") {
+		t.Fatalf("branches must be listed deterministically, got %q", text)
 	}
 }

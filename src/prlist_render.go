@@ -126,6 +126,20 @@ func writeSupplementalNotice(stdout, stderr io.Writer, jsonMode bool, reason err
 		return nil
 	}
 	text := supplementalNotice(reason)
+	return writeUnavailableNotice(stdout, stderr, jsonMode, text)
+}
+
+// writeRequiredChecksNotice prints the required-check-rules diagnostic with
+// the same channel rules as the supplemental notice, so a pass downgraded to
+// pending always says why.
+func writeRequiredChecksNotice(stdout, stderr io.Writer, jsonMode bool, reason error) error {
+	if reason == nil {
+		return nil
+	}
+	return writeUnavailableNotice(stdout, stderr, jsonMode, "Required check rules unavailable: "+conciseStatusError(reason))
+}
+
+func writeUnavailableNotice(stdout, stderr io.Writer, jsonMode bool, text string) error {
 	if jsonMode {
 		fmt.Fprintln(stderr, text)
 		return nil

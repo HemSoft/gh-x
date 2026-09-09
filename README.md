@@ -129,8 +129,8 @@ status, title, workflow, branch, event, linked ID, elapsed-time, and age columns
 as `gh x run list`. Local Git status still renders
 when GitHub data is unavailable. When supplemental pull request data or issue
 relationships are unavailable, the affected section prints the same
-`unavailable` diagnostic line as `gh x pr list` while healthy rows keep their
-data.
+`unavailable` diagnostic line like the ones `gh x pr list` prints while
+healthy rows keep their data.
 When either unfiltered open-work section is empty, it prints one randomly
 selected celebration from the same pool used by the list commands.
 When all five recent workflow runs completed successfully, status prints one

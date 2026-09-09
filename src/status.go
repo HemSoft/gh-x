@@ -82,6 +82,7 @@ type statusDashboard struct {
 	PullRequests        []displayPullRequest
 	PullRequestsErr     error
 	PullRequestsSuppErr error
+	RequiredChecksErr   error
 	WorkflowRuns        []displayWorkflowRun
 	WorkflowRunsPerfect bool
 	WorkflowRunsErr     error
@@ -199,6 +200,7 @@ func fetchStatusDashboard(colorEnabled bool) (statusDashboard, error) {
 	if prErr == nil {
 		dashboard.PullRequests = prResult.Rendered
 		dashboard.PullRequestsSuppErr = prResult.SupplementalErr
+		dashboard.RequiredChecksErr = prResult.RequiredChecksErr
 	}
 
 	runOptions := runListOptions{limit: statusWorkflowRunLimit}
@@ -876,15 +878,18 @@ func renderStatusPullRequestSection(stdout io.Writer, styler tableStyler, dashbo
 		return nil
 	}
 	fmt.Fprintf(stdout, "Open pull requests (%s)\n", statusSectionCount(len(dashboard.PullRequests)))
+	if dashboard.PullRequestsSuppErr != nil {
+		fmt.Fprintln(stdout, styler.dim(supplementalNotice(dashboard.PullRequestsSuppErr)).styled)
+	}
+	if dashboard.RequiredChecksErr != nil {
+		fmt.Fprintln(stdout, styler.dim("Required check rules unavailable: "+conciseStatusError(dashboard.RequiredChecksErr)).styled)
+	}
 	if len(dashboard.PullRequests) == 0 {
 		writeBacklogPraise(stdout)
 		return nil
 	}
 	if err := renderPullRequestRows(stdout, dashboard.PullRequests, styler.colorEnabled); err != nil {
 		return err
-	}
-	if dashboard.PullRequestsSuppErr != nil {
-		fmt.Fprintln(stdout, styler.dim(supplementalNotice(dashboard.PullRequestsSuppErr)).styled)
 	}
 	if len(dashboard.PullRequests) >= statusListLimit {
 		fmt.Fprintf(stdout, "\nShowing %d pull requests (limit reached). Use gh x pr list --limit to show more.\n", statusListLimit)

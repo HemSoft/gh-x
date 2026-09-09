@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 )
@@ -107,6 +108,7 @@ type pullRequestListResult struct {
 	Rendered               []displayPullRequest
 	SupplementalFailed     bool
 	SupplementalErr        error
+	RequiredChecksErr      error
 	RequiredChecksFailed   bool
 	FailedRequiredCheckPRs map[int]bool
 }
@@ -129,7 +131,10 @@ func executeList(options listOptions, stdout io.Writer, stderr io.Writer) error 
 	if err := renderListOutput(stdout, options, result.Rendered); err != nil {
 		return err
 	}
-	return writeSupplementalNotice(stdout, stderr, options.json, result.SupplementalErr)
+	if err := writeSupplementalNotice(stdout, stderr, options.json, result.SupplementalErr); err != nil {
+		return err
+	}
+	return writeRequiredChecksNotice(stdout, stderr, options.json, result.RequiredChecksErr)
 }
 
 func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListResult, error) {
@@ -160,9 +165,25 @@ func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListRe
 		Rendered:               rendered,
 		SupplementalFailed:     len(supplemental.Unavailable) > 0,
 		SupplementalErr:        supplemental.Err,
+		RequiredChecksErr:      requiredChecksError(failedRequiredBranches),
 		RequiredChecksFailed:   requiredChecksFailed,
 		FailedRequiredCheckPRs: failedRequiredPRs,
 	}, nil
+}
+
+// requiredChecksError turns a failed required-check rules lookup into the
+// diagnostic the Checks downgrade needs, so a pass that was downgraded to
+// pending always says why.
+func requiredChecksError(failedBranches map[string]bool) error {
+	if len(failedBranches) == 0 {
+		return nil
+	}
+	branches := make([]string, 0, len(failedBranches))
+	for branch := range failedBranches {
+		branches = append(branches, branch)
+	}
+	sort.Strings(branches)
+	return fmt.Errorf("no rules returned for base %s", strings.Join(branches, ", "))
 }
 
 func wrapExecError(err error, stderr string) error {
@@ -217,7 +238,7 @@ func runView(args []string, stdout io.Writer, stderr io.Writer) error {
 
 	prs := []pullRequest{pr}
 	supplemental, repoOwner, repoName := fetchSupplementalData(repo, prs)
-	requiredByBranch, _ := fetchRequiredChecks(repoOwner, repoName, prs)
+	requiredByBranch, failedRequiredBranches := fetchRequiredChecks(repoOwner, repoName, prs)
 	rendered := enrichPullRequests(prs, supplemental, requiredByBranch, time.Now().UTC())
 
 	// Render as a single-row table with no limit footer
@@ -227,7 +248,10 @@ func runView(args []string, stdout io.Writer, stderr io.Writer) error {
 	if err := renderTable(stdout, opts, rendered); err != nil {
 		return err
 	}
-	return writeSupplementalNotice(stdout, stderr, false, supplemental.Err)
+	if err := writeSupplementalNotice(stdout, stderr, false, supplemental.Err); err != nil {
+		return err
+	}
+	return writeRequiredChecksNotice(stdout, stderr, false, requiredChecksError(failedRequiredBranches))
 }
 
 // appendNonEmpty appends a flag and its value only when value is non-empty.

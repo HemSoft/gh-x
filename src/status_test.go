@@ -831,3 +831,40 @@ func TestFetchStatusDashboardKeepsSupplementalDiagnostics(t *testing.T) {
 		t.Fatalf("PullRequestsSuppErr = %v, want supplemental offline", dashboard.PullRequestsSuppErr)
 	}
 }
+
+func TestRenderStatusPullRequestNoticeWithNoRows(t *testing.T) {
+	dashboard := statusDashboard{
+		Repository:          "owner/repo",
+		DefaultBranch:       "main",
+		Branches:            statusBranchInventory{Local: map[string]statusBranchRef{}},
+		PullRequestsSuppErr: errors.New("gh api graphql: You have exceeded a secondary rate limit."),
+	}
+	var buf bytes.Buffer
+	if err := renderStatus(&buf, dashboard, false); err != nil {
+		t.Fatalf("renderStatus error: %v", err)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "Supplemental data unavailable: gh api graphql: You have exceeded a secondary rate limit.") {
+		t.Fatalf("empty PR list must still print the supplemental diagnostic:\n%s", output)
+	}
+	if !strings.Contains(output, "Open pull requests (0)") {
+		t.Fatalf("expected the zero-count section header:\n%s", output)
+	}
+}
+
+func TestRenderStatusShowsRequiredChecksNotice(t *testing.T) {
+	dashboard := statusDashboard{
+		Repository:        "owner/repo",
+		DefaultBranch:     "main",
+		Branches:          statusBranchInventory{Local: map[string]statusBranchRef{}},
+		PullRequests:      []displayPullRequest{{Number: 2, Title: "PR", State: "open", Checks: "pending"}},
+		RequiredChecksErr: errors.New("no rules returned for base main"),
+	}
+	var buf bytes.Buffer
+	if err := renderStatus(&buf, dashboard, false); err != nil {
+		t.Fatalf("renderStatus error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Required check rules unavailable: no rules returned for base main") {
+		t.Fatalf("status must explain the required-checks downgrade:\n%s", buf.String())
+	}
+}

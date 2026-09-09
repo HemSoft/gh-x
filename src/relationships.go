@@ -185,7 +185,7 @@ func fetchIssueRelationships(owner, name, host string, issueNumbers []int) (map[
 			firstErr = err
 		}
 	}
-	return result, unavailable, firstErr
+	return result, unavailable, firstPartialFetchError(firstErr, unavailable, len(issueNumbers), "issues")
 }
 
 func fetchIssueRelationshipsBatch(owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {

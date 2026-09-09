@@ -190,7 +190,17 @@ func fetchPRSupplemental(owner, name, host string, prNumbers []int) (map[int]prS
 			firstErr = err
 		}
 	}
-	return result, unavailable, firstErr
+	return result, unavailable, firstPartialFetchError(firstErr, unavailable, len(prNumbers), "pull requests")
+}
+
+// firstPartialFetchError guarantees a diagnostic whenever requested items
+// stayed unavailable: a recovered payload that omitted aliases, or a
+// structurally empty response, must not render unknown columns silently.
+func firstPartialFetchError(firstErr error, unavailable map[int]bool, requested int, kind string) error {
+	if firstErr != nil || len(unavailable) == 0 {
+		return firstErr
+	}
+	return fmt.Errorf("%d of %d requested %s returned no supplemental data", len(unavailable), requested, kind)
 }
 
 func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
