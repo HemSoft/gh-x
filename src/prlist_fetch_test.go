@@ -757,3 +757,99 @@ func TestRequiredChecksError(t *testing.T) {
 		t.Fatalf("branches must be listed deterministically, got %q", text)
 	}
 }
+
+// runAuxiliaryNoticeListExec drives executeList through fetchPullRequestList
+// with a mocked gh subprocess, returning both output buffers.
+func runAuxiliaryNoticeListExec(t *testing.T, options listOptions) (bytes.Buffer, bytes.Buffer) {
+	t.Helper()
+	saved := ghExecFunc
+	t.Cleanup(func() { ghExecFunc = saved })
+
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		joined := strings.Join(args, " ")
+		out := bytes.Buffer{}
+		switch {
+		case strings.Contains(joined, "pr list"):
+			out.WriteString(`[{"number":42,"title":"Auxiliary diagnostics","state":"OPEN","updatedAt":"2026-09-09T05:00:00Z","headRefName":"feature","baseRefName":"main","url":"https://github.com/owner/repo/pull/42"}]`)
+		case args[0] == "api" && len(args) > 1 && strings.HasPrefix(args[1], "repos/"):
+			out.WriteString("not-json")
+		case args[0] == "api" && strings.Contains(joined, " graphql"):
+			return bytes.Buffer{}, *bytes.NewBufferString("gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again.\n"), errors.New("exit status 1")
+		default:
+			out.WriteString("[]")
+		}
+		return out, bytes.Buffer{}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := executeList(options, &stdout, &stderr); err != nil {
+		t.Fatalf("executeList error: %v", err)
+	}
+	return stdout, stderr
+}
+
+func TestExecuteListRendersAuxiliaryNotices(t *testing.T) {
+	stdout, stderr := runAuxiliaryNoticeListExec(t, listOptions{repo: "owner/repo", limit: 30, state: "open"})
+	table := stdout.String()
+	if !strings.Contains(table, "#42") {
+		t.Fatalf("table should render the listed PR:\n%s", table)
+	}
+	if !strings.Contains(table, "Supplemental data unavailable: gh api graphql: gh: You have exceeded a secondary rate limit.") {
+		t.Fatalf("table should print the supplemental diagnostic:\n%s", table)
+	}
+	if !strings.Contains(table, "Required check rules unavailable: no rules returned for base main") {
+		t.Fatalf("table should print the required-checks diagnostic:\n%s", table)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("table mode should keep diagnostics on stdout, got stderr %q", stderr.String())
+	}
+}
+
+func TestExecuteListAuxiliaryNoticesGoToStderrInJSONMode(t *testing.T) {
+	stdout, stderr := runAuxiliaryNoticeListExec(t, listOptions{repo: "owner/repo", limit: 30, state: "open", json: true})
+	if !strings.Contains(stdout.String(), `"number": 42`) {
+		t.Fatalf("JSON stdout must stay machine-readable:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Supplemental data unavailable:") {
+		t.Fatalf("JSON stderr should carry the supplemental diagnostic:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Required check rules unavailable:") {
+		t.Fatalf("JSON stderr should carry the required-checks diagnostic:\n%s", stderr.String())
+	}
+}
+
+func TestRunViewRendersSupplementalDataAndNotices(t *testing.T) {
+	saved := ghExecFunc
+	t.Cleanup(func() { ghExecFunc = saved })
+
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		joined := strings.Join(args, " ")
+		out := bytes.Buffer{}
+		switch {
+		case strings.Contains(joined, "pr view 333"):
+			out.WriteString(`{"number":333,"title":"Show reset times on Gemini coding quota metrics","state":"OPEN","updatedAt":"2026-09-09T05:00:00Z","headRefName":"issue-332-gemini","baseRefName":"main","url":"https://github.com/HemSoft/codexbar-ios/pull/333"}`)
+		case args[0] == "api" && len(args) > 1 && strings.HasPrefix(args[1], "repos/"):
+			out.WriteString("[]")
+		case args[0] == "api" && strings.Contains(joined, " graphql"):
+			out.WriteString(capturedCodexbarSupplementalResponse)
+		default:
+			out.WriteString("[]")
+		}
+		return out, bytes.Buffer{}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := runView([]string{"333", "--repo", "HemSoft/codexbar-ios"}, &stdout, &stderr); err != nil {
+		t.Fatalf("runView error: %v", err)
+	}
+	table := stdout.String()
+	if !strings.Contains(table, "#333") || !strings.Contains(table, "#332") {
+		t.Fatalf("runView should render the PR with its captured relationship:\n%s", table)
+	}
+	if !strings.Contains(table, "3/4") || !strings.Contains(table, "fail") {
+		t.Fatalf("runView should render captured thread and AI columns:\n%s", table)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("complete enrichment should print no diagnostics, got stderr %q", stderr.String())
+	}
+}
