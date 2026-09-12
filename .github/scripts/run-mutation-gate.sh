@@ -41,6 +41,10 @@ lived=${BASH_REMATCH[2]}
 not_covered=${BASH_REMATCH[3]}
 covered=$((killed + lived))
 total=$((covered + not_covered))
+if (( total == 0 )); then
+  echo "::error::Mutation testing produced no scored mutants"
+  exit 1
+fi
 efficacy_left=$((killed * 100))
 efficacy_right=$((MUTATION_EFFICACY_THRESHOLD * covered))
 coverage_left=$((covered * 100))

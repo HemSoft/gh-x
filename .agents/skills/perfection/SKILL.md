@@ -217,7 +217,8 @@ gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 --threshold-mc
 - **Killed**: Test suite detected the mutation (good)
 - **Survived**: Mutation wasn't caught — test gap exists
 - **Not covered**: Mutated code has no test coverage at all
-- **Timed out**: Mutation caused infinite loop (counts as killed)
+- **Timed out**: Mutation exceeded its test timeout; Gremlins v0.6.0
+  reports it separately and excludes it from both ratios
 
 Report format:
 

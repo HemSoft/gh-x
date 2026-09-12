@@ -42,6 +42,10 @@ expect_failure() {
   fi
 }
 
+empty="$temp_dir/empty.txt"
+write_report "$empty" 0 0 0 0.00 0.00
+expect_failure "$empty" "Mutation testing produced no scored mutants"
+
 uncovered="$temp_dir/uncovered.txt"
 write_report "$uncovered" 90 0 11 100.00 89.11
 expect_failure "$uncovered" "Mutator coverage from 90 covered and 11 not-covered mutants is below 90%"

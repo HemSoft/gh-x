@@ -215,6 +215,9 @@ function Assert-MutationThresholds {
     $mutatorCoverage = [double]::Parse($Matches.coverage, [System.Globalization.CultureInfo]::InvariantCulture)
     $covered = $killed + $lived
     $total = $covered + $notCovered
+    if ($total -eq 0) {
+        throw 'Mutation testing produced no scored mutants.'
+    }
     $efficacyLeft = $killed * 100
     $efficacyRight = $EfficacyThreshold * $covered
     $coverageLeft = $covered * 100
