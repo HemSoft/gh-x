@@ -60,7 +60,7 @@ const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository
 
 var (
 	reviewedCommit   = regexp.MustCompile("(?i)(?:\\*\\*)?Reviewed commit:(?:\\*\\*)?\\s*`?([0-9a-f]{10,40})\\b`?")
-	codexActivityRow = regexp.MustCompile(`(?m)^\| [^|\n]*\*\*(?:Code|Security) Review\*\* \| [^|\n]*<relative-time datetime="([^"]+)">`)
+	codexActivityRow = regexp.MustCompile("(?m)^\\| [^|\\n]*\\*\\*(?:Code|Security) Review\\*\\* \\| [^|\\n]*<relative-time datetime=\"([^\"]+)\">[^|\\n]*\\| `([0-9a-fA-F]{7,40})` \\|")
 )
 
 func fetchReviewState(gh command, cfg config, number string) (reviewState, error) {
@@ -98,6 +98,28 @@ func reviewReady(state reviewState, head string) (bool, bool, error) {
 		}
 	}
 	clean, latest, requested := codexEvidence(state, head)
+	if outstandingReviewDecision(state, head) {
+		return false, requested, nil
+	}
+	for _, thread := range state.ReviewThreads.Nodes {
+		if !thread.IsResolved {
+			return false, requested, nil
+		}
+	}
+	return !clean.IsZero() && clean.After(latest), requested, nil
+}
+
+func ordinaryReviewReady(state reviewState, head string) (bool, bool, error) {
+	if state.HeadRefOID != head {
+		return false, false, errors.New("review response head does not match expected head")
+	}
+	if state.Comments.PageInfo.HasPreviousPage || state.Reviews.PageInfo.HasPreviousPage || state.ReviewThreads.PageInfo.HasNextPage || state.TimelineItems.PageInfo.HasPreviousPage {
+		return false, false, errors.New("review evidence truncated; manual review required")
+	}
+	clean, latest, requested, err := ordinaryCodexEvidence(state, head)
+	if err != nil {
+		return false, requested, err
+	}
 	if outstandingReviewDecision(state, head) {
 		return false, requested, nil
 	}
@@ -191,24 +213,15 @@ func currentHeadOrdinaryCodexActivity(state reviewState, head string) (reviewCom
 	if err != nil {
 		return reviewComment{}, err
 	}
-	for _, comment := range state.Comments.Nodes {
-		if !strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") {
-			continue
-		}
-		candidate, matched, err := codexCommentActivity(comment, head)
-		if err != nil {
-			return reviewComment{}, err
-		}
-		if matched {
-			candidates = append(candidates, candidate)
-		}
-	}
 	return latestCodexActivity(candidates)
 }
 
 func ordinaryCodexEvidence(state reviewState, head string) (time.Time, time.Time, bool, error) {
 	candidates, err := ordinaryCodexCandidates(state, head)
 	if err != nil {
+		return time.Time{}, time.Time{}, false, err
+	}
+	if _, err := latestCodexActivity(candidates); err != nil {
 		return time.Time{}, time.Time{}, false, err
 	}
 	var clean, latest time.Time
@@ -223,26 +236,63 @@ func ordinaryCodexEvidence(state reviewState, head string) (time.Time, time.Time
 }
 
 func ordinaryCodexCandidates(state reviewState, head string) ([]reviewComment, error) {
-	candidates := make([]reviewComment, 0, len(state.Comments.Nodes)+len(state.Reviews.Nodes))
+	candidates := exactCodexReviewCandidates(state.Reviews.Nodes, head)
+	hasExactReview := len(candidates) != 0
+	collision := false
 	for _, comment := range state.Comments.Nodes {
-		if !receiptMatches(comment, head) {
-			continue
-		}
-		bound, err := timelineBindsComment(state, comment, head)
+		candidate, matched, collides, err := ordinaryCommentCandidate(state, comment, head)
 		if err != nil {
 			return nil, err
 		}
-		if bound {
-			comment.Clean = cleanCodexComment(comment.Body)
-			candidates = append(candidates, comment)
+		collision = collision || collides
+		if matched {
+			candidates = append(candidates, candidate)
 		}
 	}
-	for _, item := range state.Reviews.Nodes {
+	if collision && !hasExactReview {
+		return nil, errors.New("abbreviated Codex receipt matches distinct pull request heads; exact review evidence required")
+	}
+	return candidates, nil
+}
+
+func ordinaryCommentCandidate(state reviewState, comment reviewComment, head string) (reviewComment, bool, bool, error) {
+	if strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") {
+		candidate, matched, err := codexCommentActivity(comment, head)
+		if err != nil || !matched {
+			return reviewComment{}, false, false, err
+		}
+		collides := latestHeadBoundary(state.TimelineItems.Nodes, head) < 0 || timelineHasReceiptPrefixCollision(state.TimelineItems.Nodes, head, codexSummaryPrefix(comment.Body))
+		return candidate, !collides, collides, nil
+	}
+	if !receiptMatches(comment, head) {
+		return reviewComment{}, false, false, nil
+	}
+	if timelineHasReceiptPrefixCollision(state.TimelineItems.Nodes, head, receiptCommitPrefix(comment)) {
+		return reviewComment{}, false, true, nil
+	}
+	bound, err := timelineBindsComment(state, comment, head)
+	comment.Clean = cleanCodexComment(comment.Body)
+	return comment, bound, false, err
+}
+
+func exactCodexReviewCandidates(reviews []review, head string) []reviewComment {
+	candidates := make([]reviewComment, 0, len(reviews))
+	for _, item := range reviews {
 		if codexActor(item.Author.Login) && item.Commit.OID == head {
 			candidates = append(candidates, reviewComment{Body: item.Body, CreatedAt: item.SubmittedAt, Author: item.Author, Clean: item.State == "APPROVED"})
 		}
 	}
-	return candidates, nil
+	return candidates
+}
+
+func timelineHasReceiptPrefixCollision(items []timelineItem, head, prefix string) bool {
+	for _, item := range items {
+		oid := strings.ToLower(timelineHeadOID(item))
+		if oid != "" && oid != strings.ToLower(head) && strings.HasPrefix(oid, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func timelineBindsComment(state reviewState, comment reviewComment, head string) (bool, error) {
@@ -282,7 +332,7 @@ func codexCommentActivity(comment reviewComment, head string) (reviewComment, bo
 	if !codexActor(comment.Author.Login) {
 		return reviewComment{}, false, nil
 	}
-	summary := strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") && strings.Contains(comment.Body, "`"+head[:7]+"`")
+	summary := strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->")
 	if !summary && !receiptMatches(comment, head) {
 		return reviewComment{}, false, nil
 	}
@@ -291,17 +341,29 @@ func codexCommentActivity(comment reviewComment, head string) (reviewComment, bo
 		if len(matches) != 1 {
 			return reviewComment{}, false, errors.New("current-head Codex summary has missing or ambiguous activity time")
 		}
+		if !strings.HasPrefix(strings.ToLower(head), strings.ToLower(matches[0][2])) {
+			return reviewComment{}, false, nil
+		}
 		stamp, err := time.Parse(time.RFC3339Nano, matches[0][1])
 		if err != nil {
 			return reviewComment{}, false, errors.New("current-head Codex activity has an invalid timestamp")
 		}
 		comment.CreatedAt = stamp
+		comment.Clean = strings.Contains(matches[0][0], "**Completed**")
 	}
 	if comment.CreatedAt.IsZero() {
 		return reviewComment{}, false, errors.New("current-head Codex activity lacks a timestamp")
 	}
-	comment.Clean = cleanCodexComment(comment.Body)
+	comment.Clean = comment.Clean || cleanCodexComment(comment.Body)
 	return comment, true, nil
+}
+
+func codexSummaryPrefix(body string) string {
+	matches := codexActivityRow.FindAllStringSubmatch(body, -1)
+	if len(matches) != 1 {
+		return ""
+	}
+	return strings.ToLower(matches[0][2])
 }
 
 func latestCodexActivity(candidates []reviewComment) (reviewComment, error) {
@@ -365,12 +427,17 @@ func ambiguousCodexReview(state reviewState, head string) bool {
 	return false
 }
 
-func receiptMatches(comment reviewComment, head string) bool {
-	if !codexActor(comment.Author.Login) {
-		return false
-	}
+func receiptCommitPrefix(comment reviewComment) string {
 	match := reviewedCommit.FindStringSubmatch(comment.Body)
-	return len(match) == 2 && strings.HasPrefix(head, strings.ToLower(match[1]))
+	if len(match) != 2 {
+		return ""
+	}
+	return strings.ToLower(match[1])
+}
+
+func receiptMatches(comment reviewComment, head string) bool {
+	prefix := receiptCommitPrefix(comment)
+	return codexActor(comment.Author.Login) && prefix != "" && strings.HasPrefix(strings.ToLower(head), prefix)
 }
 
 func cleanCodexComment(body string) bool {

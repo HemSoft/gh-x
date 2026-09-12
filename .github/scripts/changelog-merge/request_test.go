@@ -146,7 +146,7 @@ func TestSetupWindowDoesNotRestart(t *testing.T) {
 }
 
 func runningActivity(started time.Time) string {
-	return `<!-- codex-pull-request-review-summary --> ` + "`" + testHead[:7] + "`\n| 📝 **Code Review** | 🔄 **Running** since <relative-time datetime=\"" + started.Format(time.RFC3339Nano) + `"> |`
+	return `<!-- codex-pull-request-review-summary -->` + "\n| 📝 **Code Review** | 🔄 **Running** since <relative-time datetime=\"" + started.Format(time.RFC3339Nano) + `">now</relative-time> | ` + "`" + testHead[:7] + "` | Manual request |"
 }
 
 func TestOrdinaryPendingReviewUsesCurrentHeadActivity(t *testing.T) {
@@ -160,6 +160,7 @@ func TestOrdinaryPendingReviewUsesCurrentHeadActivity(t *testing.T) {
 	}
 	state := reviewState{HeadRefOID: testHead, CommittedAt: committed}
 	state.Comments.Nodes = []reviewComment{activity}
+	state.TimelineItems.Nodes = []timelineItem{{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}}}
 	if err := pendingOrdinaryReview(state, testConfig, "12", started.Add(9*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -172,8 +173,75 @@ func TestOrdinaryPendingReviewUsesCurrentHeadActivity(t *testing.T) {
 		t.Fatalf("missing ordinary activity must be actionable: %v", err)
 	}
 	state.CommittedAt = time.Time{}
-	if err := pendingOrdinaryReview(state, testConfig, "12", committed); err == nil || !strings.Contains(err.Error(), "commit lacks a timestamp") {
-		t.Fatalf("missing commit timestamp must fail closed: %v", err)
+	if err := pendingOrdinaryReview(state, testConfig, "12", committed); err == nil || !strings.Contains(err.Error(), "review setup lacks a timestamp") {
+		t.Fatalf("missing setup timestamp must fail closed: %v", err)
+	}
+}
+
+func TestOrdinarySetupWindowUsesTriggerTimestamp(t *testing.T) {
+	committed := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	triggered := committed.Add(time.Hour)
+	state := reviewState{HeadRefOID: testHead, CommittedAt: committed}
+	cfg := testConfig
+	cfg.setup = triggered.Format(time.RFC3339Nano)
+	if err := pendingOrdinaryReview(state, cfg, "12", triggered.Add(9*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pendingOrdinaryReview(state, cfg, "12", triggered.Add(reviewWindow)); err == nil || !strings.Contains(err.Error(), "no current-head Codex activity") {
+		t.Fatalf("event-bound setup window must not reset: %v", err)
+	}
+	cfg.setup = "invalid"
+	if err := pendingOrdinaryReview(state, cfg, "12", triggered); err == nil || !strings.Contains(err.Error(), "invalid review setup timestamp") {
+		t.Fatalf("invalid event timestamp must fail closed: %v", err)
+	}
+}
+
+func TestCompletedSummaryIsCleanOnlyWithoutExactFindings(t *testing.T) {
+	completed := time.Now().Add(-time.Minute)
+	state := cleanState()
+	state.Comments.Nodes = []reviewComment{{
+		Body: strings.Replace(runningActivity(completed), "🔄 **Running** since", "✅ **Completed**", 1), Author: actor{"chatgpt-codex-connector"}, URL: "summary-url",
+	}}
+	ready, requested, err := ordinaryReviewReady(state, testHead)
+	if !ready || !requested || err != nil {
+		t.Fatalf("completed finding-free summary must be clean: %v,%v,%v", ready, requested, err)
+	}
+	finding := review{State: "COMMENTED", SubmittedAt: completed.Add(-time.Second), Author: actor{"chatgpt-codex-connector"}}
+	finding.Commit.OID = testHead
+	state.Reviews.Nodes = []review{finding}
+	ready, requested, err = ordinaryReviewReady(state, testHead)
+	if !ready || !requested || err != nil {
+		t.Fatalf("later completed summary must recover an old resolved finding: %v,%v,%v", ready, requested, err)
+	}
+	state.Reviews.Nodes[0].SubmittedAt = completed.Add(time.Second)
+	ready, requested, err = ordinaryReviewReady(state, testHead)
+	if ready || !requested || err != nil {
+		t.Fatalf("newer exact finding must override completed summary: %v,%v,%v", ready, requested, err)
+	}
+}
+
+func TestRunningSummarySupersedesExactApproval(t *testing.T) {
+	started := time.Now().Add(-time.Minute)
+	state := cleanState()
+	state.Comments.Nodes = []reviewComment{{Body: runningActivity(started), Author: actor{"chatgpt-codex-connector"}, URL: "summary-url"}}
+	approval := review{State: "APPROVED", SubmittedAt: started.Add(-time.Second), Author: actor{"chatgpt-codex-connector"}}
+	approval.Commit.OID = testHead
+	state.Reviews.Nodes = []review{approval}
+	ready, requested, err := ordinaryReviewReady(state, testHead)
+	if ready || !requested || err != nil {
+		t.Fatalf("newer running summary must supersede approval: %v,%v,%v", ready, requested, err)
+	}
+}
+
+func TestOrdinaryReviewRejectsMissingTimestampWithApproval(t *testing.T) {
+	state := cleanState()
+	state.Comments.Nodes[0].CreatedAt = time.Time{}
+	approval := review{State: "APPROVED", SubmittedAt: time.Now(), Author: actor{"chatgpt-codex-connector"}}
+	approval.Commit.OID = testHead
+	state.Reviews.Nodes = []review{approval}
+	ready, _, err := ordinaryReviewReady(state, testHead)
+	if ready || err == nil || !strings.Contains(err.Error(), "lacks a timestamp") {
+		t.Fatalf("missing-timestamp receipt must fail closed despite approval: %v,%v", ready, err)
 	}
 }
 
@@ -190,7 +258,7 @@ func TestOrdinaryActivityTimeIgnoresProseAndRejectsAmbiguity(t *testing.T) {
 	if err != nil || !activity.CreatedAt.Equal(started) {
 		t.Fatalf("activity=%v err=%v", activity.CreatedAt, err)
 	}
-	state.Comments.Nodes[0].Body += "\n| 📝 **Code Review** | completed <relative-time datetime=\"2099-01-01T00:00:00Z\"> |"
+	state.Comments.Nodes[0].Body += "\n| 📝 **Code Review** | completed <relative-time datetime=\"2099-01-01T00:00:00Z\">later</relative-time> | `" + testHead[:7] + "` | Manual request |"
 	if _, err := currentHeadCodexActivity(state, testHead); err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("duplicate activity rows must fail closed: %v", err)
 	}
@@ -270,8 +338,41 @@ func TestOrdinaryReceiptPrefixCannotCrossHeadBoundary(t *testing.T) {
 	cfg := testConfig
 	cfg.head = collision
 	ready, err := currentOrdinaryRequestAllowsClean(state, cfg, "12")
-	if ready || err == nil || !strings.Contains(err.Error(), "exact current-head clean evidence") {
+	if ready || err == nil || !strings.Contains(err.Error(), "distinct pull request heads") {
 		t.Fatalf("abbreviated old receipt must not validate a colliding head: %v,%v", ready, err)
+	}
+}
+
+func TestExactApprovalRecoversCollidingReceipt(t *testing.T) {
+	state := cleanState()
+	collision := testHead[:10] + "dddddddddddddddddddddddddddddd"
+	state.HeadRefOID = collision
+	state.TimelineItems.Nodes = append(state.TimelineItems.Nodes, timelineItem{
+		TypeName: "HeadRefForcePushedEvent", CreatedAt: state.Comments.Nodes[0].CreatedAt.Add(time.Minute), AfterCommit: struct{ OID string }{collision},
+	})
+	approval := review{State: "APPROVED", SubmittedAt: state.Comments.Nodes[0].CreatedAt.Add(2 * time.Minute), Author: actor{"chatgpt-codex-connector"}}
+	approval.Commit.OID = collision
+	state.Reviews.Nodes = []review{approval}
+	clean, latest, requested, err := ordinaryCodexEvidence(state, collision)
+	if err != nil || clean.IsZero() || !latest.IsZero() || !requested {
+		t.Fatalf("exact approval must recover ambiguous receipt: clean=%v latest=%v requested=%v err=%v", clean, latest, requested, err)
+	}
+}
+
+func TestOrdinaryLateReceiptCannotCrossCollidingHeadBoundary(t *testing.T) {
+	state := cleanState()
+	collision := testHead[:10] + "eeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	state.HeadRefOID = collision
+	state.TimelineItems.Nodes = []timelineItem{
+		{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}},
+		{TypeName: "HeadRefForcePushedEvent", CreatedAt: state.Comments.Nodes[0].CreatedAt.Add(-time.Minute), AfterCommit: struct{ OID string }{collision}},
+		{TypeName: "IssueComment", Body: state.Comments.Nodes[0].Body, URL: state.Comments.Nodes[0].URL, CreatedAt: state.Comments.Nodes[0].CreatedAt, Author: state.Comments.Nodes[0].Author},
+	}
+	cfg := testConfig
+	cfg.head = collision
+	ready, err := currentOrdinaryRequestAllowsClean(state, cfg, "12")
+	if ready || err == nil || !strings.Contains(err.Error(), "distinct pull request heads") {
+		t.Fatalf("late old-head receipt must not validate a colliding head: %v,%v", ready, err)
 	}
 }
 

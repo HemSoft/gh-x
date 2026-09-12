@@ -268,7 +268,7 @@ func TestEnableWaitsForReviewGateAndPinsMerge(t *testing.T) {
 			check.Output.Summary = "0 issues found"
 			return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
 		case strings.Contains(joined, "check-runs?"):
-			check := checkRun{Name: "Changelog AI Review", Status: "completed", Conclusion: "success", HeadSHA: testHead}
+			check := checkRun{Name: "Current-head Codex Review", Status: "completed", Conclusion: "success", HeadSHA: testHead}
 			check.App.Slug = "github-actions"
 			return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
 		case args[0] == "pr" && args[1] == "merge":
@@ -302,7 +302,7 @@ func TestAbsentOrFailedReviewGateCannotEnableMerge(t *testing.T) {
 				if conclusion == "absent" {
 					return []byte(`{"check_runs":[]}`), nil
 				}
-				check := checkRun{Name: "Changelog AI Review", Status: "completed", Conclusion: conclusion, HeadSHA: testHead}
+				check := checkRun{Name: "Current-head Codex Review", Status: "completed", Conclusion: conclusion, HeadSHA: testHead}
 				check.App.Slug = "github-actions"
 				return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
 			}
@@ -413,8 +413,17 @@ func TestAmbiguousRepeatedChecksFailClosed(t *testing.T) {
 	}
 }
 
+func TestLegacyChangelogGatePassesDuringRollout(t *testing.T) {
+	check := checkRun{Name: "Changelog AI Review", HeadSHA: testHead, Status: "completed", Conclusion: "success", StartedAt: time.Now()}
+	check.App.Slug = "github-actions"
+	ready, err := passingReviewGate([]checkRun{check}, testHead)
+	if !ready || err != nil {
+		t.Fatalf("legacy gate must remain valid during rollout, got %v,%v", ready, err)
+	}
+}
+
 func TestQueuedGateRerunWaitsForTimestamp(t *testing.T) {
-	old := checkRun{Name: "Changelog AI Review", HeadSHA: testHead, Status: "completed", Conclusion: "success", StartedAt: time.Now()}
+	old := checkRun{Name: "Current-head Codex Review", HeadSHA: testHead, Status: "completed", Conclusion: "success", StartedAt: time.Now()}
 	old.App.Slug = "github-actions"
 	queued := old
 	queued.StartedAt = time.Time{}
@@ -564,10 +573,10 @@ func TestNewFindingBeforeQueuePreventsAutoMerge(t *testing.T) {
 			check.Name = "cubic · AI code reviewer"
 			check.App.Slug = "cubic-dev-ai"
 			check.Output.Summary = "0 issues found"
-			if strings.Contains(joined, "check_name=Changelog") {
+			if strings.Contains(joined, "check_name=Current-head") {
 				gatePassed = true
 				check.App.Slug = "github-actions"
-				check.Name = "Changelog AI Review"
+				check.Name = "Current-head Codex Review"
 			}
 			return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
 		default:
