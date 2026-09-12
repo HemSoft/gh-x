@@ -183,10 +183,6 @@ func pendingOrdinaryReview(state reviewState, cfg config, number string, now tim
 }
 
 func ordinaryReviewAnchor(state reviewState, head string, after time.Time) (reviewComment, error) {
-	activity, err := currentHeadCodexActivity(state, head)
-	if err != nil {
-		return reviewComment{}, err
-	}
 	request, err := latestBoundOrdinaryRequest(state, head, after)
 	if err != nil {
 		return reviewComment{}, err
@@ -194,19 +190,14 @@ func ordinaryReviewAnchor(state reviewState, head string, after time.Time) (revi
 	if !request.CreatedAt.IsZero() {
 		return request, nil
 	}
-	return activity, nil
+	return currentHeadOrdinaryCodexActivity(state, head)
 }
 
 func latestBoundOrdinaryRequest(state reviewState, head string, after time.Time) (reviewComment, error) {
 	if state.TimelineItems.PageInfo.HasPreviousPage {
 		return reviewComment{}, errors.New("pull request timeline is truncated; cannot bind Codex request to current head")
 	}
-	boundary := -1
-	for i, item := range state.TimelineItems.Nodes {
-		if timelineSetsHead(item, head) {
-			boundary = i
-		}
-	}
+	boundary := latestHeadBoundary(state.TimelineItems.Nodes, head)
 	var latest reviewComment
 	for i, item := range state.TimelineItems.Nodes {
 		request, err := ordinaryRequestTimelineItem(item)
@@ -224,6 +215,16 @@ func latestBoundOrdinaryRequest(state reviewState, head string, after time.Time)
 		}
 	}
 	return latest, nil
+}
+
+func latestHeadBoundary(items []timelineItem, head string) int {
+	boundary := -1
+	for i, item := range items {
+		if timelineSetsHead(item, head) {
+			boundary = i
+		}
+	}
+	return boundary
 }
 
 func timelineSetsHead(item timelineItem, head string) bool {
@@ -245,7 +246,13 @@ func ordinaryRequestTimelineItem(item timelineItem) (bool, error) {
 }
 
 func currentOrdinaryRequestAllowsClean(state reviewState, cfg config, number string) (bool, error) {
-	clean, _, _ := codexEvidence(state, cfg.head)
+	clean, _, _, err := ordinaryCodexEvidence(state, cfg.head)
+	if err != nil {
+		return false, err
+	}
+	if clean.IsZero() {
+		return false, errors.New("ordinary review lacks exact current-head clean evidence")
+	}
 	activity, err := ordinaryReviewAnchor(state, cfg.head, clean)
 	if err != nil {
 		return false, err

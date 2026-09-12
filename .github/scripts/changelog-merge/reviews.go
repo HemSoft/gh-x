@@ -186,6 +186,98 @@ func currentHeadCodexActivity(state reviewState, head string) (reviewComment, er
 	return latestCodexActivity(candidates)
 }
 
+func currentHeadOrdinaryCodexActivity(state reviewState, head string) (reviewComment, error) {
+	candidates, err := ordinaryCodexCandidates(state, head)
+	if err != nil {
+		return reviewComment{}, err
+	}
+	for _, comment := range state.Comments.Nodes {
+		if !strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") {
+			continue
+		}
+		candidate, matched, err := codexCommentActivity(comment, head)
+		if err != nil {
+			return reviewComment{}, err
+		}
+		if matched {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return latestCodexActivity(candidates)
+}
+
+func ordinaryCodexEvidence(state reviewState, head string) (time.Time, time.Time, bool, error) {
+	candidates, err := ordinaryCodexCandidates(state, head)
+	if err != nil {
+		return time.Time{}, time.Time{}, false, err
+	}
+	var clean, latest time.Time
+	for _, candidate := range candidates {
+		if candidate.Clean {
+			clean = laterTime(clean, candidate.CreatedAt)
+		} else {
+			latest = laterTime(latest, candidate.CreatedAt)
+		}
+	}
+	return clean, latest, len(candidates) != 0, nil
+}
+
+func ordinaryCodexCandidates(state reviewState, head string) ([]reviewComment, error) {
+	candidates := make([]reviewComment, 0, len(state.Comments.Nodes)+len(state.Reviews.Nodes))
+	for _, comment := range state.Comments.Nodes {
+		if !receiptMatches(comment, head) {
+			continue
+		}
+		bound, err := timelineBindsComment(state, comment, head)
+		if err != nil {
+			return nil, err
+		}
+		if bound {
+			comment.Clean = cleanCodexComment(comment.Body)
+			candidates = append(candidates, comment)
+		}
+	}
+	for _, item := range state.Reviews.Nodes {
+		if codexActor(item.Author.Login) && item.Commit.OID == head {
+			candidates = append(candidates, reviewComment{Body: item.Body, CreatedAt: item.SubmittedAt, Author: item.Author, Clean: item.State == "APPROVED"})
+		}
+	}
+	return candidates, nil
+}
+
+func timelineBindsComment(state reviewState, comment reviewComment, head string) (bool, error) {
+	if state.TimelineItems.PageInfo.HasPreviousPage {
+		return false, errors.New("pull request timeline is truncated; cannot bind Codex evidence to current head")
+	}
+	if comment.URL == "" {
+		return false, errors.New("Codex receipt lacks a timeline identity")
+	}
+	var timelineHead string
+	for _, item := range state.TimelineItems.Nodes {
+		if oid := timelineHeadOID(item); oid != "" {
+			timelineHead = oid
+		}
+		if item.TypeName != "IssueComment" || item.URL != comment.URL {
+			continue
+		}
+		if timelineHead == "" {
+			return false, errors.New("Codex receipt cannot be bound to a head timeline event")
+		}
+		return timelineHead == head, nil
+	}
+	return false, nil
+}
+
+func timelineHeadOID(item timelineItem) string {
+	if item.TypeName == "PullRequestCommit" {
+		return item.Commit.OID
+	}
+	if item.TypeName == "HeadRefForcePushedEvent" {
+		return item.AfterCommit.OID
+	}
+	return ""
+}
+
 func codexCommentActivity(comment reviewComment, head string) (reviewComment, bool, error) {
 	if !codexActor(comment.Author.Login) {
 		return reviewComment{}, false, nil

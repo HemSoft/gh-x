@@ -165,7 +165,12 @@ func TestOrdinaryReviewRequiresEventNumber(t *testing.T) {
 func cleanState() reviewState {
 	var state reviewState
 	state.HeadRefOID = testHead
-	state.Comments.Nodes = []reviewComment{{Body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `" + testHead[:10] + "`", Author: actor{"chatgpt-codex-connector"}, CreatedAt: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}}
+	comment := reviewComment{Body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `" + testHead[:10] + "`", URL: "https://github.com/HemSoft/gh-x/pull/12#issuecomment-clean", Author: actor{"chatgpt-codex-connector"}, CreatedAt: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}
+	state.Comments.Nodes = []reviewComment{comment}
+	state.TimelineItems.Nodes = []timelineItem{
+		{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}},
+		{TypeName: "IssueComment", Body: comment.Body, URL: comment.URL, CreatedAt: comment.CreatedAt, Author: comment.Author},
+	}
 	return state
 }
 

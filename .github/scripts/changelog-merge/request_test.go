@@ -224,10 +224,9 @@ func TestOrdinaryLaterRequestIsBoundByTimelineOrder(t *testing.T) {
 	cleanAt := time.Now().Add(-2 * time.Minute)
 	state := cleanState()
 	state.Comments.Nodes[0].CreatedAt = cleanAt
-	state.TimelineItems.Nodes = []timelineItem{
-		{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}},
-		{TypeName: "IssueComment", Body: "@codex review", URL: "request-url", CreatedAt: cleanAt.Add(time.Minute), Author: actor{connectedRequester}},
-	}
+	state.TimelineItems.Nodes = append(state.TimelineItems.Nodes,
+		timelineItem{TypeName: "IssueComment", Body: "@codex review", URL: "request-url", CreatedAt: cleanAt.Add(time.Minute), Author: actor{connectedRequester}},
+	)
 	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
 	if ready || err != nil {
 		t.Fatalf("later same-head request must remain pending: %v,%v", ready, err)
@@ -238,10 +237,9 @@ func TestOrdinarySameTimeRequestWaits(t *testing.T) {
 	stamp := time.Now().Add(-time.Minute)
 	state := cleanState()
 	state.Comments.Nodes[0].CreatedAt = stamp
-	state.TimelineItems.Nodes = []timelineItem{
-		{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}},
-		{TypeName: "IssueComment", Body: "@codex review", URL: "request-url", CreatedAt: stamp, Author: actor{connectedRequester}},
-	}
+	state.TimelineItems.Nodes = append(state.TimelineItems.Nodes,
+		timelineItem{TypeName: "IssueComment", Body: "@codex review", URL: "request-url", CreatedAt: stamp, Author: actor{connectedRequester}},
+	)
 	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
 	if ready || err != nil {
 		t.Fatalf("same-time bound request must wait rather than error: %v,%v", ready, err)
@@ -252,19 +250,37 @@ func TestOrdinaryRequestBeforeLatestHeadBoundaryIsIgnored(t *testing.T) {
 	cleanAt := time.Now().Add(-2 * time.Minute)
 	state := cleanState()
 	state.Comments.Nodes[0].CreatedAt = cleanAt
-	state.TimelineItems.Nodes = []timelineItem{
-		{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}},
-		{TypeName: "IssueComment", Body: "@codex review", URL: "old-request", CreatedAt: cleanAt.Add(time.Minute), Author: actor{connectedRequester}},
-		{TypeName: "HeadRefForcePushedEvent", CreatedAt: cleanAt.Add(90 * time.Second), AfterCommit: struct{ OID string }{testHead}},
-	}
+	state.TimelineItems.Nodes = append(state.TimelineItems.Nodes,
+		timelineItem{TypeName: "IssueComment", Body: "@codex review", URL: "old-request", CreatedAt: cleanAt.Add(time.Minute), Author: actor{connectedRequester}},
+		timelineItem{TypeName: "HeadRefForcePushedEvent", CreatedAt: cleanAt.Add(90 * time.Second), AfterCommit: struct{ OID string }{testHead}},
+	)
 	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
 	if !ready || err != nil {
 		t.Fatalf("request before the current head update must not become pending: %v,%v", ready, err)
 	}
 }
 
+func TestOrdinaryReceiptPrefixCannotCrossHeadBoundary(t *testing.T) {
+	state := cleanState()
+	collision := testHead[:10] + "ffffffffffffffffffffffffffffff"
+	state.HeadRefOID = collision
+	state.TimelineItems.Nodes = append(state.TimelineItems.Nodes, timelineItem{
+		TypeName: "HeadRefForcePushedEvent", CreatedAt: state.Comments.Nodes[0].CreatedAt.Add(time.Minute), AfterCommit: struct{ OID string }{collision},
+	})
+	cfg := testConfig
+	cfg.head = collision
+	ready, err := currentOrdinaryRequestAllowsClean(state, cfg, "12")
+	if ready || err == nil || !strings.Contains(err.Error(), "exact current-head clean evidence") {
+		t.Fatalf("abbreviated old receipt must not validate a colliding head: %v,%v", ready, err)
+	}
+}
+
 func TestOrdinaryUnboundRequestFailsClosed(t *testing.T) {
 	state := cleanState()
+	state.Comments.Nodes = nil
+	approval := review{State: "APPROVED", SubmittedAt: time.Now().Add(-time.Minute), Author: actor{"chatgpt-codex-connector"}}
+	approval.Commit.OID = testHead
+	state.Reviews.Nodes = []review{approval}
 	state.TimelineItems.Nodes = []timelineItem{{TypeName: "IssueComment", Body: "@codex review", CreatedAt: time.Now(), Author: actor{connectedRequester}}}
 	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
 	if ready || err == nil || !strings.Contains(err.Error(), "cannot be bound") {
