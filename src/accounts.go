@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,12 +20,16 @@ import (
 // defaultGitHubHost is the public GitHub API host; publicGitHubSSHHost is its
 // documented SSH-over-443 transport endpoint.
 const (
-	defaultGitHubHost   = "github.com"
-	publicGitHubSSHHost = "ssh.github.com"
+	defaultGitHubHost           = "github.com"
+	publicGitHubSSHHost         = "ssh.github.com"
+	githubCommandTimeoutEnv     = "GH_X_GITHUB_TIMEOUT"
+	defaultGitHubCommandTimeout = 30 * time.Second
+	githubCommandWaitDelay      = time.Second
 )
 
 // ghInvocation describes one gh subprocess execution.
 type ghInvocation struct {
+	Context  context.Context
 	Args     []string
 	Stdin    []byte
 	ExtraEnv []string
@@ -40,7 +45,12 @@ var accountWarningWriter io.Writer = os.Stderr
 
 // runGHCmd executes the gh binary with inherited environment plus any extra
 // environment entries. GH_PATH takes precedence, matching gh's own resolution.
+// Its context always owns the child process and cancels it when the caller ends.
 func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+	ctx := inv.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	path := os.Getenv("GH_PATH")
 	if path == "" {
 		var lookErr error
@@ -48,7 +58,8 @@ func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("gh CLI not found in PATH")
 		}
 	}
-	cmd := exec.Command(path, inv.Args...)
+	cmd := exec.CommandContext(ctx, path, inv.Args...)
+	cmd.WaitDelay = githubCommandWaitDelay
 	if len(inv.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(inv.Stdin)
 	}
@@ -59,9 +70,39 @@ func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		cmd.Env = append(os.Environ(), inv.ExtraEnv...)
 	}
 	if err := cmd.Run(); err != nil {
+		if contextErr := githubContextError(ctx.Err()); contextErr != nil {
+			return stdout, stderr, contextErr
+		}
 		return stdout, stderr, err
 	}
 	return stdout, stderr, nil
+}
+
+func githubContextError(err error) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("github request timed out: %w", context.DeadlineExceeded)
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("github request canceled: %w", context.Canceled)
+	default:
+		return nil
+	}
+}
+
+func configuredTimeout(name string, fallback time.Duration) (time.Duration, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, nil
+	}
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("%s must not contain only whitespace", name)
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("%s must be a positive Go duration", name)
+	}
+	return duration, nil
 }
 
 var (
@@ -85,35 +126,85 @@ func noteFallback(login, host string) {
 // when the active account cannot access the target repository. The retry
 // authenticates against the same host the original command targeted.
 func execGH(args ...string) (bytes.Buffer, bytes.Buffer, error) {
-	stdout, stderr, err := ghTransportFunc(ghInvocation{Args: args})
-	if err == nil || !fallbackEligible(args, stderr.String()) {
+	timeout, err := configuredTimeout(githubCommandTimeoutEnv, defaultGitHubCommandTimeout)
+	if err != nil {
+		return bytes.Buffer{}, bytes.Buffer{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return execGHContext(ctx, args...)
+}
+
+func execGHContext(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	stdout, stderr, err := ghTransportFunc(ghInvocation{Context: ctx, Args: args})
+	if err == nil {
+		return stdout, stderr, nil
+	}
+	if contextErr := githubContextError(ctx.Err()); contextErr != nil {
+		return stdout, stderr, contextErr
+	}
+	host, eligible := fallbackHost(ctx, args, stderr.String())
+	if contextErr := githubContextError(ctx.Err()); contextErr != nil {
+		return stdout, stderr, contextErr
+	}
+	if !eligible {
 		return stdout, stderr, err
 	}
+	return retryGHWithAccounts(ctx, host, args, stdout, stderr, err)
+}
 
-	host := targetHost(args)
-	for _, login := range fallbackAccountLoginsFor(host) {
-		token, ok := accountTokenFunc(login, host)
+func retryGHWithAccounts(ctx context.Context, host string, args []string, originalOut, originalErrs bytes.Buffer, originalErr error) (bytes.Buffer, bytes.Buffer, error) {
+	logins := fallbackAccountLoginsFor(ctx, host)
+	if contextErr := githubContextError(ctx.Err()); contextErr != nil {
+		return originalOut, originalErrs, contextErr
+	}
+	for _, login := range logins {
+		token, ok := accountTokenFunc(ctx, login, host)
+		if contextErr := githubContextError(ctx.Err()); contextErr != nil {
+			return originalOut, originalErrs, contextErr
+		}
 		if !ok || token == "" {
 			continue
 		}
-		retry := ghInvocation{
-			Args:     args,
-			ExtraEnv: credentialEnvFor(host, token),
-		}
+		retry := ghInvocation{Context: ctx, Args: args, ExtraEnv: credentialEnvFor(host, token)}
 		retryOut, retryErrs, retryErr := ghTransportFunc(retry)
 		if retryErr == nil {
 			noteFallback(login, host)
 			return retryOut, retryErrs, nil
 		}
+		if contextErr := githubContextError(ctx.Err()); contextErr != nil {
+			return retryOut, retryErrs, contextErr
+		}
 	}
-	return stdout, stderr, err
+	return originalOut, originalErrs, originalErr
 }
 
 // execGHActive runs a gh command as the active account with no fallback.
 // Identity-scoped flows use it so a retry can never switch the account that a
 // query's embedded login refers to, on any host.
 func execGHActive(args ...string) (bytes.Buffer, bytes.Buffer, error) {
-	return ghTransportFunc(ghInvocation{Args: args})
+	return execGHActiveInvocation(ghInvocation{Args: args})
+}
+
+func execGHActiveInvocation(invocation ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+	timeout, err := configuredTimeout(githubCommandTimeoutEnv, defaultGitHubCommandTimeout)
+	if err != nil {
+		return bytes.Buffer{}, bytes.Buffer{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	invocation.Context = ctx
+	return ghTransportFunc(invocation)
+}
+
+func execGHActiveContext(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return ghTransportFunc(ghInvocation{Context: ctx, Args: args})
 }
 
 // targetHost resolves which GitHub host a command targets, following gh's own
@@ -121,6 +212,10 @@ func execGHActive(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 // --repo/-R, the GH_REPO environment variable, the current repository's git
 // remote after SSH alias resolution, GH_HOST, then github.com.
 func targetHost(args []string) string {
+	return targetHostContext(context.Background(), args)
+}
+
+func targetHostContext(ctx context.Context, args []string) string {
 	if host := hostFromHostnameArgs(args); host != "" {
 		return host
 	}
@@ -130,7 +225,7 @@ func targetHost(args []string) string {
 	if host := hostFromRepoValue(os.Getenv("GH_REPO")); host != "" {
 		return host
 	}
-	if host := cachedRemoteTargetHost(); host != "" {
+	if host := cachedRemoteTargetHost(ctx); host != "" {
 		return host
 	}
 	if host := strings.TrimSpace(os.Getenv("GH_HOST")); host != "" {
@@ -174,19 +269,29 @@ var (
 
 // cachedRemoteTargetHost memoizes both the git remote probe and SSH alias
 // resolution so commands in one process do not repeatedly invoke ssh -G.
-func cachedRemoteTargetHost() string {
+func cachedRemoteTargetHost(ctx context.Context) string {
 	remoteMu.Lock()
 	defer remoteMu.Unlock()
-	if !remoteResolved {
-		cachedRemoteHost = hostFromRemoteURL(gitRemoteURLFunc())
-		remoteResolved = true
+	if remoteResolved {
+		return cachedRemoteHost
 	}
+	remoteURL := gitRemoteURLFunc(ctx)
+	if ctx.Err() != nil {
+		return ""
+	}
+	resolvedHost := hostFromRemoteURLContext(ctx, remoteURL)
+	if ctx.Err() != nil {
+		return ""
+	}
+	cachedRemoteHost = resolvedHost
+	remoteResolved = true
 	return cachedRemoteHost
 }
 
 // defaultGitRemoteURL reads the origin remote of the current repository.
-func defaultGitRemoteURL() string {
-	cmd := exec.Command("git", "config", "--get", "remote.origin.url")
+func defaultGitRemoteURL(ctx context.Context) string {
+	cmd := exec.CommandContext(ctx, "git", "config", "--get", "remote.origin.url")
+	cmd.WaitDelay = githubCommandWaitDelay
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -239,7 +344,7 @@ func hostFromRepoValue(value string) string {
 // without an ssh user), or bare host/path git remote URLs. SSH destinations
 // are resolved through ssh -G before they become API hosts; unrecognized
 // values return "" so inference degrades to the next signal.
-func hostFromRemoteURL(raw string) string {
+func hostFromRemoteURLContext(ctx context.Context, raw string) string {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return ""
@@ -247,7 +352,7 @@ func hostFromRemoteURL(raw string) string {
 	if matches := remoteSchemeHost.FindStringSubmatch(value); len(matches) == 3 {
 		host := normalizeRemoteHost(matches[2])
 		if isSSHRemoteScheme(matches[1]) {
-			host = configuredSSHHost(matches[2])
+			host = configuredSSHHostContext(ctx, matches[2])
 		}
 		if plausibleRemoteHost(host) {
 			return host
@@ -255,7 +360,7 @@ func hostFromRemoteURL(raw string) string {
 		return ""
 	}
 	if matches := remoteScpHost.FindStringSubmatch(value); len(matches) == 2 {
-		host := configuredSSHHost(matches[1])
+		host := configuredSSHHostContext(ctx, matches[1])
 		if plausibleRemoteHost(host) {
 			return host
 		}
@@ -315,12 +420,12 @@ func knownGitHubHost(host string) bool {
 // SSH transport endpoints such as ssh.github.com out of gh --hostname. A
 // missing binary, invalid config, timeout, or unknown destination falls back
 // to the original remote host.
-func configuredSSHHost(host string) string {
+func configuredSSHHostContext(ctx context.Context, host string) string {
 	normalizedHost := normalizeRemoteHost(host)
 	if normalizedHost == "" || strings.HasPrefix(normalizedHost, ".") || strings.HasSuffix(normalizedHost, ".") || knownGitHubHostFunc(normalizedHost) {
 		return normalizedHost
 	}
-	resolved := normalizeRemoteHost(sshConfigHostFunc(host))
+	resolved := normalizeRemoteHost(sshConfigHostFunc(ctx, host))
 	if resolved == publicGitHubSSHHost {
 		return defaultGitHubHost
 	}
@@ -330,8 +435,8 @@ func configuredSSHHost(host string) string {
 	return normalizedHost
 }
 
-func defaultSSHConfigHost(host string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), sshConfigTimeout)
+func defaultSSHConfigHost(ctx context.Context, host string) string {
+	ctx, cancel := context.WithTimeout(ctx, sshConfigTimeout)
 	defer cancel()
 	out, err := newSSHConfigCommand(ctx, host).Output()
 	if err != nil {
@@ -374,14 +479,12 @@ func credentialEnvFor(host, token string) []string {
 // account attempt. Auth-plane commands never fall back, explicit token
 // environment overrides for the target host are respected, and only
 // access-shaped errors qualify.
-func fallbackEligible(args []string, stderr string) bool {
-	if len(args) == 0 || args[0] == "auth" {
-		return false
+func fallbackHost(ctx context.Context, args []string, stderr string) (string, bool) {
+	if len(args) == 0 || args[0] == "auth" || !isAccessError(stderr) {
+		return "", false
 	}
-	if explicitTokenSet(targetHost(args)) {
-		return false
-	}
-	return isAccessError(stderr)
+	host := targetHostContext(ctx, args)
+	return host, ctx.Err() == nil && !explicitTokenSet(host)
 }
 
 // explicitTokenSet reports whether the caller pinned credentials for host via
@@ -440,15 +543,21 @@ var (
 // listAccounts discovers logged-in accounts once per process: one auth status
 // probe is parsed and cached for every reported host. An empty result is
 // cached too so a broken auth state cannot cause repeated probing.
-func listAccounts(host string) []ghAccount {
+func listAccounts(ctx context.Context, host string) []ghAccount {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	host = normalizeRemoteHost(host)
 	accountsMu.Lock()
 	defer accountsMu.Unlock()
 	if cached, ok := cachedAccounts[host]; ok {
 		return cached
 	}
-	stdout, _, err := ghTransportFunc(ghInvocation{Args: []string{"auth", "status", "--json", "hosts"}})
+	stdout, _, err := ghTransportFunc(ghInvocation{Context: ctx, Args: []string{"auth", "status", "--json", "hosts"}})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		cachedAccounts[host] = []ghAccount{}
 		return cachedAccounts[host]
 	}
@@ -498,9 +607,9 @@ func parseAuthStatusJSON(data []byte) map[string][]ghAccount {
 }
 
 // fallbackAccountLoginsFor lists non-active accounts on host in discovery order.
-func fallbackAccountLoginsFor(host string) []string {
+func fallbackAccountLoginsFor(ctx context.Context, host string) []string {
 	logins := []string{}
-	for _, account := range listAccountsFunc(host) {
+	for _, account := range listAccountsFunc(ctx, host) {
 		if !account.Active {
 			logins = append(logins, account.Login)
 		}
@@ -510,14 +619,14 @@ func fallbackAccountLoginsFor(host string) []string {
 
 // defaultAccountToken resolves one account's token on host via the gh CLI and
 // caches it for this invocation of the extension. Failures are not cached.
-func defaultAccountToken(login, host string) (string, bool) {
+func defaultAccountToken(ctx context.Context, login, host string) (string, bool) {
 	accountsMu.Lock()
 	defer accountsMu.Unlock()
 	cacheKey := login + "@" + host
 	if token, ok := cachedTokens[cacheKey]; ok {
 		return token, true
 	}
-	stdout, _, err := ghTransportFunc(ghInvocation{Args: []string{
+	stdout, _, err := ghTransportFunc(ghInvocation{Context: ctx, Args: []string{
 		"auth", "token", "--user", login, "--hostname", host,
 	}})
 	if err != nil {

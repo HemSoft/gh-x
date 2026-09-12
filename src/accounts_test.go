@@ -4,11 +4,139 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	ghconfig "github.com/cli/go-gh/v2/pkg/config"
 )
+
+const (
+	ghHelperModeEnv       = "GH_X_TEST_HELPER_MODE"
+	ghHelperStartedEnv    = "GH_X_TEST_HELPER_STARTED"
+	ghHelperCompletedEnv  = "GH_X_TEST_HELPER_COMPLETED"
+	ghHelperSleepDuration = 30 * time.Second
+)
+
+func TestRunGHCmdHelperProcess(t *testing.T) {
+	mode := os.Getenv(ghHelperModeEnv)
+	if mode == "" {
+		return
+	}
+	if started := os.Getenv(ghHelperStartedEnv); started != "" {
+		if err := os.WriteFile(started, []byte("started"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mode == "success" {
+		if _, err := os.Stdout.WriteString("helper success"); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	time.Sleep(ghHelperSleepDuration)
+	if completed := os.Getenv(ghHelperCompletedEnv); completed != "" {
+		if err := os.WriteFile(completed, []byte("completed"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRunGHCmdHonorsSuccessDeadlineAndCancellation(t *testing.T) {
+	t.Setenv("GH_PATH", os.Args[0])
+	helperArgs := []string{"-test.run=^TestRunGHCmdHelperProcess$"}
+
+	successCtx, successCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer successCancel()
+	stdout, _, err := runGHCmd(ghInvocation{
+		Context: successCtx,
+		Args:    helperArgs,
+		ExtraEnv: []string{
+			ghHelperModeEnv + "=success",
+		},
+	})
+	if err != nil || !strings.Contains(stdout.String(), "helper success") {
+		t.Fatalf("successful helper = %q, %v", stdout.String(), err)
+	}
+
+	deadlineCtx, deadlineCancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer deadlineCancel()
+	_, _, err = runGHCmd(ghInvocation{
+		Context:  deadlineCtx,
+		Args:     helperArgs,
+		ExtraEnv: []string{ghHelperModeEnv + "=sleep"},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline error = %v", err)
+	}
+
+	started := filepath.Join(t.TempDir(), "started")
+	completed := filepath.Join(t.TempDir(), "completed")
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, _, runErr := runGHCmd(ghInvocation{
+			Context: cancelCtx,
+			Args:    helperArgs,
+			ExtraEnv: []string{
+				ghHelperModeEnv + "=sleep",
+				ghHelperStartedEnv + "=" + started,
+				ghHelperCompletedEnv + "=" + completed,
+			},
+		})
+		result <- runErr
+	}()
+	waitForFile(t, started, time.Second)
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation error = %v", err)
+	}
+	if _, err := os.Stat(completed); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled child reached completion marker: %v", err)
+	}
+}
+
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
+}
+
+func TestConfiguredTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "default", want: 7 * time.Second},
+		{name: "configured", value: "250ms", want: 250 * time.Millisecond},
+		{name: "invalid", value: "soon", wantErr: true},
+		{name: "whitespace", value: "  ", wantErr: true},
+		{name: "zero", value: "0s", wantErr: true},
+		{name: "negative", value: "-1s", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GH_X_TEST_TIMEOUT", test.value)
+			got, err := configuredTimeout("GH_X_TEST_TIMEOUT", 7*time.Second)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("configuredTimeout() error = %v, wantErr %v", err, test.wantErr)
+			}
+			if !test.wantErr && got != test.want {
+				t.Fatalf("configuredTimeout() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
 
 func resetAccountCache() {
 	accountsMu.Lock()
@@ -28,7 +156,7 @@ func resetRemoteCache() {
 func withSSHConfigHostStub(t *testing.T, stub func(string) string) {
 	t.Helper()
 	saved := sshConfigHostFunc
-	sshConfigHostFunc = stub
+	sshConfigHostFunc = func(_ context.Context, host string) string { return stub(host) }
 	t.Cleanup(func() { sshConfigHostFunc = saved })
 }
 
@@ -42,7 +170,7 @@ func withKnownGitHubHostStub(t *testing.T, stub func(string) bool) {
 func withRemoteURLStub(t *testing.T, remote string) {
 	t.Helper()
 	saved := gitRemoteURLFunc
-	gitRemoteURLFunc = func() string { return remote }
+	gitRemoteURLFunc = func(context.Context) string { return remote }
 	resetRemoteCache()
 	t.Cleanup(func() {
 		gitRemoteURLFunc = saved
@@ -58,6 +186,7 @@ func withFallbackStubs(t *testing.T, transport func(inv ghInvocation) (bytes.Buf
 	t.Setenv("GITHUB_ENTERPRISE_TOKEN", "")
 	t.Setenv("GH_REPO", "")
 	t.Setenv("GH_HOST", "")
+	t.Setenv(githubCommandTimeoutEnv, "")
 	savedTransport := ghTransportFunc
 	savedList := listAccountsFunc
 	savedToken := accountTokenFunc
@@ -75,12 +204,12 @@ func withFallbackStubs(t *testing.T, transport func(inv ghInvocation) (bytes.Buf
 	resetAccountCache()
 	resetRemoteCache()
 	ghTransportFunc = transport
-	listAccountsFunc = func(string) []ghAccount { return accounts }
-	accountTokenFunc = func(login, _ string) (string, bool) {
+	listAccountsFunc = func(context.Context, string) []ghAccount { return accounts }
+	accountTokenFunc = func(_ context.Context, login, _ string) (string, bool) {
 		token, ok := tokens[login]
 		return token, ok
 	}
-	gitRemoteURLFunc = func() string { return "" }
+	gitRemoteURLFunc = func(context.Context) string { return "" }
 	notices := &bytes.Buffer{}
 	accountWarningWriter = notices
 	return notices
@@ -120,6 +249,74 @@ func TestExecGHFallsBackToAlternateAccount(t *testing.T) {
 	}
 }
 
+func TestExecGHContextSkipsFallbackAfterCancellation(t *testing.T) {
+	fallbackCalls := 0
+	withFallbackStubs(t, func(ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		return bytes.Buffer{}, *bytes.NewBufferString("HTTP 404: Not Found"), errors.New("exit status 1")
+	}, nil, nil)
+	listAccountsFunc = func(context.Context, string) []ghAccount {
+		fallbackCalls++
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := execGHContext(ctx, "pr", "list")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled command error = %v", err)
+	}
+	if fallbackCalls != 0 {
+		t.Fatalf("fallback discovery ran %d times after cancellation", fallbackCalls)
+	}
+}
+
+func TestExecGHContextBoundsFallbackHostDiscovery(t *testing.T) {
+	fallbackCalls := 0
+	withFallbackStubs(t, func(ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		return bytes.Buffer{}, *bytes.NewBufferString("HTTP 404: Not Found"), errors.New("exit status 1")
+	}, nil, nil)
+	gitRemoteURLFunc = func(ctx context.Context) string {
+		<-ctx.Done()
+		return ""
+	}
+	listAccountsFunc = func(context.Context, string) []ghAccount {
+		fallbackCalls++
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	_, _, err := execGHContext(ctx, "pr", "list")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("host discovery deadline error = %v", err)
+	}
+	if fallbackCalls != 0 {
+		t.Fatalf("account discovery ran %d times after host timeout", fallbackCalls)
+	}
+}
+
+func TestExecGHContextBoundsAccountRetry(t *testing.T) {
+	calls := 0
+	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		calls++
+		if calls == 1 {
+			return bytes.Buffer{}, *bytes.NewBufferString("HTTP 404: Not Found"), errors.New("exit status 1")
+		}
+		<-inv.Context.Done()
+		return bytes.Buffer{}, bytes.Buffer{}, githubContextError(inv.Context.Err())
+	}, []ghAccount{{Login: "primary", Active: true}, {Login: "secondary", Active: false}}, map[string]string{"secondary": "token"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	_, _, err := execGHContext(ctx, "pr", "list")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("account retry error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("account retry transport calls = %d, want 2", calls)
+	}
+}
+
 func TestExecGHPreservesOriginalErrorWhenFallbackFails(t *testing.T) {
 	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		return bytes.Buffer{}, *bytes.NewBufferString("Not Found (HTTP 404)"), errors.New("boom")
@@ -156,13 +353,13 @@ func TestExecGHFallsBackOnEnterpriseHostWithEnterpriseCredential(t *testing.T) {
 		}
 		return *bytes.NewBufferString("[]"), bytes.Buffer{}, nil
 	}, nil, nil)
-	listAccountsFunc = func(host string) []ghAccount {
+	listAccountsFunc = func(_ context.Context, host string) []ghAccount {
 		if host == "ghe.example.com" {
 			return []ghAccount{{Login: "corp-lead", Active: true}, {Login: "corp-dev", Active: false}}
 		}
 		return []ghAccount{{Login: "personal", Active: true}, {Login: "other-personal", Active: false}}
 	}
-	accountTokenFunc = func(login, host string) (string, bool) {
+	accountTokenFunc = func(_ context.Context, login, host string) (string, bool) {
 		if login == "corp-dev" && host == "ghe.example.com" {
 			return "ent-token", true
 		}
@@ -388,11 +585,11 @@ func TestTargetHostResolvesDottedSSHRemoteAlias(t *testing.T) {
 		sshConfigHostFunc = savedResolver
 		resetRemoteCache()
 	})
-	gitRemoteURLFunc = func() string {
+	gitRemoteURLFunc = func(context.Context) string {
 		return "git@github.com-hemsoft:HemSoft/codexbar-ios.git"
 	}
 	resolverCalls := 0
-	sshConfigHostFunc = func(host string) string {
+	sshConfigHostFunc = func(_ context.Context, host string) string {
 		resolverCalls++
 		if host != "github.com-hemsoft" {
 			t.Fatalf("SSH resolver host = %q, want github.com-hemsoft", host)
@@ -414,7 +611,7 @@ func TestTargetHostResolvesDottedSSHRemoteAlias(t *testing.T) {
 func TestTargetHostExplicitSourcesPrecedeSSHRemote(t *testing.T) {
 	savedRemote := gitRemoteURLFunc
 	remoteCalls := 0
-	gitRemoteURLFunc = func() string {
+	gitRemoteURLFunc = func(context.Context) string {
 		remoteCalls++
 		return "git@github.com-hemsoft:HemSoft/codexbar-ios.git"
 	}
@@ -457,7 +654,7 @@ func TestTargetHost(t *testing.T) {
 	resetRemoteCache()
 	savedRemote := gitRemoteURLFunc
 	t.Cleanup(func() { gitRemoteURLFunc = savedRemote; resetRemoteCache() })
-	gitRemoteURLFunc = func() string { return "" }
+	gitRemoteURLFunc = func(context.Context) string { return "" }
 
 	cases := []struct {
 		name string
@@ -496,7 +693,7 @@ func TestTargetHostUsesRepoEnvAndGitRemote(t *testing.T) {
 
 	t.Run("GH_REPO with host prefix", func(t *testing.T) {
 		t.Setenv("GH_REPO", "ghe.example.com/o/r")
-		gitRemoteURLFunc = func() string { return "https://github.com/o/r.git" }
+		gitRemoteURLFunc = func(context.Context) string { return "https://github.com/o/r.git" }
 		resetRemoteCache()
 		if got := targetHost([]string{"pr", "list"}); got != "ghe.example.com" {
 			t.Fatalf("GH_REPO should win over the local remote: %q", got)
@@ -505,7 +702,7 @@ func TestTargetHostUsesRepoEnvAndGitRemote(t *testing.T) {
 
 	t.Run("git remote infers enterprise host", func(t *testing.T) {
 		t.Setenv("GH_REPO", "")
-		gitRemoteURLFunc = func() string { return "git@ghe.internal.acme.io:acme/widgets.git" }
+		gitRemoteURLFunc = func(context.Context) string { return "git@ghe.internal.acme.io:acme/widgets.git" }
 		resetRemoteCache()
 		if got := targetHost([]string{"pr", "list"}); got != "ghe.internal.acme.io" {
 			t.Fatalf("remote host inference failed: %q", got)
@@ -513,7 +710,7 @@ func TestTargetHostUsesRepoEnvAndGitRemote(t *testing.T) {
 	})
 
 	t.Run("github.com remote beats GH_HOST", func(t *testing.T) {
-		gitRemoteURLFunc = func() string { return "https://github.com/o/r.git" }
+		gitRemoteURLFunc = func(context.Context) string { return "https://github.com/o/r.git" }
 		resetRemoteCache()
 		t.Setenv("GH_HOST", "fallback.host")
 		if got := targetHost([]string{"pr", "list"}); got != defaultGitHubHost {
@@ -522,7 +719,7 @@ func TestTargetHostUsesRepoEnvAndGitRemote(t *testing.T) {
 	})
 
 	t.Run("unresolvable remote falls through to GH_HOST", func(t *testing.T) {
-		gitRemoteURLFunc = func() string { return "/dev/null/not/a/remote" }
+		gitRemoteURLFunc = func(context.Context) string { return "/dev/null/not/a/remote" }
 		resetRemoteCache()
 		t.Setenv("GH_HOST", "fallback.host")
 		if got := targetHost([]string{"pr", "list"}); got != "fallback.host" {
@@ -532,7 +729,7 @@ func TestTargetHostUsesRepoEnvAndGitRemote(t *testing.T) {
 
 	t.Run("no signals anywhere lands on github.com", func(t *testing.T) {
 		t.Setenv("GH_HOST", "")
-		gitRemoteURLFunc = func() string { return "" }
+		gitRemoteURLFunc = func(context.Context) string { return "" }
 		resetRemoteCache()
 		if got := targetHost(nil); got != defaultGitHubHost {
 			t.Fatalf("default wrong: %q", got)
@@ -562,7 +759,7 @@ func TestHostFromRemoteURL(t *testing.T) {
 		"/just/a/path":                             "",
 	}
 	for input, want := range cases {
-		if got := hostFromRemoteURL(input); got != want {
+		if got := hostFromRemoteURLContext(context.Background(), input); got != want {
 			t.Errorf("hostFromRemoteURL(%q) = %q, want %q", input, got, want)
 		}
 	}
@@ -606,7 +803,7 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			if got := hostFromRemoteURL(test.value); got != test.want {
+			if got := hostFromRemoteURLContext(context.Background(), test.value); got != test.want {
 				t.Fatalf("hostFromRemoteURL(%q) = %q, want %q", test.value, got, test.want)
 			}
 		})
@@ -693,7 +890,7 @@ func TestConfiguredSSHHostPreservesKnownAPIHosts(t *testing.T) {
 		return "ssh.transport.example"
 	})
 	for _, host := range []string{defaultGitHubHost, "ghe.example.com"} {
-		if got := configuredSSHHost(host); got != host {
+		if got := configuredSSHHostContext(context.Background(), host); got != host {
 			t.Fatalf("configuredSSHHost(%q) = %q, want known API host unchanged", host, got)
 		}
 	}
@@ -705,7 +902,7 @@ func TestConfiguredSSHHostPreservesKnownAPIHosts(t *testing.T) {
 func TestConfiguredSSHHostRejectsUnknownTransportHost(t *testing.T) {
 	withKnownGitHubHostStub(t, func(host string) bool { return host == defaultGitHubHost })
 	withSSHConfigHostStub(t, func(string) string { return "ssh.transport.example" })
-	if got := configuredSSHHost("github.com-hemsoft"); got != "github.com-hemsoft" {
+	if got := configuredSSHHostContext(context.Background(), "github.com-hemsoft"); got != "github.com-hemsoft" {
 		t.Fatalf("configuredSSHHost() = %q, want original alias when resolved host is not a known API host", got)
 	}
 }
@@ -713,10 +910,10 @@ func TestConfiguredSSHHostRejectsUnknownTransportHost(t *testing.T) {
 func TestConfiguredSSHHostFallsBack(t *testing.T) {
 	withKnownGitHubHostStub(t, func(string) bool { return false })
 	withSSHConfigHostStub(t, func(string) string { return "" })
-	if got := configuredSSHHost("ghe.example.com"); got != "ghe.example.com" {
+	if got := configuredSSHHostContext(context.Background(), "ghe.example.com"); got != "ghe.example.com" {
 		t.Fatalf("configuredSSHHost() = %q, want original Enterprise host", got)
 	}
-	if got := configuredSSHHost("workserver"); got != "workserver" {
+	if got := configuredSSHHostContext(context.Background(), "workserver"); got != "workserver" {
 		t.Fatalf("configuredSSHHost() = %q, want unresolved alias", got)
 	}
 }
@@ -734,16 +931,39 @@ func TestCredentialEnvFor(t *testing.T) {
 
 func TestFallbackEligibleRespectsHostOverrides(t *testing.T) {
 	args := []string{"pr", "list", "--repo", "ghe.example.com/o/r"}
-	if !fallbackEligible(args, "Not Found (HTTP 404)") {
+	if _, eligible := fallbackHost(context.Background(), args, "Not Found (HTTP 404)"); !eligible {
 		t.Fatal("clean environment should allow enterprise fallback")
 	}
 	t.Setenv("GH_ENTERPRISE_TOKEN", "explicit")
-	if fallbackEligible(args, "Not Found (HTTP 404)") {
+	if _, eligible := fallbackHost(context.Background(), args, "Not Found (HTTP 404)"); eligible {
 		t.Fatal("GH_ENTERPRISE_TOKEN must disable enterprise fallback")
 	}
 	publicArgs := []string{"pr", "list", "--repo", "o/r"}
-	if !fallbackEligible(publicArgs, "Not Found (HTTP 404)") {
+	if _, eligible := fallbackHost(context.Background(), publicArgs, "Not Found (HTTP 404)"); !eligible {
 		t.Fatal("enterprise token must not block github.com fallback")
+	}
+}
+
+func TestAccountDiscoveryDoesNotCacheContextFailure(t *testing.T) {
+	calls := 0
+	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		calls++
+		if calls == 1 {
+			<-inv.Context.Done()
+			return bytes.Buffer{}, bytes.Buffer{}, githubContextError(inv.Context.Err())
+		}
+		return *bytes.NewBufferString(`{"hosts":{"github.com":[{"login":"ready","active":true,"state":"success"}]}}`), bytes.Buffer{}, nil
+	}, nil, nil)
+	listAccountsFunc = listAccounts
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if accounts := listAccounts(ctx, defaultGitHubHost); len(accounts) != 0 {
+		t.Fatalf("timed-out discovery returned accounts: %v", accounts)
+	}
+	accounts := listAccounts(context.Background(), defaultGitHubHost)
+	if calls != 2 || len(accounts) != 1 || accounts[0].Login != "ready" {
+		t.Fatalf("discovery retry = calls %d, accounts %v", calls, accounts)
 	}
 }
 
@@ -759,9 +979,9 @@ func TestAccountsAreCachedPerHost(t *testing.T) {
 	}, nil, nil)
 	listAccountsFunc = listAccounts
 
-	first := listAccounts("GHE.Example.COM.")
-	second := listAccounts("github.com")
-	listAccounts("ghe.example.com")
+	first := listAccounts(context.Background(), "GHE.Example.COM.")
+	second := listAccounts(context.Background(), "github.com")
+	listAccounts(context.Background(), "ghe.example.com")
 
 	if authStatusCalls != 1 {
 		t.Fatalf("one auth status probe should serve every host, got %d", authStatusCalls)
@@ -783,7 +1003,7 @@ func TestDefaultAccountTokenTargetsHost(t *testing.T) {
 	}, nil, nil)
 	accountTokenFunc = defaultAccountToken
 
-	if token, ok := accountTokenFunc("corp-dev", "ghe.example.com"); !ok || token != "tok" {
+	if token, ok := accountTokenFunc(context.Background(), "corp-dev", "ghe.example.com"); !ok || token != "tok" {
 		t.Fatalf("token lookup failed: %q %v", token, ok)
 	}
 	if len(seenHostname) != 1 || seenHostname[0] != "ghe.example.com" {

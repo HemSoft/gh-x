@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -202,31 +204,57 @@ func writeMonitorSearchAlias(sb *strings.Builder, alias string, kind monitorRowK
 	sb.WriteString("  }\n")
 }
 
-// monitorGHExecFunc is the gh choke point for monitor; swapped in tests.
-var monitorGHExecFunc = execGHActive
+// monitorGHExecFunc is the context-aware gh choke point for monitor; tests
+// replace it to keep refresh behavior deterministic and network-free.
+var monitorGHExecFunc = execGHActiveContext
 
-// executeMonitorFetch runs one batched query per GitHub host. A host failure
-// becomes a warning when another host succeeds, so a transient Enterprise
-// outage does not hide otherwise usable monitor data.
-func executeMonitorFetch(cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
+type monitorHostFetchOutcome struct {
+	Index  int
+	Result *monitorFetchResult
+	Err    error
+}
+
+// executeMonitorFetch runs one batched query per GitHub host under one caller
+// context. Hosts run concurrently so one timeout cannot consume the entire
+// refresh budget before another host can return useful data.
+func executeMonitorFetch(ctx context.Context, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
 	queries, err := buildMonitorHostQueries(cfg)
 	if err != nil {
 		return nil, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	outcomeChannel := make(chan monitorHostFetchOutcome, len(queries))
+	for index, request := range queries {
+		go func() {
+			partial, fetchErr := fetchMonitorHost(ctx, request, cfg, now)
+			outcomeChannel <- monitorHostFetchOutcome{Index: index, Result: partial, Err: fetchErr}
+		}()
+	}
+	outcomes := make([]monitorHostFetchOutcome, len(queries))
+	for range queries {
+		outcome := <-outcomeChannel
+		outcomes[outcome.Index] = outcome
 	}
 
 	combined := newMonitorFetchResult(cfg, now)
 	failedHosts := make([]string, 0)
 	successfulHosts := 0
-	for _, request := range queries {
-		partial, fetchErr := fetchMonitorHost(request, cfg, now)
-		if fetchErr != nil {
-			failedHosts = append(failedHosts, fmt.Sprintf("%s: %v", request.Host, fetchErr))
+	for index, request := range queries {
+		outcome := outcomes[index]
+		if outcome.Err != nil {
+			failedHosts = append(failedHosts, fmt.Sprintf("%s: %v", request.Host, outcome.Err))
 			continue
 		}
-		mergeMonitorFetchResult(combined, partial, len(queries) > 1, request.Host)
+		mergeMonitorFetchResult(combined, outcome.Result, len(queries) > 1, request.Host)
 		successfulHosts++
 	}
 	if successfulHosts == 0 {
+		if contextErr := githubContextError(ctx.Err()); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, fmt.Errorf("monitor refresh failed for all configured hosts: %s", strings.Join(failedHosts, "; "))
 	}
 	combined.Warnings = append(combined.Warnings, failedHosts...)
@@ -235,10 +263,10 @@ func executeMonitorFetch(cfg *monitorConfig, now time.Time) (*monitorFetchResult
 	return combined, nil
 }
 
-func fetchMonitorHost(request monitorHostQuery, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
+func fetchMonitorHost(ctx context.Context, request monitorHostQuery, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
 	args := []string{"api", "--hostname", request.Host, "graphql", "-f", fmt.Sprintf("query=%s", request.Query)}
-	stdoutBuf, stderrBuf, execErr := monitorGHExecFunc(args...)
-	if execErr != nil && !hasUsableGraphQLData(stdoutBuf.Bytes()) {
+	stdoutBuf, stderrBuf, execErr := monitorGHExecFunc(ctx, args...)
+	if execErr != nil && (errors.Is(execErr, context.Canceled) || errors.Is(execErr, context.DeadlineExceeded) || !hasUsableGraphQLData(stdoutBuf.Bytes())) {
 		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", execErr), stderrBuf.String())
 	}
 	result, err := parseMonitorHostResponse(stdoutBuf.Bytes(), cfg, request.Repositories, now)

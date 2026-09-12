@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -52,9 +56,12 @@ func TestExecuteMonitorFetchRoutesAndMergesHostGroups(t *testing.T) {
 	normalizeMonitorConfig(cfg)
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 
+	var callsMu sync.Mutex
 	var calls [][]string
-	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		callsMu.Lock()
 		calls = append(calls, append([]string(nil), args...))
+		callsMu.Unlock()
 		host := defaultGitHubHost
 		nameWithOwner := "owner/public"
 		updatedAt := "2026-08-23T11:00:00Z"
@@ -65,10 +72,10 @@ func TestExecuteMonitorFetchRoutesAndMergesHostGroups(t *testing.T) {
 		}
 		query := strings.Join(args, " ")
 		if strings.Contains(query, "repo:ghe.example.com/") {
-			t.Fatalf("GraphQL qualifier leaked host: %s", query)
+			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("GraphQL qualifier leaked host: %s", query)
 		}
 		if !strings.Contains(query, "repo:"+nameWithOwner) {
-			t.Fatalf("query for %s missing repo qualifier: %s", host, query)
+			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("query for %s missing repo qualifier: %s", host, query)
 		}
 		payload := `{"data":{"rateLimit":{"remaining":99,"resetAt":"2026-08-23T13:00:00Z"},` +
 			`"acc0":{"nameWithOwner":"` + nameWithOwner + `"},` +
@@ -79,18 +86,19 @@ func TestExecuteMonitorFetchRoutesAndMergesHostGroups(t *testing.T) {
 		return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
 	}
 
-	result, err := executeMonitorFetch(cfg, now)
+	result, err := executeMonitorFetch(context.Background(), cfg, now)
 	if err != nil {
 		t.Fatalf("executeMonitorFetch: %v", err)
 	}
 	if len(calls) != 2 {
 		t.Fatalf("expected one call per host, got %d", len(calls))
 	}
-	if got := strings.Join(calls[0], " "); !strings.Contains(got, "api --hostname github.com graphql") {
-		t.Fatalf("github.com call missing deterministic hostname routing: %v", calls[0])
+	callText := strings.Join([]string{strings.Join(calls[0], " "), strings.Join(calls[1], " ")}, "\n")
+	if !strings.Contains(callText, "api --hostname github.com graphql") {
+		t.Fatalf("github.com call missing deterministic hostname routing: %v", calls)
 	}
-	if got := strings.Join(calls[1], " "); !strings.Contains(got, "api --hostname ghe.example.com graphql") {
-		t.Fatalf("enterprise call missing hostname routing: %v", calls[1])
+	if !strings.Contains(callText, "api --hostname ghe.example.com graphql") {
+		t.Fatalf("enterprise call missing hostname routing: %v", calls)
 	}
 	if len(result.PRSections[0].Rows) != 1 || result.PRSections[0].Total != 2 {
 		t.Fatalf("host results were not merged: %+v", result.PRSections[0])
@@ -117,7 +125,7 @@ func TestExecuteMonitorFetchKeepsSuccessfulHostsWhenAnotherFails(t *testing.T) {
 	cfg := defaultMonitorConfig("owner/public")
 	cfg.Repos = append(cfg.Repos, "ghe.example.com/corp/private")
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
 		if len(args) >= 3 && args[1] == "--hostname" && args[2] != defaultGitHubHost {
 			return bytes.Buffer{}, *bytes.NewBufferString("connection refused"), errBoom()
 		}
@@ -126,7 +134,7 @@ func TestExecuteMonitorFetchKeepsSuccessfulHostsWhenAnotherFails(t *testing.T) {
 		return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
 	}
 
-	result, err := executeMonitorFetch(cfg, now)
+	result, err := executeMonitorFetch(context.Background(), cfg, now)
 	if err != nil {
 		t.Fatalf("successful host should keep refresh usable: %v", err)
 	}
@@ -142,6 +150,59 @@ func TestExecuteMonitorFetchKeepsSuccessfulHostsWhenAnotherFails(t *testing.T) {
 	}
 }
 
+func TestExecuteMonitorFetchKeepsSuccessfulHostWhenAnotherTimesOut(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+
+	cfg := defaultMonitorConfig("owner/public")
+	cfg.Repos = append(cfg.Repos, "ghe.example.com/corp/private")
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	monitorGHExecFunc = func(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		if len(args) >= 3 && args[1] == "--hostname" && args[2] == "ghe.example.com" {
+			<-ctx.Done()
+			return bytes.Buffer{}, bytes.Buffer{}, githubContextError(ctx.Err())
+		}
+		payload := `{"data":{"acc0":{"nameWithOwner":"owner/public"},"pr0":{"issueCount":1,"nodes":[{"number":3,"title":"t","state":"OPEN",` +
+			`"updatedAt":"2026-08-23T11:00:00Z","repository":{"nameWithOwner":"owner/public"}}]}}}`
+		return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	result, err := executeMonitorFetch(ctx, cfg, now)
+	if err != nil {
+		t.Fatalf("successful host should survive peer timeout: %v", err)
+	}
+	if len(result.PRSections[0].Rows) != 1 || result.PRSections[0].Rows[0].Repo != "owner/public" {
+		t.Fatalf("successful host data was lost: %+v", result.PRSections[0])
+	}
+	warning := strings.Join(result.Warnings, "; ")
+	if !strings.Contains(warning, "ghe.example.com") || !strings.Contains(warning, "github request timed out") {
+		t.Fatalf("timeout warning = %q", warning)
+	}
+}
+
+func TestFetchMonitorHostRejectsCanceledPartialData(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	monitorGHExecFunc = func(context.Context, ...string) (bytes.Buffer, bytes.Buffer, error) {
+		partial := `{"data":{"rateLimit":{"remaining":42,"resetAt":"2026-08-23T13:00:00Z"}}}`
+		return *bytes.NewBufferString(partial), bytes.Buffer{}, githubContextError(context.Canceled)
+	}
+	cfg := defaultMonitorConfig("owner/public")
+	queries, err := buildMonitorHostQueries(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fetchMonitorHost(ctx, queries[0], cfg, time.Now())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled partial response error = %v", err)
+	}
+}
+
 func TestExecuteMonitorFetchUsesRateLimitFromHostThatReturnsIt(t *testing.T) {
 	saved := monitorGHExecFunc
 	defer func() { monitorGHExecFunc = saved }()
@@ -150,7 +211,7 @@ func TestExecuteMonitorFetchUsesRateLimitFromHostThatReturnsIt(t *testing.T) {
 	cfg.Repos = append(cfg.Repos, "ghe.example.com/corp/private")
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	wantReset := "2026-08-23T13:00:00Z"
-	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
 		if len(args) >= 3 && args[1] == "--hostname" && args[2] != defaultGitHubHost {
 			payload := `{"data":{"rateLimit":{"remaining":42,"resetAt":"` + wantReset + `"}}}`
 			return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
@@ -158,7 +219,7 @@ func TestExecuteMonitorFetchUsesRateLimitFromHostThatReturnsIt(t *testing.T) {
 		return *bytes.NewBufferString(`{"data":{}}`), bytes.Buffer{}, nil
 	}
 
-	result, err := executeMonitorFetch(cfg, now)
+	result, err := executeMonitorFetch(context.Background(), cfg, now)
 	if err != nil {
 		t.Fatalf("executeMonitorFetch: %v", err)
 	}

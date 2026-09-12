@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -40,7 +41,12 @@ func TestRunMonitorCmdBootstrapErrorSurfaces(t *testing.T) {
 
 	var ran bool
 	newMonitorProgramFunc = func(model monitorModel) monitorProgram {
-		return fakeMonitorProgram{onRun: func() (tea.Model, error) { ran = true; return model, nil }}
+		return fakeMonitorProgram{onRun: func() (tea.Model, error) {
+			ran = true
+			model.refreshState.markStarted()
+			model.refreshState.markDone()
+			return model, nil
+		}}
 	}
 	// bootstrap reads the real user config dir; point it at a temp HOME.
 	isolateMonitorHome(t)
@@ -50,6 +56,56 @@ func TestRunMonitorCmdBootstrapErrorSurfaces(t *testing.T) {
 	}
 	if !ran {
 		t.Fatal("program did not run")
+	}
+}
+
+func TestRunMonitorCmdCancelsRefreshOnProgramError(t *testing.T) {
+	savedTTY := monitorTTYFunc
+	savedProgram := newMonitorProgramFunc
+	t.Cleanup(func() {
+		monitorTTYFunc = savedTTY
+		newMonitorProgramFunc = savedProgram
+	})
+	monitorTTYFunc = func() bool { return true }
+	isolateMonitorHome(t)
+
+	var refreshContext context.Context
+	newMonitorProgramFunc = func(model monitorModel) monitorProgram {
+		refreshContext = model.refreshContext
+		return fakeMonitorProgram{onRun: func() (tea.Model, error) {
+			model.refreshState.markStarted()
+			model.refreshState.markDone()
+			return model, errBoom()
+		}}
+	}
+
+	err := runMonitorCmd(nil, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "monitor session") {
+		t.Fatalf("program error = %v", err)
+	}
+	select {
+	case <-refreshContext.Done():
+	default:
+		t.Fatal("program error did not cancel monitor refresh context")
+	}
+}
+
+func TestStopMonitorRefreshDoesNotWaitForUnstartedCommand(t *testing.T) {
+	model := newMonitorModel(monitorTestConfig(), "cfg.yml", "", monitorSessionState{})
+	stopped := make(chan struct{})
+	go func() {
+		stopMonitorRefresh(model, nil)
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown waited for a refresh command that never started")
+	}
+	select {
+	case <-model.refreshContext.Done():
+	default:
+		t.Fatal("unstarted refresh context was not canceled")
 	}
 }
 
@@ -81,7 +137,7 @@ func TestMonitorSeedRepoHonorsGHRepoHostOverCheckoutRemote(t *testing.T) {
 		resetRemoteCache()
 	}()
 	t.Setenv("GH_REPO", "ghe.example.com/Acme/Widgets")
-	gitRemoteURLFunc = func() string { return "https://github.com/HemSoft/gh-x.git" }
+	gitRemoteURLFunc = func(context.Context) string { return "https://github.com/HemSoft/gh-x.git" }
 	resetRemoteCache()
 	monitorResolveRepoFunc = func(string) (string, string, error) {
 		return "Acme", "Widgets", nil
@@ -184,12 +240,12 @@ func TestExecuteMonitorFetchSuccessAndFailure(t *testing.T) {
 		"pr0":{"issueCount":1,"nodes":[{"number":3,"title":"t","state":"OPEN",
 		"updatedAt":"2026-08-22T07:00:00Z","repository":{"nameWithOwner":"owner/one"}}]},
 		"is0":{"issueCount":0,"nodes":[]}}}`
-	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	monitorGHExecFunc = func(context.Context, ...string) (bytes.Buffer, bytes.Buffer, error) {
 		var out bytes.Buffer
 		out.WriteString(payload)
 		return out, bytes.Buffer{}, nil
 	}
-	result, err := executeMonitorFetch(cfg, now)
+	result, err := executeMonitorFetch(context.Background(), cfg, now)
 	if err != nil {
 		t.Fatalf("fetch failed: %v", err)
 	}
@@ -197,10 +253,10 @@ func TestExecuteMonitorFetchSuccessAndFailure(t *testing.T) {
 		t.Fatalf("unexpected payload: %+v", result)
 	}
 
-	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	monitorGHExecFunc = func(context.Context, ...string) (bytes.Buffer, bytes.Buffer, error) {
 		return bytes.Buffer{}, bytes.Buffer{}, errBoom()
 	}
-	if _, err := executeMonitorFetch(cfg, now); err == nil {
+	if _, err := executeMonitorFetch(context.Background(), cfg, now); err == nil {
 		t.Fatal("gh failure must surface")
 	}
 }

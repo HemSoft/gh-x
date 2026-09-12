@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -16,7 +18,10 @@ func monitorTestConfig() *monitorConfig {
 }
 
 func newTestMonitorModel() monitorModel {
-	return newMonitorModel(monitorTestConfig(), "cfg.yml", "", monitorSessionState{})
+	model := newMonitorModel(monitorTestConfig(), "cfg.yml", "", monitorSessionState{})
+	model.refreshState = nil
+	model.refreshing = false
+	return model
 }
 
 func pressKey(text string) tea.KeyPressMsg {
@@ -202,6 +207,105 @@ func TestApplyFetchResultSurfacesPartialHostWarning(t *testing.T) {
 	footer := m.footerLine()
 	if !strings.Contains(footer, "warning:") || !strings.Contains(footer, "ghe.example.com") {
 		t.Fatalf("partial-host warning not visible in footer: %q", footer)
+	}
+}
+
+func TestQuitCancelsInFlightRefresh(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	t.Setenv(monitorRefreshTimeoutEnv, "5s")
+
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	allowStop := make(chan struct{})
+	stopped := make(chan struct{})
+	monitorGHExecFunc = func(ctx context.Context, _ ...string) (bytes.Buffer, bytes.Buffer, error) {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		<-allowStop
+		close(stopped)
+		return bytes.Buffer{}, bytes.Buffer{}, githubContextError(ctx.Err())
+	}
+	model := newTestMonitorModel()
+	model.refreshing = true
+	model.refreshState = newMonitorRefreshState()
+	fetchDone := make(chan tea.Msg, 1)
+	go func() { fetchDone <- model.initialMonitorCmd()() }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("monitor refresh did not start")
+	}
+
+	updatedModel, quitCmd := model.quitMonitor()
+	if !updatedModel.(monitorModel).quitting || quitCmd == nil {
+		t.Fatal("quit should flag and request program exit")
+	}
+	quitDone := make(chan tea.Msg, 1)
+	go func() { quitDone <- quitCmd() }()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("monitor child did not receive cancellation")
+	}
+	select {
+	case <-quitDone:
+		t.Fatal("monitor quit completed before the child stopped")
+	default:
+	}
+	close(allowStop)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("monitor child did not stop after quit")
+	}
+	select {
+	case <-quitDone:
+	case <-time.After(time.Second):
+		t.Fatal("monitor did not quit after the child stopped")
+	}
+	message := (<-fetchDone).(monitorFetchedMsg)
+	if !errors.Is(message.err, context.Canceled) {
+		t.Fatalf("canceled refresh error = %v", message.err)
+	}
+}
+
+func TestMonitorFetchCommandUsesConfiguredTotalDeadline(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	t.Setenv(monitorRefreshTimeoutEnv, "40ms")
+	monitorGHExecFunc = func(ctx context.Context, _ ...string) (bytes.Buffer, bytes.Buffer, error) {
+		<-ctx.Done()
+		return bytes.Buffer{}, bytes.Buffer{}, githubContextError(ctx.Err())
+	}
+
+	started := time.Now()
+	message := newTestMonitorModel().initialMonitorCmd()().(monitorFetchedMsg)
+	if !errors.Is(message.err, context.DeadlineExceeded) {
+		t.Fatalf("monitor deadline error = %v", message.err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("configured monitor deadline took %v", elapsed)
+	}
+}
+
+func TestMonitorTimeoutClearsRefreshAndKeepsLastData(t *testing.T) {
+	model := newTestMonitorModel()
+	previous := newMonitorFetchResult(model.cfg, time.Now())
+	model.data = previous
+	model.refreshing = true
+
+	updatedModel, _ := model.handleFetched(monitorFetchedMsg{err: githubContextError(context.DeadlineExceeded)})
+	updated := updatedModel.(monitorModel)
+	if updated.refreshing {
+		t.Fatal("timed-out refresh remained in progress")
+	}
+	if updated.data != previous {
+		t.Fatal("timed-out refresh replaced the last successful data")
+	}
+	if !strings.Contains(updated.refreshErr, "github request timed out") {
+		t.Fatalf("timeout warning = %q", updated.refreshErr)
 	}
 }
 

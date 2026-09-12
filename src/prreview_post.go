@@ -525,7 +525,7 @@ func submitPullRequestReview(options prReviewOptions, pr reviewPullRequest, requ
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, name, pr.Number)
 	// Review submission is identity-bound and non-idempotent, so it never
 	// falls back to another account.
-	_, stderrBuf, err := ghTransportFunc(ghInvocation{
+	_, stderrBuf, err := execGHActiveInvocation(ghInvocation{
 		Args:  []string{"api", endpoint, "--method", "POST", "--input", "-"},
 		Stdin: data,
 	})

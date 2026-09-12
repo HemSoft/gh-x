@@ -1,14 +1,55 @@
 package main
 
 import (
+	"context"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
 
+const (
+	monitorRefreshTimeoutEnv     = "GH_X_MONITOR_REFRESH_TIMEOUT"
+	defaultMonitorRefreshTimeout = 45 * time.Second
+)
+
 // monitorNowFunc is swappable in tests.
 var monitorNowFunc = time.Now
+
+type monitorRefreshState struct {
+	started     chan struct{}
+	done        chan struct{}
+	startedOnce sync.Once
+	doneOnce    sync.Once
+}
+
+func newMonitorRefreshState() *monitorRefreshState {
+	return &monitorRefreshState{started: make(chan struct{}), done: make(chan struct{})}
+}
+
+func (state *monitorRefreshState) markStarted() {
+	if state != nil {
+		state.startedOnce.Do(func() { close(state.started) })
+	}
+}
+
+func (state *monitorRefreshState) markDone() {
+	if state != nil {
+		state.doneOnce.Do(func() { close(state.done) })
+	}
+}
+
+func (state *monitorRefreshState) waitIfStarted() {
+	if state == nil {
+		return
+	}
+	select {
+	case <-state.started:
+		<-state.done
+	default:
+	}
+}
 
 // Update dispatches messages; each branch delegates to a small handler.
 func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -48,25 +89,39 @@ func (m monitorModel) startRefresh() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refreshing = true
-	return m, newMonitorFetchCmd(*m.cfg)
+	m.refreshState = newMonitorRefreshState()
+	return m, newMonitorFetchCmd(m.refreshContext, *m.cfg, m.refreshState)
 }
 
-// newMonitorFetchCmd snapshots the config for one refresh cycle.
-func newMonitorFetchCmd(cfg monitorConfig) tea.Cmd {
+// newMonitorFetchCmd snapshots the config and applies one total deadline to
+// every host query in the refresh cycle.
+func newMonitorFetchCmd(parent context.Context, cfg monitorConfig, state *monitorRefreshState) tea.Cmd {
+	if parent == nil {
+		parent = context.Background()
+	}
 	return func() tea.Msg {
-		result, err := executeMonitorFetch(&cfg, monitorNowFunc())
+		state.markStarted()
+		defer state.markDone()
+		timeout, err := configuredTimeout(monitorRefreshTimeoutEnv, defaultMonitorRefreshTimeout)
+		if err != nil {
+			return monitorFetchedMsg{err: err, at: monitorNowFunc()}
+		}
+		ctx, cancel := context.WithTimeout(parent, timeout)
+		defer cancel()
+		result, err := executeMonitorFetch(ctx, &cfg, monitorNowFunc())
 		return monitorFetchedMsg{result: result, err: err, at: monitorNowFunc()}
 	}
 }
 
-// initialMonitorCmd performs the first fetch.
-// The refreshing flag is set by the caller before Init runs.
+// initialMonitorCmd performs the first fetch under the model's lifecycle
+// context, allowing a quit command to cancel it.
 func (m monitorModel) initialMonitorCmd() tea.Cmd {
-	return newMonitorFetchCmd(*m.cfg)
+	return newMonitorFetchCmd(m.refreshContext, *m.cfg, m.refreshState)
 }
 
 func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) {
 	m.refreshing = false
+	m.refreshState = nil
 	if msg.err != nil {
 		m.refreshErr = sanitizeMonitorError(msg.err)
 		m.refreshWarn = ""
