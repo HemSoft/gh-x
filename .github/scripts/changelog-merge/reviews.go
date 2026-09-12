@@ -113,7 +113,16 @@ func ordinaryReviewReady(state reviewState, head string) (bool, bool, error) {
 	if state.HeadRefOID != head {
 		return false, false, errors.New("review response head does not match expected head")
 	}
-	if state.Comments.PageInfo.HasPreviousPage || state.Reviews.PageInfo.HasPreviousPage || state.ReviewThreads.PageInfo.HasNextPage || state.TimelineItems.PageInfo.HasPreviousPage {
+	if state.Comments.PageInfo.HasPreviousPage {
+		validated, err := hasCurrentHeadCodexSummary(state.Comments.Nodes, head)
+		if err != nil {
+			return false, false, err
+		}
+		if !validated {
+			return false, false, errors.New("review evidence truncated; manual review required")
+		}
+	}
+	if state.Reviews.PageInfo.HasPreviousPage || state.ReviewThreads.PageInfo.HasNextPage || state.TimelineItems.PageInfo.HasPreviousPage {
 		return false, false, errors.New("review evidence truncated; manual review required")
 	}
 	clean, latest, requested, err := ordinaryCodexEvidence(state, head)
@@ -233,6 +242,22 @@ func ordinaryCodexEvidence(state reviewState, head string) (time.Time, time.Time
 		}
 	}
 	return clean, latest, len(candidates) != 0, nil
+}
+
+func hasCurrentHeadCodexSummary(comments []reviewComment, head string) (bool, error) {
+	for _, comment := range comments {
+		if !strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") {
+			continue
+		}
+		_, matched, err := codexCommentActivity(comment, head)
+		if err != nil {
+			return false, err
+		}
+		if matched {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func ordinaryCodexCandidates(state reviewState, head string) ([]reviewComment, error) {

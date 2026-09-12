@@ -220,6 +220,24 @@ func TestCompletedSummaryIsCleanOnlyWithoutExactFindings(t *testing.T) {
 	}
 }
 
+func TestCurrentHeadSummaryAllowsOlderCommentsToBeTruncated(t *testing.T) {
+	completed := time.Now().Add(-time.Minute)
+	state := cleanState()
+	state.Comments.Nodes = []reviewComment{{
+		Body: strings.Replace(runningActivity(completed), "🔄 **Running** since", "✅ **Completed**", 1), Author: actor{"chatgpt-codex-connector"}, URL: "summary-url",
+	}}
+	state.Comments.PageInfo.HasPreviousPage = true
+	ready, requested, err := ordinaryReviewReady(state, testHead)
+	if !ready || !requested || err != nil {
+		t.Fatalf("validated current-head summary must make older comments irrelevant: %v,%v,%v", ready, requested, err)
+	}
+	state.Comments.Nodes = cleanState().Comments.Nodes
+	ready, _, err = ordinaryReviewReady(state, testHead)
+	if ready || err == nil || !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("truncated comments without a current-head summary must fail: %v,%v", ready, err)
+	}
+}
+
 func TestRunningSummarySupersedesExactApproval(t *testing.T) {
 	started := time.Now().Add(-time.Minute)
 	state := cleanState()
