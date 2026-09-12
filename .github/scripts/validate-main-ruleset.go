@@ -108,11 +108,8 @@ func main() {
 	loadJSON(".github/rulesets/main.json", &configuredRuleset)
 	ci, ciContent := loadWorkflowWithContent(".github/workflows/ci.yml")
 	autoRelease, autoReleaseContent := loadWorkflowWithContent(".github/workflows/auto-release.yml")
-	authoritativeRun, err := os.ReadFile(".github/scripts/verify-authoritative-run.sh")
-	if err != nil {
-		fail("read authoritative run verifier: " + err.Error())
-	}
-	authoritativeRunContent := string(authoritativeRun)
+	authoritativeRunContent := loadText(".github/scripts/verify-authoritative-run.sh")
+	qualityToolsContent := loadText(".github/quality-tools.env")
 
 	if err := validateRuleset(configuredRuleset); err != nil {
 		fail(err.Error())
@@ -206,6 +203,14 @@ func main() {
 	for _, job := range autoRelease.Jobs {
 		require(job.Uses != "./.github/workflows/ci.yml", "auto-release must not duplicate the CI suite")
 	}
+
+	mutationJob, ok := ci.Jobs["mutation"]
+	require(ok, "CI must define the mutation job")
+	fixtureStep := namedStep(mutationJob, "Verify mutation threshold fixtures")
+	require(strings.TrimSpace(fixtureStep.Run) == "bash .github/scripts/test-mutation-gate.sh", "CI must test distinct uncovered and live mutation failures")
+	mutationStep := namedStep(mutationJob, "Enforce: mutation efficacy ≥ 90% and mutator coverage ≥ 90%")
+	require(strings.TrimSpace(mutationStep.Run) == "bash .github/scripts/run-mutation-gate.sh", "CI must use the shared mutation threshold gate")
+	validateQualitySettings(qualityToolsContent)
 
 	validateTrustedReleaseHelper(releaseJob)
 
@@ -379,6 +384,14 @@ func loadJSON(path string, target any) {
 	}
 }
 
+func loadText(path string) string {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		fail("read " + path + ": " + err.Error())
+	}
+	return string(contents)
+}
+
 func loadWorkflowWithContent(path string) (workflow, string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -399,6 +412,20 @@ func stepIndex(job workflowJob, name string) int {
 	}
 	fail("missing workflow step: " + name)
 	return -1
+}
+
+func validateQualitySettings(contents string) {
+	for _, setting := range []string{"GREMLINS_VERSION=v0.6.0", "MUTATION_EFFICACY_THRESHOLD=90", "MUTATION_COVERAGE_THRESHOLD=90", "MUTATION_PACKAGE_SCOPE=./src"} {
+		key, _, _ := strings.Cut(setting, "=")
+		count := 0
+		for _, line := range strings.Split(contents, "\n") {
+			if strings.HasPrefix(line, key+"=") {
+				count++
+				require(line == setting, "quality settings must pin "+setting)
+			}
+		}
+		require(count == 1, "quality settings must contain exactly one "+key+" assignment")
+	}
 }
 
 func validateTrustedReleaseHelper(job workflowJob) {

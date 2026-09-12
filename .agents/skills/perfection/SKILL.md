@@ -1,6 +1,6 @@
 ---
 name: perfection
-description: "V1.1 - Commands: audit, coverage, crap, mutate, simplify, harden. Comprehensive Go code quality enforcement for gh-x: test coverage analysis, CRAP score tracking, mutation testing, simplification patterns, and static analysis. Use when improving code quality, writing tests, or before merging."
+description: "V1.2 - Commands: audit, coverage, crap, mutate, simplify, harden. Comprehensive Go code quality enforcement for gh-x: test coverage analysis, CRAP score tracking, mutation testing, simplification patterns, and static analysis. Use when improving code quality, writing tests, or before merging."
 compatibility: Requires go 1.23+, git
 hooks:
   PostToolUse:
@@ -114,7 +114,7 @@ first failure and executes these gates in order:
 17. `gocognit -over 15 -ignore "_test\.go" .` (must produce no output)
 18. Enforce a CRAP score below 30 for every production function.
 19. `npx --yes markdownlint-cli2@0.20.0 '**/*.md' '#node_modules' '#.agents' '#.github/agents'`
-20. `gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src`
+20. `gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 --threshold-mcover 90 ./src`
 
 Present results as a scorecard table:
 
@@ -139,7 +139,8 @@ Present results as a scorecard table:
 | Max Cyclomatic      | 4       | ≤10     | ✅     |
 | Max Cognitive       | 8       | ≤15     | ✅     |
 | CRAP Score          | 4.2     | <30     | ✅     |
-| Mutation Score      | 92%     | ≥90%    | ✅     |
+| Mutation efficacy   | 100%    | ≥90%    | ✅     |
+| Mutator coverage    | 90.17%  | ≥90%    | ✅     |
 | Markdown Lint       | pass    | pass    | ✅     |
 ```
 
@@ -207,7 +208,7 @@ Mutation testing validates test quality by injecting faults and checking if test
 **Primary tool**: [gremlins](https://github.com/go-gremlins/gremlins) — the actively maintained Go mutation testing framework used in CI.
 
 ```powershell
-gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src
+gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 --threshold-mcover 90 ./src
 ```
 
 **Timeout**: Mutation testing is CPU-intensive. CI allows 30 minutes. Locally, expect similar.
@@ -216,7 +217,8 @@ gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src
 - **Killed**: Test suite detected the mutation (good)
 - **Survived**: Mutation wasn't caught — test gap exists
 - **Not covered**: Mutated code has no test coverage at all
-- **Timed out**: Mutation caused infinite loop (counts as killed)
+- **Timed out**: Mutation exceeded its test timeout; Gremlins v0.6.0
+  reports it separately and excludes it from both ratios
 
 Report format:
 
@@ -229,8 +231,10 @@ Report format:
 | Killed          | 72    |
 | Survived        | 18    |
 | Not covered     | 30    |
-| Efficacy        | 60%   |
-| Threshold       | ≥90%  |
+| Test efficacy   | 60%   |
+| Mutator coverage | 80%  |
+| Efficacy floor  | ≥90%  |
+| Coverage floor  | ≥90%  |
 | Status          | ❌    |
 
 ### Surviving Mutations (tests need strengthening)
@@ -238,7 +242,7 @@ Report format:
    → Add test: single FAILURE item should return "fail" even with passing items
 ```
 
-**Target**: ≥90% mutation efficacy (CI-enforced gate).
+**Targets**: at least 90% mutation efficacy and at least 90% mutator coverage. CI and the local audit enforce both gates.
 
 #### Architectural Boundary: Untested I/O Functions
 
@@ -342,12 +346,22 @@ These thresholds are enforced in CI (`.github/workflows/ci.yml`). Every gate is 
 | Cognitive complexity | ≤15 per function | Quality Gates |
 | CRAP score | <30 per function | Quality Gates |
 | Mutation efficacy | ≥90% | Mutation Testing |
+| Mutator coverage | ≥90% | Mutation Testing |
 
 All jobs feed into a single **Quality Gate** status check required by branch protection.
 
 ## CI Integration
 
-The CI workflow (`.github/workflows/ci.yml`) is the single source of truth for enforcement. This skill document describes the same gates for local use. When running `audit`, `coverage`, `crap`, `mutate`, `simplify`, or `harden`, use the same thresholds and tools as CI.
+The CI workflow (`.github/workflows/ci.yml`) is the single source of truth for
+enforcement. This skill document describes the same gates for local use. When
+running `audit`, `coverage`, `crap`, `mutate`, `simplify`, or `harden`, use the
+same thresholds and tools as CI.
+
+Mutation thresholds and the package scope live in `.github/quality-tools.env`.
+Raise a floor only after a complete Perfection audit establishes a stable higher
+baseline. Update the checked-in value, CI fixture expectations, this table, and
+the example commands together. Never lower a floor to make a failing change
+pass.
 
 ### Main ruleset
 

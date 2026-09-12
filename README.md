@@ -562,6 +562,34 @@ Neither route is exposed to the LAN or public internet. The hub reads Codex stat
 - Uses [termenv](https://github.com/muesli/termenv) for color output, respecting `NO_COLOR` and `CLICOLOR` conventions
 - SSH host aliases (e.g., `github-work:org/repo`) are handled gracefully via `gh repo view` fallback
 
+## Quality limits
+
+CI and `.agents/skills/perfection/scripts/perfection-audit.ps1` enforce the
+same checked-in limits:
+
+| Gate | Limit |
+| --- | ---: |
+| Statement coverage | at least 70% |
+| Cyclomatic complexity | at most 10 per function |
+| Cognitive complexity | at most 15 per function |
+| CRAP score | below 30 per function |
+| Mutation efficacy | at least 90% |
+| Mutator coverage | at least 90% |
+
+The mutation gate runs Gremlins v0.6.0 against `./src` and keeps the killed,
+lived, not-covered, efficacy, and mutator-coverage metrics in its output:
+
+```powershell
+gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 `
+  --threshold-mcover 90 ./src
+```
+
+The tool version, thresholds, and package scope live in
+`.github/quality-tools.env`. Raise a mutation floor only after the complete
+Perfection audit establishes a stable higher baseline. Update that file, the
+mutation fixture expectations, this table, and the Perfection examples in the
+same change. Never lower a floor to make a failing change pass.
+
 ## Releases
 
 Every qualifying push to `main` runs the CI quality workflow. After all gates
