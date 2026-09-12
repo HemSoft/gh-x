@@ -23,6 +23,7 @@ type ghInvocation struct {
 	Args     []string
 	Stdin    []byte
 	ExtraEnv []string
+	Timeout  time.Duration
 }
 
 // ghTransportFunc is the lowest-level seam for executing gh; tests replace it
@@ -43,7 +44,13 @@ func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("gh CLI not found in PATH")
 		}
 	}
-	cmd := exec.Command(path, inv.Args...)
+	ctx := context.Background()
+	cancel := func() {}
+	if inv.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, inv.Timeout)
+	}
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, inv.Args...)
 	if len(inv.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(inv.Stdin)
 	}
@@ -54,6 +61,9 @@ func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		cmd.Env = append(os.Environ(), inv.ExtraEnv...)
 	}
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = fmt.Errorf("gh CLI timed out after %s: %w", inv.Timeout, ctxErr)
+		}
 		return stdout, stderr, err
 	}
 	return stdout, stderr, nil
@@ -195,7 +205,10 @@ var (
 	remotePlainHost  = regexp.MustCompile(`^([^/:@]+\.[^/:@]+)/`)
 )
 
-const sshConfigTimeout = 2 * time.Second
+const (
+	sshConfigTimeout  = 2 * time.Second
+	authStatusTimeout = 2 * time.Second
+)
 
 // sshConfigHostFunc resolves an SSH destination through the user's config.
 // Tests replace it so host routing stays deterministic and network-free.
@@ -239,7 +252,7 @@ func hostFromRemoteURL(raw string) string {
 	if matches := remoteSchemeHost.FindStringSubmatch(value); len(matches) == 3 {
 		host := normalizeRemoteHost(matches[2])
 		if isSSHRemoteScheme(matches[1]) {
-			host = configuredSSHHost(host)
+			host = configuredSSHHost(matches[2])
 		}
 		if plausibleRemoteHost(host) {
 			return host
@@ -247,7 +260,7 @@ func hostFromRemoteURL(raw string) string {
 		return ""
 	}
 	if matches := remoteScpHost.FindStringSubmatch(value); len(matches) == 2 {
-		host := configuredSSHHost(normalizeRemoteHost(matches[1]))
+		host := configuredSSHHost(matches[1])
 		if plausibleRemoteHost(host) {
 			return host
 		}
@@ -264,7 +277,7 @@ func hostFromRemoteURL(raw string) string {
 
 func isSSHRemoteScheme(scheme string) bool {
 	normalized := strings.ToLower(scheme)
-	return normalized == "ssh" || strings.HasSuffix(normalized, "+ssh")
+	return normalized == "ssh" || normalized == "ssh+git" || strings.HasSuffix(normalized, "+ssh")
 }
 
 // knownGitHubHostFunc identifies API hosts already configured in gh. Tests
@@ -272,6 +285,7 @@ func isSSHRemoteScheme(scheme string) bool {
 var knownGitHubHostFunc = knownGitHubHost
 
 func knownGitHubHost(host string) bool {
+	host = normalizeRemoteHost(host)
 	return host == defaultGitHubHost || len(listAccountsFunc(host)) > 0
 }
 
@@ -281,14 +295,15 @@ func knownGitHubHost(host string) bool {
 // missing binary, invalid config, timeout, or unknown destination falls back
 // to the original remote host.
 func configuredSSHHost(host string) string {
-	if host == "" || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || knownGitHubHostFunc(host) {
-		return host
+	normalizedHost := normalizeRemoteHost(host)
+	if normalizedHost == "" || strings.HasPrefix(normalizedHost, ".") || strings.HasSuffix(normalizedHost, ".") || knownGitHubHostFunc(normalizedHost) {
+		return normalizedHost
 	}
 	resolved := normalizeRemoteHost(sshConfigHostFunc(host))
 	if plausibleRemoteHost(resolved) && knownGitHubHostFunc(resolved) {
 		return resolved
 	}
-	return host
+	return normalizedHost
 }
 
 func defaultSSHConfigHost(host string) string {
@@ -401,7 +416,10 @@ func listAccounts(host string) []ghAccount {
 	if cached, ok := cachedAccounts[host]; ok {
 		return cached
 	}
-	stdout, _, err := ghTransportFunc(ghInvocation{Args: []string{"auth", "status", "--json", "hosts"}})
+	stdout, _, err := ghTransportFunc(ghInvocation{
+		Args:    []string{"auth", "status", "--json", "hosts"},
+		Timeout: authStatusTimeout,
+	})
 	if err != nil {
 		cachedAccounts[host] = []ghAccount{}
 		return cachedAccounts[host]

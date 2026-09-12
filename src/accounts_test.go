@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func resetAccountCache() {
@@ -573,7 +576,7 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 	withSSHConfigHostStub(t, func(host string) string {
 		resolverCalls++
 		switch host {
-		case "github.com-hemsoft", "workserver":
+		case "github.com-hemsoft", "GitHub.com-hemsoft", "workserver":
 			return defaultGitHubHost
 		case "ghe.example-alias":
 			return "ghe.example.com"
@@ -588,9 +591,11 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 		want  string
 	}{
 		{name: "scp dotted alias", value: "git@github.com-hemsoft:HemSoft/codexbar-ios.git", want: defaultGitHubHost},
+		{name: "case-sensitive SSH alias", value: "git@GitHub.com-hemsoft:HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "scp plain alias", value: "workserver:acme/widgets.git", want: defaultGitHubHost},
 		{name: "ssh scheme alias", value: "ssh://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "git plus ssh alias", value: "git+ssh://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
+		{name: "ssh plus git alias", value: "ssh+git://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "genuine enterprise ssh host", value: "git@ghe.example.com:acme/widgets.git", want: "ghe.example.com"},
 		{name: "enterprise SSH alias", value: "git@ghe.example-alias:acme/widgets.git", want: "ghe.example.com"},
 		{name: "canonical public host over SSH", value: "git@github.com:HemSoft/codexbar-ios.git", want: defaultGitHubHost},
@@ -603,8 +608,8 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 			}
 		})
 	}
-	if resolverCalls != 5 {
-		t.Fatalf("SSH resolver calls = %d, want 5", resolverCalls)
+	if resolverCalls != 7 {
+		t.Fatalf("SSH resolver calls = %d, want 7", resolverCalls)
 	}
 }
 
@@ -628,6 +633,24 @@ func TestParseSSHConfigHost(t *testing.T) {
 	}
 }
 
+func TestRunGHCmdHonorsTimeout(t *testing.T) {
+	const helperEnv = "GH_X_RUN_GH_TIMEOUT_HELPER"
+	if os.Getenv(helperEnv) == "1" {
+		time.Sleep(time.Minute)
+		return
+	}
+
+	t.Setenv("GH_PATH", os.Args[0])
+	_, _, err := runGHCmd(ghInvocation{
+		Args:     []string{"-test.run=^TestRunGHCmdHonorsTimeout$"},
+		ExtraEnv: []string{helperEnv + "=1"},
+		Timeout:  50 * time.Millisecond,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runGHCmd() error = %v, want context deadline exceeded", err)
+	}
+}
+
 func TestKnownGitHubHost(t *testing.T) {
 	saved := listAccountsFunc
 	listAccountsFunc = func(host string) []ghAccount {
@@ -641,8 +664,8 @@ func TestKnownGitHubHost(t *testing.T) {
 	if !knownGitHubHost(defaultGitHubHost) {
 		t.Fatal("github.com must always be a known API host")
 	}
-	if !knownGitHubHost("ghe.example.com") {
-		t.Fatal("an authenticated Enterprise host must be known")
+	if !knownGitHubHost("GHE.Example.COM.") {
+		t.Fatal("an authenticated Enterprise host must be known after normalization")
 	}
 	if knownGitHubHost("ssh.ghe.example.com") {
 		t.Fatal("an unauthenticated SSH transport endpoint must not be an API host")
@@ -715,8 +738,10 @@ func TestFallbackEligibleRespectsHostOverrides(t *testing.T) {
 
 func TestAccountsAreCachedPerHost(t *testing.T) {
 	authStatusCalls := 0
+	seenAuthStatusTimeout := time.Duration(0)
 	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		authStatusCalls++
+		seenAuthStatusTimeout = inv.Timeout
 		payload := `{"hosts":{
 			"github.com":[{"login":"pub","active":true,"state":"success"}],
 			"ghe.example.com":[{"login":"ent","active":true,"state":"success"}]
@@ -731,6 +756,9 @@ func TestAccountsAreCachedPerHost(t *testing.T) {
 
 	if authStatusCalls != 1 {
 		t.Fatalf("one auth status probe should serve every host, got %d", authStatusCalls)
+	}
+	if seenAuthStatusTimeout != authStatusTimeout {
+		t.Fatalf("auth status timeout = %s, want %s", seenAuthStatusTimeout, authStatusTimeout)
 	}
 	if len(first) != 1 || first[0].Login != "ent" || len(second) != 1 || second[0].Login != "pub" {
 		t.Fatalf("per-host results mixed: ghe=%#v github=%#v", first, second)
