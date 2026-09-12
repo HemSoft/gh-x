@@ -8,10 +8,12 @@ fake="$temp_dir/gremlins"
 cat > "$fake" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
-args=" $* "
-[[ "$args" == *" --threshold-efficacy 90 "* ]]
-[[ "$args" == *" --threshold-mcover 90 "* ]]
-[[ "$args" == *" ./src "* ]]
+expected=(unleash --timeout-coefficient 10 --threshold-efficacy 90 --threshold-mcover 90 ./src)
+actual=("$@")
+[[ ${#actual[@]} -eq ${#expected[@]} ]]
+for index in "${!expected[@]}"; do
+  [[ "${actual[index]}" == "${expected[index]}" ]]
+done
 cat "$GREMLINS_FIXTURE"
 exit "${GREMLINS_FIXTURE_EXIT:-0}"
 FAKE
@@ -45,13 +47,13 @@ write_report "$uncovered" 90 0 11 100.00 89.11
 expect_failure "$uncovered" "Mutator coverage 89.11% is below 90%"
 
 live="$temp_dir/live.txt"
-write_report "$live" 9 1 0 90.00 100.00
-# Gremlins v0.6.0 treats equality as a threshold failure, so the deterministic
-# live-mutant fixture preserves that tool-level nonzero result.
-expect_failure "$live" "Gremlins failed with exit code 10" 10
+write_report "$live" 8 1 0 88.89 100.00
+expect_failure "$live" "Mutation efficacy 88.89% is below 90%" 10
 
 passing="$temp_dir/passing.txt"
-write_report "$passing" 91 0 9 100.00 91.00
-GREMLINS_BIN="$fake" GREMLINS_FIXTURE="$passing" bash "$repo_root/.github/scripts/run-mutation-gate.sh" >/dev/null
+write_report "$passing" 91 0 9 100.00 90.00
+# Equality satisfies the documented floor even though Gremlins v0.6.0 returns
+# its threshold code for an exact match.
+GREMLINS_BIN="$fake" GREMLINS_FIXTURE="$passing" GREMLINS_FIXTURE_EXIT=11 bash "$repo_root/.github/scripts/run-mutation-gate.sh" >/dev/null
 
 echo "Mutation threshold fixtures passed"

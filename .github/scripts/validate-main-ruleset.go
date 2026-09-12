@@ -210,9 +210,7 @@ func main() {
 	require(strings.TrimSpace(fixtureStep.Run) == "bash .github/scripts/test-mutation-gate.sh", "CI must test distinct uncovered and live mutation failures")
 	mutationStep := namedStep(mutationJob, "Enforce: mutation efficacy ≥ 90% and mutator coverage ≥ 90%")
 	require(strings.TrimSpace(mutationStep.Run) == "bash .github/scripts/run-mutation-gate.sh", "CI must use the shared mutation threshold gate")
-	for _, setting := range []string{"GREMLINS_VERSION=v0.6.0", "MUTATION_EFFICACY_THRESHOLD=90", "MUTATION_COVERAGE_THRESHOLD=90", "MUTATION_PACKAGE_SCOPE=./src"} {
-		require(strings.Contains(qualityToolsContent, setting+"\n"), "quality settings must pin "+setting)
-	}
+	validateQualitySettings(qualityToolsContent)
 
 	validateTrustedReleaseHelper(releaseJob)
 
@@ -414,6 +412,20 @@ func stepIndex(job workflowJob, name string) int {
 	}
 	fail("missing workflow step: " + name)
 	return -1
+}
+
+func validateQualitySettings(contents string) {
+	for _, setting := range []string{"GREMLINS_VERSION=v0.6.0", "MUTATION_EFFICACY_THRESHOLD=90", "MUTATION_COVERAGE_THRESHOLD=90", "MUTATION_PACKAGE_SCOPE=./src"} {
+		key, _, _ := strings.Cut(setting, "=")
+		count := 0
+		for _, line := range strings.Split(contents, "\n") {
+			if strings.HasPrefix(line, key+"=") {
+				count++
+				require(line == setting, "quality settings must pin "+setting)
+			}
+		}
+		require(count == 1, "quality settings must contain exactly one "+key+" assignment")
+	}
 }
 
 func validateTrustedReleaseHelper(job workflowJob) {

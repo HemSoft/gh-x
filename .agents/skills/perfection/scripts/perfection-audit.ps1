@@ -205,18 +205,18 @@ function Assert-MutationThresholds {
     if ($text -notmatch 'Test efficacy:\s*(?<efficacy>[0-9.]+)%') {
         throw 'Mutation output omitted test efficacy.'
     }
-    $efficacy = [double]$Matches.efficacy
+    $efficacy = [double]::Parse($Matches.efficacy, [System.Globalization.CultureInfo]::InvariantCulture)
     if ($text -notmatch 'Mutator coverage:\s*(?<coverage>[0-9.]+)%') {
         throw 'Mutation output omitted mutator coverage.'
     }
-    $mutatorCoverage = [double]$Matches.coverage
+    $mutatorCoverage = [double]::Parse($Matches.coverage, [System.Globalization.CultureInfo]::InvariantCulture)
     if ($efficacy -lt $EfficacyThreshold) {
         throw "Mutation efficacy $efficacy% is below $EfficacyThreshold%."
     }
     if ($mutatorCoverage -lt $CoverageThreshold) {
         throw "Mutator coverage $mutatorCoverage% is below $CoverageThreshold%."
     }
-    if ($exitCode -ne 0) {
+    if ($exitCode -notin @(0, 10, 11)) {
         throw "Mutation testing failed with exit code $exitCode."
     }
 }

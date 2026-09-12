@@ -10,6 +10,7 @@ source "$repo_root/.github/quality-tools.env"
 : "${MUTATION_PACKAGE_SCOPE:?missing mutation package scope}"
 
 gremlins_bin=${GREMLINS_BIN:-gremlins}
+cd "$repo_root"
 package_scope=${1:-$MUTATION_PACKAGE_SCOPE}
 results=$(mktemp)
 trap 'rm -f "$results"' EXIT
@@ -48,7 +49,9 @@ fi
 if [[ "$failed" == true ]]; then
   exit 1
 fi
-if (( gremlins_status != 0 )); then
+# Gremlins v0.6.0 returns threshold codes when a value equals its floor. The
+# parsed policy above treats equality as passing and still rejects lower values.
+if (( gremlins_status != 0 && gremlins_status != 10 && gremlins_status != 11 )); then
   echo "::error::Gremlins failed with exit code ${gremlins_status}"
   exit "$gremlins_status"
 fi
