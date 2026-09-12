@@ -226,7 +226,7 @@ func main() {
 	require(build.Env["TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}" && build.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release builds must bind the new or resumed tag and validated source")
 	require(
 		strings.Contains(build.Run, `build_date=$(git show -s --format=%cs "$RELEASE_SHA")`) && strings.Contains(build.Run, `go build -buildvcs=false -trimpath`) && strings.Contains(build.Run, `main.buildDate=${build_date}`),
-		"release builds must derive and embed a rerun-stable source date",
+		"release builds must disable VCS stamping, trim paths, and embed a source-derived date for deterministic retries",
 	)
 
 	attest := namedStep(releaseJob, "Attest release binaries")
