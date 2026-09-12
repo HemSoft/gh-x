@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -21,7 +22,10 @@ type review struct {
 	Author      actor
 	Commit      struct{ OID string }
 }
-type pageInfo struct{ HasNextPage, HasPreviousPage bool }
+type pageInfo struct {
+	HasNextPage, HasPreviousPage bool
+	StartCursor                  string
+}
 type timelineItem struct {
 	TypeName    string `json:"__typename"`
 	Body, URL   string
@@ -50,13 +54,17 @@ type reviewState struct {
 		Nodes    []struct{ IsResolved bool }
 		PageInfo pageInfo
 	}
-	TimelineItems struct {
-		Nodes    []timelineItem
-		PageInfo pageInfo
-	}
+	TimelineItems timelineConnection
 }
 
-const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid commits(last:1){nodes{commit{committedDate}}} comments(last:100){nodes{body url createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} timelineItems(last:100,itemTypes:[PULL_REQUEST_COMMIT,ISSUE_COMMENT,HEAD_REF_FORCE_PUSHED_EVENT]){nodes{__typename ... on IssueComment{body url createdAt author{login}} ... on PullRequestCommit{commit{oid}} ... on HeadRefForcePushedEvent{createdAt afterCommit{oid}}} pageInfo{hasPreviousPage}}}}}`
+type timelineConnection struct {
+	Nodes    []timelineItem
+	PageInfo pageInfo
+}
+
+const timelineFields = `nodes{__typename ... on IssueComment{body url createdAt author{login}} ... on PullRequestCommit{commit{oid}} ... on HeadRefForcePushedEvent{createdAt afterCommit{oid}}} pageInfo{hasPreviousPage startCursor}`
+const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid commits(last:1){nodes{commit{committedDate}}} comments(last:100){nodes{body url createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} timelineItems(last:100,itemTypes:[PULL_REQUEST_COMMIT,ISSUE_COMMENT,HEAD_REF_FORCE_PUSHED_EVENT]){` + timelineFields + `}}}}`
+const earlierTimelineQuery = `query($owner:String!,$repo:String!,$number:Int!,$before:String!){repository(owner:$owner,name:$repo){pullRequest(number:$number){timelineItems(last:100,before:$before,itemTypes:[PULL_REQUEST_COMMIT,ISSUE_COMMENT,HEAD_REF_FORCE_PUSHED_EVENT]){` + timelineFields + `}}}}`
 
 var (
 	reviewedCommit   = regexp.MustCompile("(?i)(?:\\*\\*)?Reviewed commit:(?:\\*\\*)?\\s*`?([0-9a-f]{10,40})\\b`?")
@@ -72,10 +80,39 @@ func fetchReviewState(gh command, cfg config, number string) (reviewState, error
 	owner, repo, _ := strings.Cut(cfg.repo, "/")
 	err := readJSON(gh, &response, "api", "graphql", "-f", "query="+reviewQuery, "-f", "owner="+owner, "-f", "repo="+repo, "-F", "number="+number)
 	state := response.Data.Repository.PullRequest
+	if err != nil {
+		return state, err
+	}
 	if len(state.Commits.Nodes) == 1 {
 		state.CommittedAt = state.Commits.Nodes[0].Commit.CommittedDate
 	}
-	return state, err
+	if err := fetchEarlierTimeline(gh, number, owner, repo, &state.TimelineItems); err != nil {
+		return state, err
+	}
+	return state, nil
+}
+
+func fetchEarlierTimeline(gh command, number, owner, repo string, timeline *timelineConnection) error {
+	for page := 0; timeline.PageInfo.HasPreviousPage; page++ {
+		if page == 100 || timeline.PageInfo.StartCursor == "" {
+			return errors.New("pull request timeline pagination is incomplete")
+		}
+		var response struct {
+			Data struct {
+				Repository struct {
+					PullRequest struct{ TimelineItems timelineConnection }
+				}
+			}
+		}
+		err := readJSON(gh, &response, "api", "graphql", "-f", "query="+earlierTimelineQuery, "-f", "owner="+owner, "-f", "repo="+repo, "-F", "number="+number, "-f", "before="+timeline.PageInfo.StartCursor)
+		if err != nil {
+			return fmt.Errorf("fetch earlier pull request timeline: %w", err)
+		}
+		earlier := response.Data.Repository.PullRequest.TimelineItems
+		timeline.Nodes = append(earlier.Nodes, timeline.Nodes...)
+		timeline.PageInfo = earlier.PageInfo
+	}
+	return nil
 }
 
 func codexActor(login string) bool {

@@ -174,6 +174,38 @@ func cleanState() reviewState {
 	return state
 }
 
+func TestFetchReviewStatePaginatesTimeline(t *testing.T) {
+	newer := timelineConnection{Nodes: []timelineItem{{TypeName: "IssueComment", URL: "newer"}}, PageInfo: pageInfo{HasPreviousPage: true, StartCursor: "cursor"}}
+	older := timelineConnection{Nodes: []timelineItem{{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}}}}
+	calls := 0
+	gh := func(args ...string) ([]byte, error) {
+		calls++
+		timeline := newer
+		if strings.Contains(strings.Join(args, " "), "before=cursor") {
+			timeline = older
+		}
+		return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"headRefOid": testHead, "timelineItems": timeline,
+		}}}}), nil
+	}
+	state, err := fetchReviewState(gh, testConfig, "12")
+	if err != nil || calls != 2 || len(state.TimelineItems.Nodes) != 2 || state.TimelineItems.Nodes[0].TypeName != "PullRequestCommit" || state.TimelineItems.PageInfo.HasPreviousPage {
+		t.Fatalf("timeline pagination failed: calls=%d state=%+v err=%v", calls, state.TimelineItems, err)
+	}
+}
+
+func TestFetchReviewStateRejectsMissingTimelineCursor(t *testing.T) {
+	gh := func(...string) ([]byte, error) {
+		timeline := timelineConnection{PageInfo: pageInfo{HasPreviousPage: true}}
+		return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"headRefOid": testHead, "timelineItems": timeline,
+		}}}}), nil
+	}
+	if _, err := fetchReviewState(gh, testConfig, "12"); err == nil || !strings.Contains(err.Error(), "pagination is incomplete") {
+		t.Fatalf("missing timeline cursor must fail closed: %v", err)
+	}
+}
+
 func TestReviewEvidence(t *testing.T) {
 	tests := []struct {
 		name                        string
