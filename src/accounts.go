@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 // defaultGitHubHost is the public GitHub host; every other resolved host is
@@ -112,7 +114,7 @@ func execGHActive(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 // targetHost resolves which GitHub host a command targets, following gh's own
 // precedence: an explicit --hostname, an explicit HOST/OWNER/REPO value on
 // --repo/-R, the GH_REPO environment variable, the current repository's git
-// remote, GH_HOST, then github.com.
+// remote after SSH alias resolution, GH_HOST, then github.com.
 func targetHost(args []string) string {
 	if host := hostFromHostnameArgs(args); host != "" {
 		return host
@@ -123,7 +125,7 @@ func targetHost(args []string) string {
 	if host := hostFromRepoValue(os.Getenv("GH_REPO")); host != "" {
 		return host
 	}
-	if host := hostFromRemoteURL(cachedRemoteURL()); host != "" {
+	if host := cachedRemoteTargetHost(); host != "" {
 		return host
 	}
 	if host := strings.TrimSpace(os.Getenv("GH_HOST")); host != "" {
@@ -160,20 +162,21 @@ func hostFromRepoArgs(args []string) string {
 var gitRemoteURLFunc = defaultGitRemoteURL
 
 var (
-	remoteMu       sync.Mutex
-	cachedRemote   string
-	remoteResolved bool
+	remoteMu         sync.Mutex
+	cachedRemoteHost string
+	remoteResolved   bool
 )
 
-// cachedRemoteURL memoizes the git remote probe for this process.
-func cachedRemoteURL() string {
+// cachedRemoteTargetHost memoizes both the git remote probe and SSH alias
+// resolution so commands in one process do not repeatedly invoke ssh -G.
+func cachedRemoteTargetHost() string {
 	remoteMu.Lock()
 	defer remoteMu.Unlock()
 	if !remoteResolved {
-		cachedRemote = gitRemoteURLFunc()
+		cachedRemoteHost = hostFromRemoteURL(gitRemoteURLFunc())
 		remoteResolved = true
 	}
-	return cachedRemote
+	return cachedRemoteHost
 }
 
 // defaultGitRemoteURL reads the origin remote of the current repository.
@@ -187,13 +190,19 @@ func defaultGitRemoteURL() string {
 }
 
 var (
-	remoteSchemeHost = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/]+@)?([^/:?#]+)`)
+	remoteSchemeHost = regexp.MustCompile(`^([a-zA-Z][a-zA-Z0-9+.-]*)://(?:[^@/]+@)?([^/:?#]+)`)
 	remoteScpHost    = regexp.MustCompile(`^(?:[^/@]+@)?([^:/]+):`)
 	remotePlainHost  = regexp.MustCompile(`^([^/:@]+\.[^/:@]+)/`)
 )
 
-// plausibleRemoteHost rejects SSH host aliases such as "workserver", which
-// have no dotted hostname, so a local alias is never treated as a GitHub
+const sshConfigTimeout = 2 * time.Second
+
+// sshConfigHostFunc resolves an SSH destination through the user's config.
+// Tests replace it so host routing stays deterministic and network-free.
+var sshConfigHostFunc = defaultSSHConfigHost
+
+// plausibleRemoteHost rejects unresolved SSH aliases such as "workserver",
+// which have no dotted hostname, so a local alias is never treated as a GitHub
 // hostname during remote-based inference.
 func plausibleRemoteHost(host string) bool {
 	return strings.Contains(host, ".") &&
@@ -219,21 +228,73 @@ func hostFromRepoValue(value string) string {
 }
 
 // hostFromRemoteURL extracts a hostname from https, ssh, scp-style (with or
-// without an ssh user), or bare host/path git remote URLs. SSH aliases and
-// anything unrecognizable return "" so inference degrades to the next signal.
+// without an ssh user), or bare host/path git remote URLs. SSH destinations
+// are resolved through ssh -G before they become API hosts; unrecognized
+// values return "" so inference degrades to the next signal.
 func hostFromRemoteURL(raw string) string {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return ""
 	}
-	for _, pattern := range []*regexp.Regexp{remoteSchemeHost, remoteScpHost, remotePlainHost} {
-		matches := pattern.FindStringSubmatch(value)
-		if len(matches) != 2 || matches[1] == "" {
-			continue
+	if matches := remoteSchemeHost.FindStringSubmatch(value); len(matches) == 3 {
+		host := normalizeRemoteHost(matches[2])
+		if isSSHRemoteScheme(matches[1]) {
+			host = configuredSSHHost(host)
 		}
+		if plausibleRemoteHost(host) {
+			return host
+		}
+		return ""
+	}
+	if matches := remoteScpHost.FindStringSubmatch(value); len(matches) == 2 {
+		host := configuredSSHHost(normalizeRemoteHost(matches[1]))
+		if plausibleRemoteHost(host) {
+			return host
+		}
+		return ""
+	}
+	if matches := remotePlainHost.FindStringSubmatch(value); len(matches) == 2 {
 		host := normalizeRemoteHost(matches[1])
 		if plausibleRemoteHost(host) {
 			return host
+		}
+	}
+	return ""
+}
+
+func isSSHRemoteScheme(scheme string) bool {
+	normalized := strings.ToLower(scheme)
+	return normalized == "ssh" || strings.HasSuffix(normalized, "+ssh")
+}
+
+// configuredSSHHost returns the configured HostName when it is suitable for a
+// gh API endpoint. A missing ssh binary, invalid config, timeout, or unresolved
+// alias falls back to the original remote host.
+func configuredSSHHost(host string) string {
+	if host == "" || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+		return host
+	}
+	if resolved := normalizeRemoteHost(sshConfigHostFunc(host)); plausibleRemoteHost(resolved) {
+		return resolved
+	}
+	return host
+}
+
+func defaultSSHConfigHost(host string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), sshConfigTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ssh", "-G", "--", host).Output()
+	if err != nil {
+		return ""
+	}
+	return parseSSHConfigHost(out)
+}
+
+func parseSSHConfigHost(output []byte) string {
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && strings.EqualFold(fields[0], "hostname") {
+			return normalizeRemoteHost(fields[1])
 		}
 	}
 	return ""

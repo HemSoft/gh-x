@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -657,6 +658,40 @@ func TestFetchGraphQLKeepsGenuineFailureClosed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "secondary rate limit") {
 		t.Fatalf("error should carry the actionable gh diagnostic, got %v", err)
+	}
+}
+
+func TestFetchSupplementalDataUsesConfiguredSSHHost(t *testing.T) {
+	t.Setenv("GH_REPO", "")
+	t.Setenv("GH_HOST", "")
+	withRemoteURLStub(t, "git@github.com-hemsoft:HemSoft/codexbar-ios.git")
+	withSSHConfigHostStub(t, func(host string) string {
+		if host != "github.com-hemsoft" {
+			t.Fatalf("SSH resolver host = %q, want github.com-hemsoft", host)
+		}
+		return defaultGitHubHost
+	})
+	savedBatch := fetchPRSupplementalBatchFunc
+	t.Cleanup(func() { fetchPRSupplementalBatchFunc = savedBatch })
+	fetchPRSupplementalBatchFunc = func(owner, name, host string, numbers []int) (map[int]prSupplementalInfo, map[int]bool, error) {
+		if owner != "HemSoft" || name != "codexbar-ios" || host != defaultGitHubHost {
+			t.Fatalf("supplemental target = %s/%s on %s, want HemSoft/codexbar-ios on github.com", owner, name, host)
+		}
+		if !reflect.DeepEqual(numbers, []int{335}) {
+			t.Fatalf("supplemental numbers = %v, want [335]", numbers)
+		}
+		return map[int]prSupplementalInfo{335: {
+			ClosingIssues:          []linkedReference{{Number: 305}},
+			ClosingIssuesAvailable: true,
+		}}, nil, nil
+	}
+
+	data, owner, name := fetchSupplementalData("HemSoft/codexbar-ios", []pullRequest{{Number: 335}})
+	if owner != "HemSoft" || name != "codexbar-ios" {
+		t.Fatalf("repository = %s/%s, want HemSoft/codexbar-ios", owner, name)
+	}
+	if len(data.Info[335].ClosingIssues) != 1 || data.Info[335].ClosingIssues[0].Number != 305 || len(data.Unavailable) != 0 {
+		t.Fatalf("supplemental data = %#v, want PR #335 linked to issue #305", data)
 	}
 }
 

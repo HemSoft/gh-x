@@ -18,8 +18,26 @@ func resetAccountCache() {
 func resetRemoteCache() {
 	remoteMu.Lock()
 	defer remoteMu.Unlock()
-	cachedRemote = ""
+	cachedRemoteHost = ""
 	remoteResolved = false
+}
+
+func withSSHConfigHostStub(t *testing.T, stub func(string) string) {
+	t.Helper()
+	saved := sshConfigHostFunc
+	sshConfigHostFunc = stub
+	t.Cleanup(func() { sshConfigHostFunc = saved })
+}
+
+func withRemoteURLStub(t *testing.T, remote string) {
+	t.Helper()
+	saved := gitRemoteURLFunc
+	gitRemoteURLFunc = func() string { return remote }
+	resetRemoteCache()
+	t.Cleanup(func() {
+		gitRemoteURLFunc = saved
+		resetRemoteCache()
+	})
 }
 
 func withFallbackStubs(t *testing.T, transport func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error), accounts []ghAccount, tokens map[string]string) *bytes.Buffer {
@@ -349,6 +367,80 @@ func TestParseAuthStatusJSONInvalidPayload(t *testing.T) {
 	}
 }
 
+func TestTargetHostResolvesDottedSSHRemoteAlias(t *testing.T) {
+	t.Setenv("GH_REPO", "")
+	t.Setenv("GH_HOST", "ghe.fallback.example")
+	savedRemote := gitRemoteURLFunc
+	savedResolver := sshConfigHostFunc
+	t.Cleanup(func() {
+		gitRemoteURLFunc = savedRemote
+		sshConfigHostFunc = savedResolver
+		resetRemoteCache()
+	})
+	gitRemoteURLFunc = func() string {
+		return "git@github.com-hemsoft:HemSoft/codexbar-ios.git"
+	}
+	resolverCalls := 0
+	sshConfigHostFunc = func(host string) string {
+		resolverCalls++
+		if host != "github.com-hemsoft" {
+			t.Fatalf("SSH resolver host = %q, want github.com-hemsoft", host)
+		}
+		return defaultGitHubHost
+	}
+	resetRemoteCache()
+
+	for range 2 {
+		if got := targetHost(nil); got != defaultGitHubHost {
+			t.Fatalf("targetHost() = %q, want %q from SSH configuration", got, defaultGitHubHost)
+		}
+	}
+	if resolverCalls != 1 {
+		t.Fatalf("SSH resolver calls = %d, want 1", resolverCalls)
+	}
+}
+
+func TestTargetHostExplicitSourcesPrecedeSSHRemote(t *testing.T) {
+	savedRemote := gitRemoteURLFunc
+	remoteCalls := 0
+	gitRemoteURLFunc = func() string {
+		remoteCalls++
+		return "git@github.com-hemsoft:HemSoft/codexbar-ios.git"
+	}
+	withSSHConfigHostStub(t, func(host string) string {
+		t.Fatalf("SSH resolver unexpectedly called for %q", host)
+		return ""
+	})
+	t.Cleanup(func() {
+		gitRemoteURLFunc = savedRemote
+		resetRemoteCache()
+	})
+
+	tests := []struct {
+		name string
+		args []string
+		repo string
+		want string
+	}{
+		{name: "hostname argument", args: []string{"api", "--hostname", "ghe.arg.example", "graphql"}, want: "ghe.arg.example"},
+		{name: "host-prefixed repository argument", args: []string{"pr", "list", "--repo", "ghe.repo.example/acme/widgets"}, want: "ghe.repo.example"},
+		{name: "host-prefixed GH_REPO", args: []string{"pr", "list"}, repo: "ghe.env.example/acme/widgets", want: "ghe.env.example"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GH_REPO", test.repo)
+			t.Setenv("GH_HOST", "ghe.fallback.example")
+			resetRemoteCache()
+			if got := targetHost(test.args); got != test.want {
+				t.Fatalf("targetHost() = %q, want %q", got, test.want)
+			}
+		})
+	}
+	if remoteCalls != 0 {
+		t.Fatalf("git remote probes = %d, want 0 for explicit sources", remoteCalls)
+	}
+}
+
 func TestTargetHost(t *testing.T) {
 	t.Setenv("GH_HOST", "")
 	resetRemoteCache()
@@ -385,6 +477,7 @@ func TestTargetHostUsesRepoEnvAndGitRemote(t *testing.T) {
 	t.Setenv("GH_HOST", "")
 	resetRemoteCache()
 	savedRemote := gitRemoteURLFunc
+	withSSHConfigHostStub(t, func(host string) string { return host })
 	t.Cleanup(func() { gitRemoteURLFunc = savedRemote; resetRemoteCache() })
 
 	t.Run("GH_REPO with host prefix", func(t *testing.T) {
@@ -434,6 +527,7 @@ func TestTargetHostUsesRepoEnvAndGitRemote(t *testing.T) {
 }
 
 func TestHostFromRemoteURL(t *testing.T) {
+	withSSHConfigHostStub(t, func(host string) string { return host })
 	cases := map[string]string{
 		"https://ghe.example.com/acme/widgets.git": "ghe.example.com",
 		"ssh://git@ghe.example.com/acme/widgets":   "ghe.example.com",
@@ -454,6 +548,72 @@ func TestHostFromRemoteURL(t *testing.T) {
 		if got := hostFromRemoteURL(input); got != want {
 			t.Errorf("hostFromRemoteURL(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
+	resolverCalls := 0
+	withSSHConfigHostStub(t, func(host string) string {
+		resolverCalls++
+		switch host {
+		case "github.com-hemsoft", "workserver":
+			return defaultGitHubHost
+		default:
+			return host
+		}
+	})
+
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "scp dotted alias", value: "git@github.com-hemsoft:HemSoft/codexbar-ios.git", want: defaultGitHubHost},
+		{name: "scp plain alias", value: "workserver:acme/widgets.git", want: defaultGitHubHost},
+		{name: "ssh scheme alias", value: "ssh://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
+		{name: "git plus ssh alias", value: "git+ssh://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
+		{name: "genuine enterprise ssh host", value: "git@ghe.example.com:acme/widgets.git", want: "ghe.example.com"},
+		{name: "https host is not an SSH alias", value: "https://github.com-hemsoft/HemSoft/codexbar-ios.git", want: "github.com-hemsoft"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := hostFromRemoteURL(test.value); got != test.want {
+				t.Fatalf("hostFromRemoteURL(%q) = %q, want %q", test.value, got, test.want)
+			}
+		})
+	}
+	if resolverCalls != 5 {
+		t.Fatalf("SSH resolver calls = %d, want 5", resolverCalls)
+	}
+}
+
+func TestParseSSHConfigHost(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{name: "configured public host", output: "host github.com-hemsoft\nhostname GitHub.COM.\nuser git\n", want: defaultGitHubHost},
+		{name: "configured enterprise host", output: "hostname ghe.example.com\n", want: "ghe.example.com"},
+		{name: "missing hostname", output: "user git\nport 22\n"},
+		{name: "malformed hostname", output: "hostname\nhostname too many fields\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := parseSSHConfigHost([]byte(test.output)); got != test.want {
+				t.Fatalf("parseSSHConfigHost() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestConfiguredSSHHostFallsBack(t *testing.T) {
+	withSSHConfigHostStub(t, func(string) string { return "" })
+	if got := configuredSSHHost("ghe.example.com"); got != "ghe.example.com" {
+		t.Fatalf("configuredSSHHost() = %q, want original Enterprise host", got)
+	}
+	if got := configuredSSHHost("workserver"); got != "workserver" {
+		t.Fatalf("configuredSSHHost() = %q, want unresolved alias", got)
 	}
 }
 
