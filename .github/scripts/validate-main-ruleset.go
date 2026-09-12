@@ -207,19 +207,22 @@ func main() {
 		require(job.Uses != "./.github/workflows/ci.yml", "auto-release must not duplicate the CI suite")
 	}
 
+	validateTrustedReleaseHelper(releaseJob)
+
 	check := namedStep(releaseJob, "Check whether release is needed")
+	require(stepIndex(releaseJob, "Load trusted release helper") < stepIndex(releaseJob, "Check whether release is needed"), "trusted release helper must load before any release decision")
 	require(check.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release check must receive the validated SHA through env")
-	require(strings.TrimSpace(check.Run) == "go run ./.github/scripts/release-plan check", "release check must use the tested release-plan command")
+	require(strings.TrimSpace(check.Run) == `go run "$RUNNER_TEMP/release-plan.go" check`, "release check must use the trusted release-plan command")
 
 	version := namedStep(releaseJob, "Determine next version")
 	require(version.Env["LATEST_TAG"] == "${{ steps.check.outputs.latest }}", "version step must receive the latest tag through env")
 	require(version.Env["VERSION_BASE_TAG"] == "${{ steps.check.outputs.version_base }}", "version step must reserve versions across all semantic tags")
-	require(strings.TrimSpace(version.Run) == "go run ./.github/scripts/release-plan version", "version step must use the tested release-plan command")
+	require(strings.TrimSpace(version.Run) == `go run "$RUNNER_TEMP/release-plan.go" version`, "version step must use the trusted release-plan command")
 
 	notes := namedStep(releaseJob, "Generate release notes")
 	require(notes.Env["LATEST_TAG"] == "${{ steps.check.outputs.latest }}", "release notes must receive the latest tag through env")
 	require(notes.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "release notes must receive the calculated release tag through env")
-	require(strings.TrimSpace(notes.Run) == "go run ./.github/scripts/release-plan notes", "release notes must use the tested release-plan command")
+	require(strings.TrimSpace(notes.Run) == `go run "$RUNNER_TEMP/release-plan.go" notes`, "release notes must use the trusted release-plan command")
 
 	build := namedStep(releaseJob, "Build cross-platform binaries")
 	require(build.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "new and resumed releases must build the complete asset set")
@@ -240,7 +243,7 @@ func main() {
 	require(create.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "new and resumed releases must reconcile assets")
 	require(create.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release creation must receive the validated SHA through env")
 	require(create.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "release creation must receive the new or resumed release tag")
-	require(strings.TrimSpace(create.Run) == "go run ./.github/scripts/release-plan create", "release creation must use the tested release-plan command")
+	require(strings.TrimSpace(create.Run) == `go run "$RUNNER_TEMP/release-plan.go" create`, "release creation must use the trusted release-plan command")
 
 	existingNotes := namedStep(releaseJob, "Load existing release notes")
 	require(existingNotes.ID == "existing_release", "existing release notes step must expose its outcome")
@@ -259,7 +262,7 @@ func main() {
 	require(changelog.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "changelog update must run for new and confirmed existing releases")
 	require(changelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog update must receive the new or resumed release tag")
 	require(strings.Contains(changelog.Run, "git switch --detach origin/main"), "changelog reconciliation must start from current main")
-	require(strings.Contains(changelog.Run, "go run ./.github/scripts/release-plan changelog"), "release workflow must use the tested changelog updater")
+	require(strings.Contains(changelog.Run, `go run "$RUNNER_TEMP/release-plan.go" changelog`), "release workflow must use the trusted changelog updater")
 
 	mergeChangelog := namedStep(releaseJob, "Queue guarded changelog auto-merge and await completion")
 	require(mergeChangelog.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "changelog pull request must run for new and confirmed existing releases")
@@ -396,6 +399,12 @@ func stepIndex(job workflowJob, name string) int {
 	}
 	fail("missing workflow step: " + name)
 	return -1
+}
+
+func validateTrustedReleaseHelper(job workflowJob) {
+	trustedHelper := namedStep(job, "Load trusted release helper")
+	require(trustedHelper.Env["TRUSTED_HELPER_SHA"] == "${{ github.workflow_sha }}", "release helper must bind to the trusted workflow revision")
+	require(strings.Contains(trustedHelper.Run, `git fetch --no-tags origin "$TRUSTED_HELPER_SHA"`) && strings.Contains(trustedHelper.Run, `git show "$TRUSTED_HELPER_SHA:.github/scripts/release-plan/main.go" > "$RUNNER_TEMP/release-plan.go"`), "release helper must load from the trusted workflow revision outside the target checkout")
 }
 
 func namedStep(job workflowJob, name string) workflowStep {
