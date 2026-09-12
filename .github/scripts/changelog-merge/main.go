@@ -18,7 +18,7 @@ var branchPattern = regexp.MustCompile(`^chore/changelog-(0|[1-9][0-9]*)\.(0|[1-
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
-type config struct{ repo, branch, head, number, scope string }
+type config struct{ repo, branch, head, number, scope, setup string }
 type command func(...string) ([]byte, error)
 type pullRequest struct {
 	Number       int
@@ -59,6 +59,7 @@ func main() {
 		head:   head,
 		number: os.Getenv("PULL_REQUEST_NUMBER"),
 		scope:  os.Getenv("REVIEW_SCOPE"),
+		setup:  os.Getenv("REVIEW_SETUP_AT"),
 	}
 	if err := run(ctx, cfg, os.Args[1:], ghCommand(ctx)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -319,7 +320,12 @@ func pollReview(gh command, cfg config, number string, changelogOnly bool) (bool
 	if err != nil {
 		return false, err
 	}
-	ready, _, err := reviewReady(state, cfg.head)
+	var ready bool
+	if changelogOnly {
+		ready, _, err = reviewReady(state, cfg.head)
+	} else {
+		ready, _, err = ordinaryReviewReady(state, cfg.head)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -341,8 +347,13 @@ func waitForReviewGate(ctx context.Context, gh command, cfg config) error {
 		var response struct {
 			CheckRuns []checkRun `json:"check_runs"`
 		}
-		if err := readJSON(gh, &response, "api", "repos/"+cfg.repo+"/commits/"+cfg.head+"/check-runs?check_name=Changelog%20AI%20Review&filter=latest"); err != nil {
+		if err := readJSON(gh, &response, "api", "repos/"+cfg.repo+"/commits/"+cfg.head+"/check-runs?check_name=Current-head%20Codex%20Review&filter=latest"); err != nil {
 			return err
+		}
+		if len(response.CheckRuns) == 0 {
+			if err := readJSON(gh, &response, "api", "repos/"+cfg.repo+"/commits/"+cfg.head+"/check-runs?check_name=Changelog%20AI%20Review&filter=latest"); err != nil {
+				return err
+			}
 		}
 		passed, err := passingReviewGate(response.CheckRuns, cfg.head)
 		if err != nil {
@@ -352,7 +363,7 @@ func waitForReviewGate(ctx context.Context, gh command, cfg config) error {
 			return nil
 		}
 		if err := pause(ctx); err != nil {
-			return fmt.Errorf("no passing current-head Changelog AI Review job; keep PR open: %w", err)
+			return fmt.Errorf("no passing Current-head Codex Review job; keep PR open: %w", err)
 		}
 	}
 }
@@ -364,17 +375,17 @@ func passingReviewGate(checks []checkRun, head string) (bool, error) {
 		return false, nil
 	}
 	for _, check := range checks {
-		if check.App.Slug != "github-actions" || check.Name != "Changelog AI Review" {
+		if check.App.Slug != "github-actions" || check.Name != "Current-head Codex Review" && check.Name != "Changelog AI Review" {
 			continue
 		}
 		if check.HeadSHA != head {
-			return false, errors.New("changelog review gate head mismatch")
+			return false, errors.New("Codex review gate head mismatch")
 		}
 		if check.Status != "completed" {
 			return false, nil
 		}
 		if check.Conclusion != "success" {
-			return false, errors.New("changelog AI review gate failed")
+			return false, errors.New("current-head Codex review gate failed")
 		}
 		return true, nil
 	}

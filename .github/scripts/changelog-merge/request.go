@@ -160,10 +160,11 @@ func pendingOrdinaryReview(state reviewState, cfg config, number string, now tim
 		return err
 	}
 	if activity.CreatedAt.IsZero() {
-		if state.CommittedAt.IsZero() {
-			return errors.New("pull request commit lacks a timestamp; inspect review history before retrying")
+		deadline, err := ordinarySetupDeadline(state, cfg)
+		if err != nil {
+			return err
 		}
-		if now.Before(state.CommittedAt.Add(reviewWindow)) {
+		if now.Before(deadline) {
 			return nil
 		}
 		return reviewBlocked(cfg, number, activity, "", "no current-head Codex activity; request once with @codex review and rerun CI")
@@ -180,6 +181,21 @@ func pendingOrdinaryReview(state reviewState, cfg config, number string, now tim
 		return reviewBlocked(cfg, number, activity, activity.URL, "Codex review timed out at "+deadline.Format(time.RFC3339)+"; inspect the current-head activity, do not rerun to reset its deadline")
 	}
 	return nil
+}
+
+func ordinarySetupDeadline(state reviewState, cfg config) (time.Time, error) {
+	started := state.CommittedAt
+	if cfg.setup != "" {
+		eventTime, err := time.Parse(time.RFC3339Nano, cfg.setup)
+		if err != nil {
+			return time.Time{}, errors.New("pull request event has an invalid review setup timestamp")
+		}
+		started = laterTime(started, eventTime)
+	}
+	if started.IsZero() {
+		return time.Time{}, errors.New("pull request review setup lacks a timestamp; inspect review history before retrying")
+	}
+	return started.Add(reviewWindow), nil
 }
 
 func ordinaryReviewAnchor(state reviewState, head string, after time.Time) (reviewComment, error) {

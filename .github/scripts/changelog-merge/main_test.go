@@ -174,6 +174,80 @@ func cleanState() reviewState {
 	return state
 }
 
+func TestFetchReviewStatePaginatesTimeline(t *testing.T) {
+	newer := timelineConnection{Nodes: []timelineItem{{TypeName: "IssueComment", URL: "newer"}}, PageInfo: pageInfo{HasPreviousPage: true, StartCursor: "cursor"}}
+	older := timelineConnection{Nodes: []timelineItem{{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}}}}
+	calls := 0
+	gh := func(args ...string) ([]byte, error) {
+		calls++
+		timeline := newer
+		if strings.Contains(strings.Join(args, " "), "before=cursor") {
+			timeline = older
+		}
+		return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"headRefOid": testHead, "timelineItems": timeline,
+		}}}}), nil
+	}
+	state, err := fetchReviewState(gh, testConfig, "12")
+	if err != nil || calls != 2 || len(state.TimelineItems.Nodes) != 2 || state.TimelineItems.Nodes[0].TypeName != "PullRequestCommit" || state.TimelineItems.PageInfo.HasPreviousPage {
+		t.Fatalf("timeline pagination failed: calls=%d state=%+v err=%v", calls, state.TimelineItems, err)
+	}
+}
+
+func TestFetchReviewStatePaginatesComments(t *testing.T) {
+	newer := commentConnection{Nodes: []reviewComment{{URL: "newer"}}, PageInfo: pageInfo{HasPreviousPage: true, StartCursor: "comment-cursor"}}
+	older := commentConnection{Nodes: []reviewComment{{URL: "older"}}}
+	calls := 0
+	gh := func(args ...string) ([]byte, error) {
+		calls++
+		comments := newer
+		if strings.Contains(strings.Join(args, " "), "before=comment-cursor") {
+			comments = older
+		}
+		return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"headRefOid": testHead, "comments": comments,
+		}}}}), nil
+	}
+	state, err := fetchReviewState(gh, testConfig, "12")
+	if err != nil || calls != 2 || len(state.Comments.Nodes) != 2 || state.Comments.Nodes[0].URL != "older" || state.Comments.PageInfo.HasPreviousPage {
+		t.Fatalf("comment pagination failed: calls=%d state=%+v err=%v", calls, state.Comments, err)
+	}
+}
+
+func TestPaginationCapsIncludeInitialPage(t *testing.T) {
+	comments := commentConnection{PageInfo: pageInfo{HasPreviousPage: true, StartCursor: "cursor"}}
+	commentCalls := 0
+	commentGH := func(...string) ([]byte, error) {
+		commentCalls++
+		return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{"comments": comments}}}}), nil
+	}
+	if err := fetchEarlierComments(commentGH, "12", "HemSoft", "gh-x", &comments); err == nil || commentCalls != maxReviewPages-1 {
+		t.Fatalf("comment cap excluded initial page: calls=%d err=%v", commentCalls, err)
+	}
+
+	timeline := timelineConnection{PageInfo: pageInfo{HasPreviousPage: true, StartCursor: "cursor"}}
+	timelineCalls := 0
+	timelineGH := func(...string) ([]byte, error) {
+		timelineCalls++
+		return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{"timelineItems": timeline}}}}), nil
+	}
+	if err := fetchEarlierTimeline(timelineGH, "12", "HemSoft", "gh-x", &timeline); err == nil || timelineCalls != maxReviewPages-1 {
+		t.Fatalf("timeline cap excluded initial page: calls=%d err=%v", timelineCalls, err)
+	}
+}
+
+func TestFetchReviewStateRejectsMissingTimelineCursor(t *testing.T) {
+	gh := func(...string) ([]byte, error) {
+		timeline := timelineConnection{PageInfo: pageInfo{HasPreviousPage: true}}
+		return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"headRefOid": testHead, "timelineItems": timeline,
+		}}}}), nil
+	}
+	if _, err := fetchReviewState(gh, testConfig, "12"); err == nil || !strings.Contains(err.Error(), "pagination is incomplete") {
+		t.Fatalf("missing timeline cursor must fail closed: %v", err)
+	}
+}
+
 func TestReviewEvidence(t *testing.T) {
 	tests := []struct {
 		name                        string
@@ -268,7 +342,7 @@ func TestEnableWaitsForReviewGateAndPinsMerge(t *testing.T) {
 			check.Output.Summary = "0 issues found"
 			return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
 		case strings.Contains(joined, "check-runs?"):
-			check := checkRun{Name: "Changelog AI Review", Status: "completed", Conclusion: "success", HeadSHA: testHead}
+			check := checkRun{Name: "Current-head Codex Review", Status: "completed", Conclusion: "success", HeadSHA: testHead}
 			check.App.Slug = "github-actions"
 			return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
 		case args[0] == "pr" && args[1] == "merge":
@@ -302,7 +376,7 @@ func TestAbsentOrFailedReviewGateCannotEnableMerge(t *testing.T) {
 				if conclusion == "absent" {
 					return []byte(`{"check_runs":[]}`), nil
 				}
-				check := checkRun{Name: "Changelog AI Review", Status: "completed", Conclusion: conclusion, HeadSHA: testHead}
+				check := checkRun{Name: "Current-head Codex Review", Status: "completed", Conclusion: conclusion, HeadSHA: testHead}
 				check.App.Slug = "github-actions"
 				return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
 			}
@@ -413,8 +487,17 @@ func TestAmbiguousRepeatedChecksFailClosed(t *testing.T) {
 	}
 }
 
+func TestLegacyChangelogGatePassesDuringRollout(t *testing.T) {
+	check := checkRun{Name: "Changelog AI Review", HeadSHA: testHead, Status: "completed", Conclusion: "success", StartedAt: time.Now()}
+	check.App.Slug = "github-actions"
+	ready, err := passingReviewGate([]checkRun{check}, testHead)
+	if !ready || err != nil {
+		t.Fatalf("legacy gate must remain valid during rollout, got %v,%v", ready, err)
+	}
+}
+
 func TestQueuedGateRerunWaitsForTimestamp(t *testing.T) {
-	old := checkRun{Name: "Changelog AI Review", HeadSHA: testHead, Status: "completed", Conclusion: "success", StartedAt: time.Now()}
+	old := checkRun{Name: "Current-head Codex Review", HeadSHA: testHead, Status: "completed", Conclusion: "success", StartedAt: time.Now()}
 	old.App.Slug = "github-actions"
 	queued := old
 	queued.StartedAt = time.Time{}
@@ -564,10 +647,10 @@ func TestNewFindingBeforeQueuePreventsAutoMerge(t *testing.T) {
 			check.Name = "cubic · AI code reviewer"
 			check.App.Slug = "cubic-dev-ai"
 			check.Output.Summary = "0 issues found"
-			if strings.Contains(joined, "check_name=Changelog") {
+			if strings.Contains(joined, "check_name=Current-head") {
 				gatePassed = true
 				check.App.Slug = "github-actions"
-				check.Name = "Changelog AI Review"
+				check.Name = "Current-head Codex Review"
 			}
 			return encode(t, map[string]any{"check_runs": []checkRun{check}}), nil
 		default:
