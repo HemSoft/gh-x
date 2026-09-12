@@ -599,11 +599,18 @@ digest mismatch.
 After downloading an asset, verify it with this exact command:
 
 ```powershell
-gh attestation verify .\windows-amd64.exe --repo HemSoft/gh-x
+$sourceCommit = gh release view v0.12.9 --repo HemSoft/gh-x `
+  --json targetCommitish --jq .targetCommitish
+gh attestation verify .\windows-amd64.exe `
+  --repo HemSoft/gh-x `
+  --signer-workflow HemSoft/gh-x/.github/workflows/auto-release.yml `
+  --source-digest $sourceCommit `
+  --predicate-type https://slsa.dev/provenance/v1
 ```
 
-The command must exit successfully and name `HemSoft/gh-x`, the trusted release
-workflow, and the expected source commit. To verify all downloaded assets, run
+Replace `v0.12.9` and the asset path with the downloaded release. The command
+must exit successfully and name `HemSoft/gh-x`, the trusted release workflow,
+and the expected source commit. To verify all downloaded assets, run
 the same command once per file. See the exact options and output fields on the
 [`gh attestation verify` manual page](https://cli.github.com/manual/gh_attestation_verify).
 

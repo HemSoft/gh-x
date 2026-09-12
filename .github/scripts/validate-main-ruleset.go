@@ -224,7 +224,10 @@ func main() {
 	build := namedStep(releaseJob, "Build cross-platform binaries")
 	require(build.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "new and resumed releases must build the complete asset set")
 	require(build.Env["TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}" && build.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release builds must bind the new or resumed tag and validated source")
-	require(strings.Contains(build.Run, `build_date=$(git show -s --format=%cs "$RELEASE_SHA")`), "release builds must use a rerun-stable source date")
+	require(
+		strings.Contains(build.Run, `build_date=$(git show -s --format=%cs "$RELEASE_SHA")`) && strings.Contains(build.Run, `main.buildDate=${build_date}`),
+		"release builds must derive and embed a rerun-stable source date",
+	)
 
 	attest := namedStep(releaseJob, "Attest release binaries")
 	require(attest.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "provenance must run for new and resumed releases")
@@ -371,11 +374,6 @@ func loadJSON(path string, target any) {
 	if err := json.Unmarshal(data, target); err != nil {
 		fail(fmt.Sprintf("parse %s: %v", path, err))
 	}
-}
-
-func loadWorkflow(path string) workflow {
-	result, _ := loadWorkflowWithContent(path)
-	return result
 }
 
 func loadWorkflowWithContent(path string) (workflow, string) {
