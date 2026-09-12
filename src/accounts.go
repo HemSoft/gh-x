@@ -50,7 +50,7 @@ func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		ctx, cancel = context.WithTimeout(ctx, inv.Timeout)
 	}
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, inv.Args...)
+	cmd := newGHCommand(ctx, path, inv)
 	if len(inv.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(inv.Stdin)
 	}
@@ -67,6 +67,14 @@ func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		return stdout, stderr, err
 	}
 	return stdout, stderr, nil
+}
+
+func newGHCommand(ctx context.Context, path string, inv ghInvocation) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, path, inv.Args...)
+	if inv.Timeout > 0 {
+		cmd.WaitDelay = subprocessWaitDelay
+	}
+	return cmd
 }
 
 var (
@@ -206,9 +214,9 @@ var (
 )
 
 const (
-	sshConfigTimeout   = 2 * time.Second
-	sshConfigWaitDelay = 100 * time.Millisecond
-	authStatusTimeout  = 2 * time.Second
+	sshConfigTimeout    = 2 * time.Second
+	authStatusTimeout   = 2 * time.Second
+	subprocessWaitDelay = 100 * time.Millisecond
 )
 
 // sshConfigHostFunc resolves an SSH destination through the user's config.
@@ -319,7 +327,7 @@ func defaultSSHConfigHost(host string) string {
 
 func newSSHConfigCommand(ctx context.Context, host string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "ssh", "-G", "--", host)
-	cmd.WaitDelay = sshConfigWaitDelay
+	cmd.WaitDelay = subprocessWaitDelay
 	return cmd
 }
 

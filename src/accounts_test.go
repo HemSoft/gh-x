@@ -615,8 +615,8 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 
 func TestNewSSHConfigCommandBoundsPipeDrain(t *testing.T) {
 	cmd := newSSHConfigCommand(context.Background(), "GitHub.com-hemsoft")
-	if cmd.WaitDelay != sshConfigWaitDelay {
-		t.Fatalf("ssh WaitDelay = %s, want %s", cmd.WaitDelay, sshConfigWaitDelay)
+	if cmd.WaitDelay != subprocessWaitDelay {
+		t.Fatalf("ssh WaitDelay = %s, want %s", cmd.WaitDelay, subprocessWaitDelay)
 	}
 	if got := strings.Join(cmd.Args, "|"); got != "ssh|-G|--|GitHub.com-hemsoft" {
 		t.Fatalf("ssh command args = %q", got)
@@ -640,6 +640,20 @@ func TestParseSSHConfigHost(t *testing.T) {
 				t.Fatalf("parseSSHConfigHost() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestNewGHCommandBoundsTimedPipeDrain(t *testing.T) {
+	timed := newGHCommand(context.Background(), os.Args[0], ghInvocation{
+		Args:    []string{"-test.run=^$"},
+		Timeout: time.Second,
+	})
+	if timed.WaitDelay != subprocessWaitDelay {
+		t.Fatalf("timed gh WaitDelay = %s, want %s", timed.WaitDelay, subprocessWaitDelay)
+	}
+	untimed := newGHCommand(context.Background(), os.Args[0], ghInvocation{})
+	if untimed.WaitDelay != 0 {
+		t.Fatalf("untimed gh WaitDelay = %s, want 0", untimed.WaitDelay)
 	}
 }
 
