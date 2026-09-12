@@ -32,12 +32,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Load trusted release helper
+      - name: Load trusted release helpers
         env:
           TRUSTED_HELPER_SHA: ${{ github.workflow_sha }}
         run: |
           git fetch --no-tags origin "$TRUSTED_HELPER_SHA"
           git show "$TRUSTED_HELPER_SHA:.github/scripts/release-plan/main.go" > "$RUNNER_TEMP/release-plan.go"
+          git show "$TRUSTED_HELPER_SHA:.github/scripts/release-targets/main.go" > "$RUNNER_TEMP/release-targets.go"
+          git show "$TRUSTED_HELPER_SHA:.github/release-targets-legacy.json" > "$RUNNER_TEMP/release-targets-legacy.json"
 
       - name: Check whether release is needed
         id: check
@@ -80,35 +82,17 @@ jobs:
       - name: Build cross-platform binaries
         if: steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'
         env:
-          TAG: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_OUTPUT_DIR: dist
         run: |
-          mkdir -p dist
-          tag="$TAG"
-          platforms=(
-            "darwin/amd64"
-            "darwin/arm64"
-            "freebsd/386"
-            "freebsd/amd64"
-            "freebsd/arm64"
-            "linux/386"
-            "linux/amd64"
-            "linux/arm"
-            "linux/arm64"
-            "windows/386"
-            "windows/amd64"
-            "windows/arm64"
-          )
-          build_date=$(git show -s --format=%cs "$RELEASE_SHA")
-          for platform in "${platforms[@]}"; do
-            os="${platform%/*}"
-            arch="${platform#*/}"
-            ext=""
-            [[ "$os" == "windows" ]] && ext=".exe"
-            output="dist/${os}-${arch}${ext}"
-            echo "Building ${output}..."
-            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w -X main.version=${tag} -X main.buildDate=${build_date}" -o "$output" ./src
-          done
+          RELEASE_BUILD_DATE="$(git show -s --format=%cs "$RELEASE_SHA")"
+          export RELEASE_BUILD_DATE
+          if [[ ! -f .github/release-targets.json ]]; then
+            RELEASE_TARGET_MANIFEST="$RUNNER_TEMP/release-targets-legacy.json"
+            export RELEASE_TARGET_MANIFEST
+          fi
+          go run "$RUNNER_TEMP/release-targets.go" build
 
       - name: Attest release binaries
         # Initial publication attests the complete set before any upload. A

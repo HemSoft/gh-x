@@ -166,6 +166,15 @@ func main() {
 	require(codexStep.Env["EXPECTED_HEAD"] == "${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}", "Codex review must bind the immutable head")
 	require(strings.Contains(codexStep.Run, `REVIEW_SCOPE="$review_scope" go run ./.github/scripts/changelog-merge review`), "Codex verification must select explicit ordinary or changelog scope")
 
+	crossBuild := namedStep(ci.Jobs["build-and-test"], "Build all release targets")
+	require(reflect.DeepEqual(crossBuild.Env, map[string]string{
+		"RELEASE_VERSION":    "ci",
+		"RELEASE_OUTPUT_DIR": "${{ runner.temp }}/release-targets",
+	}), "CI cross-build must use disposable output and a non-release version")
+	require(strings.TrimSpace(crossBuild.Run) == `RELEASE_BUILD_DATE="$(git show -s --format=%cs HEAD)"
+export RELEASE_BUILD_DATE
+go run ./.github/scripts/release-targets build`, "CI must build the canonical release target manifest")
+
 	gate := ci.Jobs["gate"]
 	require(gate.Name == "Quality Gate", "CI must publish the Quality Gate check")
 	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review", "codex-review", "performance"), "Quality Gate must depend on every build, quality, security, review, and performance job")
@@ -215,7 +224,7 @@ func main() {
 	validateTrustedReleaseHelper(releaseJob)
 
 	check := namedStep(releaseJob, "Check whether release is needed")
-	require(stepIndex(releaseJob, "Load trusted release helper") < stepIndex(releaseJob, "Check whether release is needed"), "trusted release helper must load before any release decision")
+	require(stepIndex(releaseJob, "Load trusted release helpers") < stepIndex(releaseJob, "Check whether release is needed"), "trusted release helpers must load before any release decision")
 	require(check.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release check must receive the validated SHA through env")
 	require(strings.TrimSpace(check.Run) == `go run "$RUNNER_TEMP/release-plan.go" check`, "release check must use the trusted release-plan command")
 
@@ -231,11 +240,18 @@ func main() {
 
 	build := namedStep(releaseJob, "Build cross-platform binaries")
 	require(build.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "new and resumed releases must build the complete asset set")
-	require(build.Env["TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}" && build.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release builds must bind the new or resumed tag and validated source")
-	require(
-		strings.Contains(build.Run, `build_date=$(git show -s --format=%cs "$RELEASE_SHA")`) && strings.Contains(build.Run, `go build -buildvcs=false -trimpath`) && strings.Contains(build.Run, `main.buildDate=${build_date}`),
-		"release builds must disable VCS stamping, trim paths, and embed a source-derived date for deterministic retries",
-	)
+	require(reflect.DeepEqual(build.Env, map[string]string{
+		"RELEASE_VERSION":    "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}",
+		"RELEASE_SHA":        "${{ github.event.workflow_run.head_sha }}",
+		"RELEASE_OUTPUT_DIR": "dist",
+	}), "release builds must bind the version, validated source, and output directory")
+	require(strings.TrimSpace(build.Run) == `RELEASE_BUILD_DATE="$(git show -s --format=%cs "$RELEASE_SHA")"
+export RELEASE_BUILD_DATE
+if [[ ! -f .github/release-targets.json ]]; then
+  RELEASE_TARGET_MANIFEST="$RUNNER_TEMP/release-targets-legacy.json"
+  export RELEASE_TARGET_MANIFEST
+fi
+go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the trusted canonical target builder with compatibility for pre-manifest tags")
 
 	attest := namedStep(releaseJob, "Attest release binaries")
 	require(attest.If == "steps.check.outputs.skip == 'false'", "provenance must bind only the initial release workflow source identity")
@@ -429,10 +445,12 @@ func validateQualitySettings(contents string) {
 }
 
 func validateTrustedReleaseHelper(job workflowJob) {
-	trustedHelper := namedStep(job, "Load trusted release helper")
-	require(trustedHelper.Env["TRUSTED_HELPER_SHA"] == "${{ github.workflow_sha }}", "release helper must bind to the trusted workflow revision")
+	trustedHelper := namedStep(job, "Load trusted release helpers")
+	require(trustedHelper.Env["TRUSTED_HELPER_SHA"] == "${{ github.workflow_sha }}", "release helpers must bind to the trusted workflow revision")
 	require(strings.TrimSpace(trustedHelper.Run) == `git fetch --no-tags origin "$TRUSTED_HELPER_SHA"
-git show "$TRUSTED_HELPER_SHA:.github/scripts/release-plan/main.go" > "$RUNNER_TEMP/release-plan.go"`, "release helper must load from the trusted workflow revision outside the target checkout")
+git show "$TRUSTED_HELPER_SHA:.github/scripts/release-plan/main.go" > "$RUNNER_TEMP/release-plan.go"
+git show "$TRUSTED_HELPER_SHA:.github/scripts/release-targets/main.go" > "$RUNNER_TEMP/release-targets.go"
+git show "$TRUSTED_HELPER_SHA:.github/release-targets-legacy.json" > "$RUNNER_TEMP/release-targets-legacy.json"`, "release helpers and the legacy compatibility manifest must load from the trusted workflow revision outside the target checkout")
 }
 
 func namedStep(job workflowJob, name string) workflowStep {

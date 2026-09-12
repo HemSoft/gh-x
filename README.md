@@ -617,6 +617,38 @@ the trusted default-branch helper and accepts only clean evidence attributable
 to that exact head. Missing, stale, truncated, ambiguous, refused, superseded,
 or unresolved evidence cannot pass.
 
+### Supported release targets
+
+`.github/release-targets.json` is the canonical release matrix. Pull-request CI
+compiles every entry into a disposable directory before `Build & Test` can pass;
+it does not upload those files. Auto Release uses the same manifest and builder
+to create the published assets.
+
+| Operating system | Architectures | Assets |
+| --- | --- | --- |
+| Darwin | amd64, arm64 | `darwin-amd64`, `darwin-arm64` |
+| FreeBSD | 386, amd64, arm64 | `freebsd-386`, `freebsd-amd64`, `freebsd-arm64` |
+| Linux | 386, amd64, arm, arm64 | `linux-386`, `linux-amd64`, `linux-arm`, `linux-arm64` |
+| Windows | 386, amd64, arm64 | `windows-386.exe`, `windows-amd64.exe`, `windows-arm64.exe` |
+
+Reproduce the cross-build locally from the repository root:
+
+```powershell
+$env:RELEASE_VERSION = "dev"
+$env:RELEASE_BUILD_DATE = git show -s --format=%cs HEAD
+$env:RELEASE_OUTPUT_DIR = Join-Path $env:TEMP "gh-x-release-targets"
+go run ./.github/scripts/release-targets build
+```
+
+Each log line identifies the exact `GOOS/GOARCH` target and output asset. A
+failed compilation names that target and stops the quality gate. To change the
+matrix, edit only `.github/release-targets.json`, update the expected list in
+`.github/scripts/release-targets/main_test.go`, and run that package's tests.
+Validation rejects empty, duplicate, malformed, unknown-field, and
+Go-toolchain-unsupported entries. A tagged retry for a commit that predates the
+canonical manifest uses the frozen `.github/release-targets-legacy.json`
+snapshot; current CI and releases never use that compatibility file.
+
 Every published binary carries GitHub build provenance created from the same
 trusted release job before asset publication. The attestation binds its SHA-256
 digest to this repository, the release workflow, and the validated source
