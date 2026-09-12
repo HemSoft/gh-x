@@ -277,6 +277,12 @@ func TestExistingReleaseAssetsAreNeverReplaced(t *testing.T) {
 	if _, err := missingReleaseAssets([]string{first}, []releaseAsset{{Name: filepath.Base(first)}, {Name: filepath.Base(first), Digest: "sha256:" + firstDigest}}); err == nil {
 		t.Fatal("missing or duplicate remote metadata must fail closed")
 	}
+	if _, err := missingReleaseAssets([]string{first}, []releaseAsset{{Name: "unexpected", Digest: "sha256:" + firstDigest}}); err == nil || !strings.Contains(err.Error(), "unexpected unattested asset") {
+		t.Fatalf("unexpected remote asset must fail closed: %v", err)
+	}
+	if _, err := missingReleaseAssets([]string{first, first}, nil); err == nil || !strings.Contains(err.Error(), "local release contains duplicate") {
+		t.Fatalf("duplicate local asset must fail closed: %v", err)
+	}
 }
 
 func TestReleaseReconciliationPublishesDraftAfterAssets(t *testing.T) {

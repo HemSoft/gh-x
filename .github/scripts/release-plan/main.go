@@ -263,32 +263,50 @@ func validateReleaseTarget(tag, expectedSHA string) error {
 }
 
 func missingReleaseAssets(paths []string, published []releaseAsset) ([]string, error) {
+	local, err := localReleaseAssetDigests(paths)
+	if err != nil {
+		return nil, err
+	}
 	remote := make(map[string]string, len(published))
 	for _, asset := range published {
 		if asset.Name == "" || asset.Digest == "" {
 			return nil, errors.New("published release asset lacks a name or digest")
 		}
+		expectedDigest, expected := local[asset.Name]
+		if !expected {
+			return nil, fmt.Errorf("published release contains unexpected unattested asset %q", asset.Name)
+		}
 		if _, exists := remote[asset.Name]; exists {
 			return nil, fmt.Errorf("published release contains duplicate asset %q", asset.Name)
 		}
 		remote[asset.Name] = strings.ToLower(asset.Digest)
+		if remote[asset.Name] != "sha256:"+expectedDigest {
+			return nil, fmt.Errorf("refusing to replace release asset %s: published digest %s does not match attested local digest sha256:%s", asset.Name, remote[asset.Name], expectedDigest)
+		}
 	}
 	missing := make([]string, 0, len(paths))
 	for _, path := range paths {
+		if _, exists := remote[filepath.Base(path)]; !exists {
+			missing = append(missing, path)
+		}
+	}
+	return missing, nil
+}
+
+func localReleaseAssetDigests(paths []string) (map[string]string, error) {
+	local := make(map[string]string, len(paths))
+	for _, path := range paths {
+		name := filepath.Base(path)
+		if _, exists := local[name]; exists {
+			return nil, fmt.Errorf("local release contains duplicate asset %q", name)
+		}
 		digest, err := fileSHA256(path)
 		if err != nil {
 			return nil, err
 		}
-		publishedDigest, exists := remote[filepath.Base(path)]
-		if !exists {
-			missing = append(missing, path)
-			continue
-		}
-		if publishedDigest != "sha256:"+digest {
-			return nil, fmt.Errorf("refusing to replace release asset %s: published digest %s does not match attested local digest sha256:%s", filepath.Base(path), publishedDigest, digest)
-		}
+		local[name] = digest
 	}
-	return missing, nil
+	return local, nil
 }
 
 func fileSHA256(path string) (string, error) {
