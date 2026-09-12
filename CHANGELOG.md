@@ -12,7 +12,10 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
-- fix: resolve SSH remote aliases before routing GitHub API calls
+## [0.12.2] - 2026-09-12
+
+- fix: resolve SSH aliases for status API routing (#92)
+- docs: record v0.12.1 release (#90)
 
 ## [0.12.1] - 2026-09-09
 
@@ -122,7 +125,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.12.2...HEAD
+[0.12.2]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.2
 [0.12.1]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.1
 [0.12.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.0
 [0.11.10]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.10
