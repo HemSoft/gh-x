@@ -198,6 +198,9 @@ func currentOrdinaryRequestAllowsClean(state reviewState, cfg config, number str
 	if activity.CreatedAt.After(clean) {
 		return false, pendingOrdinaryReview(state, cfg, number, time.Now())
 	}
+	if activity.CreatedAt.Equal(clean) && !activity.Clean {
+		return false, errors.New("latest current-head Codex activity is not the clean review receipt")
+	}
 	return true, nil
 }
 

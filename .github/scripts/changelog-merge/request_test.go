@@ -145,11 +145,15 @@ func TestSetupWindowDoesNotRestart(t *testing.T) {
 	}
 }
 
+func runningActivity(started time.Time) string {
+	return `<!-- codex-pull-request-review-summary --> ` + "`" + testHead[:7] + "`\n| 📝 **Code Review** | 🔄 **Running** since <relative-time datetime=\"" + started.Format(time.RFC3339Nano) + `"> |`
+}
+
 func TestOrdinaryPendingReviewUsesCurrentHeadActivity(t *testing.T) {
 	committed := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	started := committed.Add(time.Minute)
 	activity := reviewComment{
-		Body:      `<!-- codex-pull-request-review-summary --> ` + "`" + testHead[:7] + "` **Running** <relative-time datetime=\"" + started.Format(time.RFC3339Nano) + `">`,
+		Body:      runningActivity(started),
 		Author:    actor{"chatgpt-codex-connector"},
 		CreatedAt: committed.Add(-time.Hour), // The connector updates one long-lived summary comment.
 		URL:       "https://github.com/HemSoft/gh-x/pull/12#issuecomment-activity",
@@ -173,6 +177,39 @@ func TestOrdinaryPendingReviewUsesCurrentHeadActivity(t *testing.T) {
 	}
 }
 
+func TestOrdinaryActivityTimeIgnoresProseAndRejectsAmbiguity(t *testing.T) {
+	started := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	comment := reviewComment{
+		Body:   runningActivity(started) + "\nQuoted example: <relative-time datetime=\"2099-01-01T00:00:00Z\">",
+		Author: actor{"chatgpt-codex-connector"},
+		URL:    "activity-url",
+	}
+	state := reviewState{HeadRefOID: testHead}
+	state.Comments.Nodes = []reviewComment{comment}
+	activity, err := currentHeadCodexActivity(state, testHead)
+	if err != nil || !activity.CreatedAt.Equal(started) {
+		t.Fatalf("activity=%v err=%v", activity.CreatedAt, err)
+	}
+	state.Comments.Nodes[0].Body += "\n| 📝 **Code Review** | completed <relative-time datetime=\"2099-01-01T00:00:00Z\"> |"
+	if _, err := currentHeadCodexActivity(state, testHead); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("duplicate activity rows must fail closed: %v", err)
+	}
+}
+
+func TestOrdinaryDistinctSameTimeEvidenceFailsClosed(t *testing.T) {
+	started := time.Now().Add(-time.Minute)
+	state := cleanState()
+	state.CommittedAt = started.Add(-time.Minute)
+	state.Comments.Nodes[0].CreatedAt = started
+	state.Comments.Nodes = append(state.Comments.Nodes, reviewComment{
+		Body: runningActivity(started), Author: actor{"chatgpt-codex-connector"}, URL: "activity-url",
+	})
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if ready || err == nil || !strings.Contains(err.Error(), "shares a timestamp") {
+		t.Fatalf("same-time distinct evidence must fail closed: %v,%v", ready, err)
+	}
+}
+
 func TestOrdinaryRefusalAndNewActivitySupersedeOldClean(t *testing.T) {
 	committed := time.Now().Add(-5 * time.Minute)
 	state := cleanState()
@@ -180,7 +217,7 @@ func TestOrdinaryRefusalAndNewActivitySupersedeOldClean(t *testing.T) {
 	state.Comments.Nodes[0].CreatedAt = committed.Add(time.Minute)
 	started := committed.Add(2 * time.Minute)
 	activity := reviewComment{
-		Body:      `<!-- codex-pull-request-review-summary --> ` + "`" + testHead[:7] + "` **Running** <relative-time datetime=\"" + started.Format(time.RFC3339Nano) + `">`,
+		Body:      runningActivity(started),
 		Author:    actor{"chatgpt-codex-connector"},
 		CreatedAt: committed.Add(-time.Hour),
 		URL:       "activity-url",
