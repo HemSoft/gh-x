@@ -256,10 +256,22 @@ func (m monitorModel) escapeMonitor() (tea.Model, tea.Cmd) {
 
 func (m monitorModel) quitMonitor() (tea.Model, tea.Cmd) {
 	m.quitting = true
+	if m.cancelRefresh != nil {
+		m.cancelRefresh()
+	}
 	if err := saveMonitorState(m.statePath, monitorSessionState{Tab: m.tab, SubTab: m.subTab, RepoIndex: m.repoIdx}); err != nil {
 		fmt.Fprintf(accountWarningWriter, "[gh-x] note: could not save session state: %v\n", err)
 	}
-	return m, tea.Quit
+	return m, waitForRefreshThenQuit(m.refreshDone)
+}
+
+func waitForRefreshThenQuit(done <-chan struct{}) tea.Cmd {
+	return func() tea.Msg {
+		if done != nil {
+			<-done
+		}
+		return tea.Quit()
+	}
 }
 
 // handleClick resolves mouse clicks against the layout.

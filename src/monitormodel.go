@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -40,17 +41,20 @@ type monitorModel struct {
 	filtering bool
 	filter    textinput.Model
 
-	data        *monitorFetchResult
-	changedKeys map[string]bool
-	addedKeys   map[string]bool
-	seenKeys    map[string]bool
-	lastChanges []monitorChange
-	lastRefresh time.Time
-	refreshErr  string
-	refreshWarn string
-	refreshing  bool
-	interval    time.Duration
-	backoff     time.Duration
+	data           *monitorFetchResult
+	changedKeys    map[string]bool
+	addedKeys      map[string]bool
+	seenKeys       map[string]bool
+	lastChanges    []monitorChange
+	lastRefresh    time.Time
+	refreshErr     string
+	refreshWarn    string
+	refreshing     bool
+	refreshContext context.Context
+	cancelRefresh  context.CancelFunc
+	refreshDone    chan struct{}
+	interval       time.Duration
+	backoff        time.Duration
 
 	helpOpen bool
 	settings monitorSettingsModel
@@ -69,21 +73,27 @@ func newMonitorModel(cfg *monitorConfig, configPath, statePath string, state mon
 	clamped := clampMonitorState(state, monitorTabCount, len(cfg.PRSections), len(cfg.IssueSections), len(cfg.Repos)+1)
 	filter := textinput.New()
 	filter.Placeholder = "filter…"
+	refreshContext, cancelRefresh := context.WithCancel(context.Background())
+	initialRefreshDone := make(chan struct{})
 	model := monitorModel{
-		cfg:         cfg,
-		configPath:  configPath,
-		statePath:   statePath,
-		tab:         clamped.Tab,
-		subTab:      clamped.SubTab,
-		repoIdx:     clamped.RepoIndex,
-		focus:       monitorFocusSidebar,
-		interval:    parseMonitorIntervalOrDefault(cfg.Defaults.Interval, defaultMonitorInterval),
-		backoff:     minimumMonitorInterval,
-		changedKeys: map[string]bool{},
-		addedKeys:   map[string]bool{},
-		seenKeys:    map[string]bool{},
-		filter:      filter,
-		settings:    newMonitorSettingsModel(),
+		cfg:            cfg,
+		refreshContext: refreshContext,
+		cancelRefresh:  cancelRefresh,
+		refreshDone:    initialRefreshDone,
+		refreshing:     true,
+		configPath:     configPath,
+		statePath:      statePath,
+		tab:            clamped.Tab,
+		subTab:         clamped.SubTab,
+		repoIdx:        clamped.RepoIndex,
+		focus:          monitorFocusSidebar,
+		interval:       parseMonitorIntervalOrDefault(cfg.Defaults.Interval, defaultMonitorInterval),
+		backoff:        minimumMonitorInterval,
+		changedKeys:    map[string]bool{},
+		addedKeys:      map[string]bool{},
+		seenKeys:       map[string]bool{},
+		filter:         filter,
+		settings:       newMonitorSettingsModel(),
 	}
 	model.applyDefaultSubTab()
 	return model

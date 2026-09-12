@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -123,6 +124,24 @@ func TestCLIBehaviorSuccess(t *testing.T) {
 	}
 }
 
+func TestCLIBehaviorGitHubTimeout(t *testing.T) {
+	started := time.Now()
+	result := runCLIWithGitHubTimeout(t, newFixtureRepository(t), "gh-timeout", "150ms", "issue", "list", "--repo", "HemSoft/gh-x")
+
+	if result.exitCode == 0 {
+		t.Fatalf("exit code = 0, want nonzero\nstdout:\n%s", result.stdout)
+	}
+	if elapsed := time.Since(started); elapsed >= 2*time.Second {
+		t.Fatalf("internal timeout took %v", elapsed)
+	}
+	if !strings.Contains(result.stderr, "github request timed out") {
+		t.Fatalf("stderr does not contain timeout guidance:\n%s", result.stderr)
+	}
+	if !strings.Contains(result.calls, "issue list") {
+		t.Fatalf("fake gh call log does not contain issue list:\n%s", result.calls)
+	}
+}
+
 func TestCLIBehaviorGitHubFailure(t *testing.T) {
 	result := runCLI(t, newFixtureRepository(t), "issue-list-error", "issue", "list", "--repo", "HemSoft/gh-x")
 
@@ -148,22 +167,28 @@ type cliResult struct {
 
 func runCLI(t *testing.T, workingDirectory, scenario string, args ...string) cliResult {
 	t.Helper()
+	return runCLIWithGitHubTimeout(t, workingDirectory, scenario, "5s", args...)
+}
+
+func runCLIWithGitHubTimeout(t *testing.T, workingDirectory, scenario, timeout string, args ...string) cliResult {
+	t.Helper()
 
 	fakeGH := copyTestExecutable(t)
 	callLog := filepath.Join(t.TempDir(), "gh-calls.log")
 	command := exec.Command(ghXBinaryPath, args...)
 	command.Dir = workingDirectory
 	command.Env = replaceEnvironment(os.Environ(), map[string]string{
-		"CLICOLOR":        "0",
-		"GH_FORCE_TTY":    "0",
-		"GH_PATH":         fakeGH,
-		"GH_REPO":         "HemSoft/gh-x",
-		"NO_COLOR":        "1",
-		"TERM":            "dumb",
-		fakeGHFixtureEnv:  filepath.Join(repositoryRoot, "tests", "behavior", "testdata"),
-		fakeGHLogEnv:      callLog,
-		fakeGHModeEnv:     "1",
-		fakeGHScenarioEnv: scenario,
+		"CLICOLOR":            "0",
+		"GH_FORCE_TTY":        "0",
+		"GH_PATH":             fakeGH,
+		"GH_X_GITHUB_TIMEOUT": timeout,
+		"GH_REPO":             "HemSoft/gh-x",
+		"NO_COLOR":            "1",
+		"TERM":                "dumb",
+		fakeGHFixtureEnv:      filepath.Join(repositoryRoot, "tests", "behavior", "testdata"),
+		fakeGHLogEnv:          callLog,
+		fakeGHModeEnv:         "1",
+		fakeGHScenarioEnv:     scenario,
 	})
 
 	var stdout bytes.Buffer
@@ -317,6 +342,10 @@ func runFakeGH() int {
 	if os.Getenv(fakeGHScenarioEnv) == "issue-list-error" && hasCommandPrefix(args, "issue", "list") {
 		fmt.Fprintln(os.Stderr, "fixture issue list failed")
 		return 23
+	}
+	if os.Getenv(fakeGHScenarioEnv) == "gh-timeout" {
+		time.Sleep(5 * time.Second)
+		return 0
 	}
 
 	fixture := ""

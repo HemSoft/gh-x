@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+)
+
+const (
+	monitorRefreshTimeoutEnv     = "GH_X_MONITOR_REFRESH_TIMEOUT"
+	defaultMonitorRefreshTimeout = 45 * time.Second
 )
 
 // monitorNowFunc is swappable in tests.
@@ -48,25 +54,40 @@ func (m monitorModel) startRefresh() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refreshing = true
-	return m, newMonitorFetchCmd(*m.cfg)
+	m.refreshDone = make(chan struct{})
+	return m, newMonitorFetchCmd(m.refreshContext, *m.cfg, m.refreshDone)
 }
 
-// newMonitorFetchCmd snapshots the config for one refresh cycle.
-func newMonitorFetchCmd(cfg monitorConfig) tea.Cmd {
+// newMonitorFetchCmd snapshots the config and applies one total deadline to
+// every host query in the refresh cycle.
+func newMonitorFetchCmd(parent context.Context, cfg monitorConfig, done chan<- struct{}) tea.Cmd {
+	if parent == nil {
+		parent = context.Background()
+	}
 	return func() tea.Msg {
-		result, err := executeMonitorFetch(&cfg, monitorNowFunc())
+		if done != nil {
+			defer close(done)
+		}
+		timeout, err := configuredTimeout(monitorRefreshTimeoutEnv, defaultMonitorRefreshTimeout)
+		if err != nil {
+			return monitorFetchedMsg{err: err, at: monitorNowFunc()}
+		}
+		ctx, cancel := context.WithTimeout(parent, timeout)
+		defer cancel()
+		result, err := executeMonitorFetch(ctx, &cfg, monitorNowFunc())
 		return monitorFetchedMsg{result: result, err: err, at: monitorNowFunc()}
 	}
 }
 
-// initialMonitorCmd performs the first fetch.
-// The refreshing flag is set by the caller before Init runs.
+// initialMonitorCmd performs the first fetch under the model's lifecycle
+// context, allowing a quit command to cancel it.
 func (m monitorModel) initialMonitorCmd() tea.Cmd {
-	return newMonitorFetchCmd(*m.cfg)
+	return newMonitorFetchCmd(m.refreshContext, *m.cfg, m.refreshDone)
 }
 
 func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) {
 	m.refreshing = false
+	m.refreshDone = nil
 	if msg.err != nil {
 		m.refreshErr = sanitizeMonitorError(msg.err)
 		m.refreshWarn = ""

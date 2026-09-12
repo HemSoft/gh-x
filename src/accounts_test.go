@@ -4,11 +4,139 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	ghconfig "github.com/cli/go-gh/v2/pkg/config"
 )
+
+const (
+	ghHelperModeEnv       = "GH_X_TEST_HELPER_MODE"
+	ghHelperStartedEnv    = "GH_X_TEST_HELPER_STARTED"
+	ghHelperCompletedEnv  = "GH_X_TEST_HELPER_COMPLETED"
+	ghHelperSleepDuration = 300 * time.Millisecond
+)
+
+func TestRunGHCmdHelperProcess(t *testing.T) {
+	mode := os.Getenv(ghHelperModeEnv)
+	if mode == "" {
+		return
+	}
+	if started := os.Getenv(ghHelperStartedEnv); started != "" {
+		if err := os.WriteFile(started, []byte("started"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mode == "success" {
+		if _, err := os.Stdout.WriteString("helper success"); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	time.Sleep(ghHelperSleepDuration)
+	if completed := os.Getenv(ghHelperCompletedEnv); completed != "" {
+		if err := os.WriteFile(completed, []byte("completed"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRunGHCmdHonorsSuccessDeadlineAndCancellation(t *testing.T) {
+	t.Setenv("GH_PATH", os.Args[0])
+	helperArgs := []string{"-test.run=^TestRunGHCmdHelperProcess$"}
+
+	successCtx, successCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer successCancel()
+	stdout, _, err := runGHCmd(ghInvocation{
+		Context: successCtx,
+		Args:    helperArgs,
+		ExtraEnv: []string{
+			ghHelperModeEnv + "=success",
+		},
+	})
+	if err != nil || !strings.Contains(stdout.String(), "helper success") {
+		t.Fatalf("successful helper = %q, %v", stdout.String(), err)
+	}
+
+	deadlineCtx, deadlineCancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer deadlineCancel()
+	_, _, err = runGHCmd(ghInvocation{
+		Context:  deadlineCtx,
+		Args:     helperArgs,
+		ExtraEnv: []string{ghHelperModeEnv + "=sleep"},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline error = %v", err)
+	}
+
+	started := filepath.Join(t.TempDir(), "started")
+	completed := filepath.Join(t.TempDir(), "completed")
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, _, runErr := runGHCmd(ghInvocation{
+			Context: cancelCtx,
+			Args:    helperArgs,
+			ExtraEnv: []string{
+				ghHelperModeEnv + "=sleep",
+				ghHelperStartedEnv + "=" + started,
+				ghHelperCompletedEnv + "=" + completed,
+			},
+		})
+		result <- runErr
+	}()
+	waitForFile(t, started, time.Second)
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation error = %v", err)
+	}
+	time.Sleep(ghHelperSleepDuration + 100*time.Millisecond)
+	if _, err := os.Stat(completed); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled child reached completion marker: %v", err)
+	}
+}
+
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
+}
+
+func TestConfiguredTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "default", want: 7 * time.Second},
+		{name: "configured", value: "250ms", want: 250 * time.Millisecond},
+		{name: "invalid", value: "soon", wantErr: true},
+		{name: "zero", value: "0s", wantErr: true},
+		{name: "negative", value: "-1s", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GH_X_TEST_TIMEOUT", test.value)
+			got, err := configuredTimeout("GH_X_TEST_TIMEOUT", 7*time.Second)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("configuredTimeout() error = %v, wantErr %v", err, test.wantErr)
+			}
+			if !test.wantErr && got != test.want {
+				t.Fatalf("configuredTimeout() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
 
 func resetAccountCache() {
 	accountsMu.Lock()
@@ -58,6 +186,7 @@ func withFallbackStubs(t *testing.T, transport func(inv ghInvocation) (bytes.Buf
 	t.Setenv("GITHUB_ENTERPRISE_TOKEN", "")
 	t.Setenv("GH_REPO", "")
 	t.Setenv("GH_HOST", "")
+	t.Setenv(githubCommandTimeoutEnv, "")
 	savedTransport := ghTransportFunc
 	savedList := listAccountsFunc
 	savedToken := accountTokenFunc
@@ -75,8 +204,8 @@ func withFallbackStubs(t *testing.T, transport func(inv ghInvocation) (bytes.Buf
 	resetAccountCache()
 	resetRemoteCache()
 	ghTransportFunc = transport
-	listAccountsFunc = func(string) []ghAccount { return accounts }
-	accountTokenFunc = func(login, _ string) (string, bool) {
+	listAccountsFunc = func(context.Context, string) []ghAccount { return accounts }
+	accountTokenFunc = func(_ context.Context, login, _ string) (string, bool) {
 		token, ok := tokens[login]
 		return token, ok
 	}
@@ -120,6 +249,28 @@ func TestExecGHFallsBackToAlternateAccount(t *testing.T) {
 	}
 }
 
+func TestExecGHContextBoundsAccountRetry(t *testing.T) {
+	calls := 0
+	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		calls++
+		if calls == 1 {
+			return bytes.Buffer{}, *bytes.NewBufferString("HTTP 404: Not Found"), errors.New("exit status 1")
+		}
+		<-inv.Context.Done()
+		return bytes.Buffer{}, bytes.Buffer{}, githubContextError(inv.Context.Err())
+	}, []ghAccount{{Login: "primary", Active: true}, {Login: "secondary", Active: false}}, map[string]string{"secondary": "token"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	_, _, err := execGHContext(ctx, "pr", "list")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("account retry error = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("account retry transport calls = %d, want 2", calls)
+	}
+}
+
 func TestExecGHPreservesOriginalErrorWhenFallbackFails(t *testing.T) {
 	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		return bytes.Buffer{}, *bytes.NewBufferString("Not Found (HTTP 404)"), errors.New("boom")
@@ -156,13 +307,13 @@ func TestExecGHFallsBackOnEnterpriseHostWithEnterpriseCredential(t *testing.T) {
 		}
 		return *bytes.NewBufferString("[]"), bytes.Buffer{}, nil
 	}, nil, nil)
-	listAccountsFunc = func(host string) []ghAccount {
+	listAccountsFunc = func(_ context.Context, host string) []ghAccount {
 		if host == "ghe.example.com" {
 			return []ghAccount{{Login: "corp-lead", Active: true}, {Login: "corp-dev", Active: false}}
 		}
 		return []ghAccount{{Login: "personal", Active: true}, {Login: "other-personal", Active: false}}
 	}
-	accountTokenFunc = func(login, host string) (string, bool) {
+	accountTokenFunc = func(_ context.Context, login, host string) (string, bool) {
 		if login == "corp-dev" && host == "ghe.example.com" {
 			return "ent-token", true
 		}
@@ -759,9 +910,9 @@ func TestAccountsAreCachedPerHost(t *testing.T) {
 	}, nil, nil)
 	listAccountsFunc = listAccounts
 
-	first := listAccounts("GHE.Example.COM.")
-	second := listAccounts("github.com")
-	listAccounts("ghe.example.com")
+	first := listAccounts(context.Background(), "GHE.Example.COM.")
+	second := listAccounts(context.Background(), "github.com")
+	listAccounts(context.Background(), "ghe.example.com")
 
 	if authStatusCalls != 1 {
 		t.Fatalf("one auth status probe should serve every host, got %d", authStatusCalls)
@@ -783,7 +934,7 @@ func TestDefaultAccountTokenTargetsHost(t *testing.T) {
 	}, nil, nil)
 	accountTokenFunc = defaultAccountToken
 
-	if token, ok := accountTokenFunc("corp-dev", "ghe.example.com"); !ok || token != "tok" {
+	if token, ok := accountTokenFunc(context.Background(), "corp-dev", "ghe.example.com"); !ok || token != "tok" {
 		t.Fatalf("token lookup failed: %q %v", token, ok)
 	}
 	if len(seenHostname) != 1 || seenHostname[0] != "ghe.example.com" {

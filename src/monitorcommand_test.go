@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -184,12 +185,12 @@ func TestExecuteMonitorFetchSuccessAndFailure(t *testing.T) {
 		"pr0":{"issueCount":1,"nodes":[{"number":3,"title":"t","state":"OPEN",
 		"updatedAt":"2026-08-22T07:00:00Z","repository":{"nameWithOwner":"owner/one"}}]},
 		"is0":{"issueCount":0,"nodes":[]}}}`
-	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	monitorGHExecFunc = func(context.Context, ...string) (bytes.Buffer, bytes.Buffer, error) {
 		var out bytes.Buffer
 		out.WriteString(payload)
 		return out, bytes.Buffer{}, nil
 	}
-	result, err := executeMonitorFetch(cfg, now)
+	result, err := executeMonitorFetch(context.Background(), cfg, now)
 	if err != nil {
 		t.Fatalf("fetch failed: %v", err)
 	}
@@ -197,10 +198,10 @@ func TestExecuteMonitorFetchSuccessAndFailure(t *testing.T) {
 		t.Fatalf("unexpected payload: %+v", result)
 	}
 
-	monitorGHExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	monitorGHExecFunc = func(context.Context, ...string) (bytes.Buffer, bytes.Buffer, error) {
 		return bytes.Buffer{}, bytes.Buffer{}, errBoom()
 	}
-	if _, err := executeMonitorFetch(cfg, now); err == nil {
+	if _, err := executeMonitorFetch(context.Background(), cfg, now); err == nil {
 		t.Fatal("gh failure must surface")
 	}
 }

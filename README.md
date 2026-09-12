@@ -293,6 +293,26 @@ then `$EDITOR`, or the platform default editor. The monitor reloads the file
 when the editor exits. A separate `state.json` in the same directory remembers
 the selected tab, section, and repository; it is not a configuration source.
 
+### GitHub request timeouts
+
+Every one-shot command bounds its complete GitHub operation, including account
+discovery and fallback attempts, to 30 seconds. Set `GH_X_GITHUB_TIMEOUT` to a
+positive [Go duration](https://pkg.go.dev/time#ParseDuration) to override it:
+
+```powershell
+$env:GH_X_GITHUB_TIMEOUT = "45s"
+gh x issue list --repo HemSoft/gh-x
+```
+
+Each monitor refresh has a separate 45-second total deadline controlled by
+`GH_X_MONITOR_REFRESH_TIMEOUT`. Host queries run concurrently within that
+single budget. If one host times out, data from successful hosts remains visible
+with a short host-qualified warning. If the whole refresh times out, the monitor
+clears its refreshing state, retains the last successful snapshot, and reports
+the timeout. Quitting the monitor cancels and waits for the in-flight `gh` child
+instead of leaving it running. Invalid, zero, or negative duration settings fail
+with a configuration error; they never disable the deadline.
+
 ## What `gh x pr me` adds
 
 All your open PRs — authored or assigned — across every repo in the org.
