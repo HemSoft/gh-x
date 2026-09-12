@@ -177,6 +177,7 @@ type releaseAsset struct {
 type existingRelease struct {
 	TagName string         `json:"tagName"`
 	Assets  []releaseAsset `json:"assets"`
+	IsDraft bool           `json:"isDraft"`
 }
 
 func runCreate() error {
@@ -197,7 +198,7 @@ func runCreate() error {
 	}
 	sort.Strings(assets)
 
-	view := exec.Command("gh", "release", "view", releaseTag, "--json", "tagName,assets")
+	view := exec.Command("gh", "release", "view", releaseTag, "--json", "tagName,assets,isDraft")
 	output, viewErr := view.Output()
 	if viewErr == nil {
 		return reconcileExistingRelease(releaseTag, releaseSHA, assets, output)
@@ -225,10 +226,26 @@ func reconcileExistingRelease(releaseTag, releaseSHA string, assets []string, re
 	}
 	if len(missing) == 0 {
 		fmt.Fprintf(os.Stdout, "Release %s already contains the attested assets\n", releaseTag)
-		return nil
+	} else {
+		fmt.Fprintf(os.Stdout, "Release %s already exists - uploading %d missing attested assets\n", releaseTag, len(missing))
 	}
-	fmt.Fprintf(os.Stdout, "Release %s already exists - uploading %d missing attested assets\n", releaseTag, len(missing))
-	return runCommand("gh", append([]string{"release", "upload", releaseTag}, missing...)...)
+	for _, args := range releaseReconciliationCommands(releaseTag, missing, published.IsDraft) {
+		if err := runCommand("gh", args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func releaseReconciliationCommands(tag string, missing []string, isDraft bool) [][]string {
+	commands := make([][]string, 0, 2)
+	if len(missing) != 0 {
+		commands = append(commands, append([]string{"release", "upload", tag}, missing...))
+	}
+	if isDraft {
+		commands = append(commands, []string{"release", "edit", tag, "--draft=false"})
+	}
+	return commands
 }
 
 func validateReleaseTarget(tag, expectedSHA string) error {

@@ -279,6 +279,23 @@ func TestExistingReleaseAssetsAreNeverReplaced(t *testing.T) {
 	}
 }
 
+func TestReleaseReconciliationPublishesDraftAfterAssets(t *testing.T) {
+	missing := []string{"dist/linux-amd64", "dist/windows-amd64.exe"}
+	want := [][]string{
+		{"release", "upload", "v1.2.3", "dist/linux-amd64", "dist/windows-amd64.exe"},
+		{"release", "edit", "v1.2.3", "--draft=false"},
+	}
+	if got := releaseReconciliationCommands("v1.2.3", missing, true); !reflect.DeepEqual(got, want) {
+		t.Fatalf("releaseReconciliationCommands() = %#v, want %#v", got, want)
+	}
+	if got := releaseReconciliationCommands("v1.2.3", nil, true); !reflect.DeepEqual(got, want[1:]) {
+		t.Fatalf("complete draft reconciliation = %#v, want %#v", got, want[1:])
+	}
+	if got := releaseReconciliationCommands("v1.2.3", nil, false); len(got) != 0 {
+		t.Fatalf("complete published reconciliation = %#v, want no commands", got)
+	}
+}
+
 func TestCreateReleaseArgsPinsValidatedSHA(t *testing.T) {
 	sha := "0123456789abcdef0123456789abcdef01234567"
 	want := []string{"release", "create", "v1.2.3", "dist/linux-amd64", "--title", "v1.2.3", "--target", sha, "--notes-file", "release-notes.md"}
