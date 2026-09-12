@@ -756,6 +756,38 @@ func TestFetchDisplayIssuesRelationships(t *testing.T) {
 	}
 }
 
+func TestFetchIssueRelationshipDataUsesConfiguredSSHHost(t *testing.T) {
+	t.Setenv("GH_REPO", "")
+	t.Setenv("GH_HOST", "")
+	withRemoteURLStub(t, "git@github.com-hemsoft:HemSoft/codexbar-ios.git")
+	withKnownGitHubHostStub(t, func(host string) bool { return host == defaultGitHubHost })
+	withSSHConfigHostStub(t, func(host string) string {
+		if host != "github.com-hemsoft" {
+			t.Fatalf("SSH resolver host = %q, want github.com-hemsoft", host)
+		}
+		return defaultGitHubHost
+	})
+	savedRelationships := fetchIssueRelationshipsFunc
+	t.Cleanup(func() { fetchIssueRelationshipsFunc = savedRelationships })
+	fetchIssueRelationshipsFunc = func(owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+		if owner != "HemSoft" || name != "codexbar-ios" || host != defaultGitHubHost {
+			t.Fatalf("relationship target = %s/%s on %s, want HemSoft/codexbar-ios on github.com", owner, name, host)
+		}
+		if !reflect.DeepEqual(numbers, []int{305}) {
+			t.Fatalf("relationship numbers = %v, want [305]", numbers)
+		}
+		return map[int][]linkedReference{305: {{Number: 335}}}, nil, nil
+	}
+
+	relationships, unavailable, err := fetchIssueRelationshipData("HemSoft/codexbar-ios", []issueEntry{{Number: 305}})
+	if err != nil {
+		t.Fatalf("fetchIssueRelationshipData returned error: %v", err)
+	}
+	if len(relationships[305]) != 1 || relationships[305][0].Number != 335 || len(unavailable) != 0 {
+		t.Fatalf("relationships = %v, unavailable = %v; want issue #305 linked to PR #335", relationships, unavailable)
+	}
+}
+
 func TestFetchDisplayIssuesRelationshipFailure(t *testing.T) {
 	savedIssues := fetchIssuesFunc
 	savedRelationships := fetchIssueRelationshipsFunc

@@ -59,9 +59,17 @@ example:
 
 The target host is resolved following gh's own precedence: an explicit
 `--hostname`, an explicit `HOST/OWNER/REPO` value on `--repo`/`-R`, then the
-`GH_REPO` environment variable, then the current repository's git remote (so
-commands run inside an Enterprise Server checkout just work), then `GH_HOST`,
-then `github.com`.
+`GH_REPO` environment variable, then the current repository's git remote, then
+`GH_HOST`, then `github.com`. SSH and SCP-style remote aliases are expanded
+through `ssh -G`; the alias retains its original case for OpenSSH matching, and
+a configured `HostName` becomes the API host only when it is `github.com`,
+matches `GH_HOST`, or is listed in gh's local host configuration. This lets a
+dotted alias such as `github.com-hemsoft` route to `github.com`. Canonical
+`github.com` and configured Enterprise API hosts are preserved before SSH
+resolution; when a public alias resolves to the `ssh.github.com` transport
+endpoint, it maps back to the `github.com` API host. The SSH configuration
+lookup has a two-second deadline and bounded pipe drain. If it fails or the SSH destination is not a known API host, a plausible
+dotted remote host remains the fallback API host.
 Fallback candidates come from that same host in `gh auth status --json hosts`,
 and Enterprise Server
 retries inject `GH_ENTERPRISE_TOKEN`/`GITHUB_ENTERPRISE_TOKEN` instead of

@@ -12,6 +12,8 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+- fix: resolve SSH remote aliases before routing GitHub API calls
+
 ## [0.12.1] - 2026-09-09
 
 - fix: restore available supplemental data with fail-closed diagnostics (#88) (#89)
