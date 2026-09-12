@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -393,6 +395,33 @@ func TestFetchReviewCommentableLinesUsesPaginatedFiles(t *testing.T) {
 	}
 	if _, ok := lines["README.md"]; ok {
 		t.Fatalf("empty patch should not be included: %#v", lines)
+	}
+}
+
+func TestSubmitPullRequestReviewUsesDeadlineAndStdin(t *testing.T) {
+	saved := ghTransportFunc
+	t.Cleanup(func() { ghTransportFunc = saved })
+	t.Setenv(githubCommandTimeoutEnv, "40ms")
+
+	ghTransportFunc = func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		wantArgs := []string{"api", "repos/owner/repo/pulls/42/reviews", "--method", "POST", "--input", "-"}
+		if !reflect.DeepEqual(inv.Args, wantArgs) {
+			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("review submission args = %v", inv.Args)
+		}
+		if !bytes.Contains(inv.Stdin, []byte(`"event":"COMMENT"`)) {
+			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("review submission stdin = %s", inv.Stdin)
+		}
+		<-inv.Context.Done()
+		return bytes.Buffer{}, bytes.Buffer{}, githubContextError(inv.Context.Err())
+	}
+
+	err := submitPullRequestReview(
+		prReviewOptions{repo: "owner/repo"},
+		reviewPullRequest{Number: 42},
+		pullRequestReviewRequest{Body: "review", Event: "COMMENT"},
+	)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("review submission deadline error = %v", err)
 	}
 }
 

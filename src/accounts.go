@@ -173,13 +173,18 @@ func retryGHWithAccounts(ctx context.Context, args []string, originalOut, origin
 // Identity-scoped flows use it so a retry can never switch the account that a
 // query's embedded login refers to, on any host.
 func execGHActive(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	return execGHActiveInvocation(ghInvocation{Args: args})
+}
+
+func execGHActiveInvocation(invocation ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 	timeout, err := configuredTimeout(githubCommandTimeoutEnv, defaultGitHubCommandTimeout)
 	if err != nil {
 		return bytes.Buffer{}, bytes.Buffer{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return execGHActiveContext(ctx, args...)
+	invocation.Context = ctx
+	return ghTransportFunc(invocation)
 }
 
 func execGHActiveContext(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
