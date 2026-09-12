@@ -615,8 +615,11 @@ serialized by its existing non-canceling concurrency group. Request comments
 persist the head, author, URL, and GitHub creation time. Verification jobs never
 post requests. Ordinary pull requests reuse automatic or manual Codex activity;
 a later `HemSoft` `@codex review` comment is bound to the full head through the
-ordered pull-request timeline. Verification jobs replace an older job for the
-same pull request/head and reuse the original ten-minute deadline. Before any
+ordered pull-request timeline. Duplicate pull-request events replace an older
+verifier for the same pull request/head and reuse the original ten-minute
+deadline. Auto Release's manually dispatched verifier uses a run-specific
+concurrency lane, so pull-request, edited, and replacement-head events cannot
+cancel the exact run that the release job awaits. Before any
 current-head activity exists, the bounded setup window starts from the later of
 the head commit and the triggering pull-request update, so old branches and
 newly ready drafts receive one fresh window without a check rerun resetting it.
@@ -655,8 +658,11 @@ after clean evidence appears.
 The `enable` command waits for that CI gate and revalidates evidence before it can
 queue a merge; `request` and `review` never enable auto-merge.
 Auto Release captures the dispatched CI run ID using the versioned GitHub API,
-waits for that exact run to succeed, and verifies its head before calling `enable`.
-An older failed check cannot abort recovery before the replacement run appears.
+waits for that exact run to succeed, verifies its head, and requires exactly one
+successful `Quality Gate` job in that run before calling `enable`. Failure output
+identifies the pull request, expected head, authoritative run ID, and a clickable
+URL for that exact Actions run. An older failed check or competing pull-request
+event cannot cancel or satisfy that run.
 
 To verify a candidate helper revision against an existing bot PR before deployment,
 dispatch CI from the reviewed candidate branch with `changelog_branch` and
