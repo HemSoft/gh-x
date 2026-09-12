@@ -404,7 +404,8 @@ func stepIndex(job workflowJob, name string) int {
 func validateTrustedReleaseHelper(job workflowJob) {
 	trustedHelper := namedStep(job, "Load trusted release helper")
 	require(trustedHelper.Env["TRUSTED_HELPER_SHA"] == "${{ github.workflow_sha }}", "release helper must bind to the trusted workflow revision")
-	require(strings.Contains(trustedHelper.Run, `git fetch --no-tags origin "$TRUSTED_HELPER_SHA"`) && strings.Contains(trustedHelper.Run, `git show "$TRUSTED_HELPER_SHA:.github/scripts/release-plan/main.go" > "$RUNNER_TEMP/release-plan.go"`), "release helper must load from the trusted workflow revision outside the target checkout")
+	require(strings.TrimSpace(trustedHelper.Run) == `git fetch --no-tags origin "$TRUSTED_HELPER_SHA"
+git show "$TRUSTED_HELPER_SHA:.github/scripts/release-plan/main.go" > "$RUNNER_TEMP/release-plan.go"`, "release helper must load from the trusted workflow revision outside the target checkout")
 }
 
 func namedStep(job workflowJob, name string) workflowStep {
