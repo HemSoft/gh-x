@@ -74,8 +74,29 @@ func TestWorkflowHasOneRequestOwnerAndReusesVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "changelog-merge request") || !strings.Contains(string(data), "cancel-in-progress: true") || !strings.Contains(string(data), "inputs.changelog_head || github.event.pull_request.head.sha || github.sha") {
+	ci := string(data)
+	if strings.Contains(ci, "changelog-merge request") || !strings.Contains(ci, "cancel-in-progress: true") || !strings.Contains(ci, "inputs.changelog_head || github.event.pull_request.head.sha || github.sha") {
 		t.Fatal("verification must be read-only and replace duplicate same-head waits")
+	}
+	for _, required := range []string{
+		"name: Current-head Codex Review",
+		"if: github.event_name == 'pull_request'",
+		"PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}",
+		"REVIEW_SETUP_AT: ${{ github.event.pull_request.updated_at }}",
+		"PR_AUTHOR: ${{ github.event.pull_request.user.login }}",
+		`REVIEW_SCOPE="$review_scope" go run ./.github/scripts/changelog-merge review`,
+		"needs.codex-review.result",
+		`"$EVENT_NAME" == "pull_request"`,
+	} {
+		if !strings.Contains(ci, required) {
+			t.Fatalf("ordinary review enforcement missing %q", required)
+		}
+	}
+	dispatchGuard := `if [[ "$EVENT_NAME" == "workflow_dispatch" && \
+      "$REF" != "refs/heads/$DEFAULT_BRANCH" && \
+      "$REF_NAME" != chore/changelog-* ]]; then`
+	if !strings.Contains(strings.Join(strings.Fields(ci), " "), strings.Join(strings.Fields(dispatchGuard), " ")) {
+		t.Fatal("Quality Gate must retain the complete manual-dispatch guard")
 	}
 }
 

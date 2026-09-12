@@ -412,18 +412,18 @@ func TestWorkflowReviewGateUsesTrustedCode(t *testing.T) {
 	if err := yaml.Unmarshal(contents, &workflow); err != nil {
 		t.Fatal(err)
 	}
-	job := workflow.Jobs["changelog-review"]
+	job := workflow.Jobs["codex-review"]
 	if job.Steps[0].With["ref"] != "${{ github.event_name == 'workflow_dispatch' && inputs.changelog_branch != '' && github.sha || github.event.repository.default_branch }}" || job.Steps[0].With["persist-credentials"] != "false" {
 		t.Fatal("privileged review must use trusted default branch without persisted credentials")
 	}
 	if job.Permissions["pull-requests"] != "read" || job.Permissions["contents"] != "read" {
 		t.Fatal("review permissions changed")
 	}
-	if !strings.Contains(strings.Join(workflow.Jobs["gate"].Needs, ","), "changelog-review") {
-		t.Fatal("Quality Gate must depend on changelog review")
+	if !strings.Contains(strings.Join(workflow.Jobs["gate"].Needs, ","), "codex-review") {
+		t.Fatal("Quality Gate must depend on current-head Codex review")
 	}
-	if !strings.Contains(workflow.Jobs["gate"].Steps[0].Run, "needs.changelog-review.result") {
-		t.Fatal("Quality Gate must enforce changelog review result")
+	if !strings.Contains(workflow.Jobs["gate"].Steps[0].Run, "needs.codex-review.result") {
+		t.Fatal("Quality Gate must enforce current-head Codex review result")
 	}
 }
 

@@ -114,7 +114,7 @@ func main() {
 	}
 
 	require(equal(ci.On.PullRequest.Branches, "main"), "CI must target pull requests to main")
-	require(equal(ci.On.PullRequest.Types, "opened", "synchronize", "reopened", "edited"), "CI pull-request events changed")
+	require(equal(ci.On.PullRequest.Types, "opened", "synchronize", "reopened", "ready_for_review", "edited"), "CI pull-request events changed")
 	require(equal(ci.On.Push.Branches, "main"), "CI must report status for the main branch badge")
 
 	security := ci.Jobs["security-analysis"]
@@ -151,13 +151,32 @@ func main() {
 	require(changelogCheck.Env["GH_TOKEN"] == "${{ github.token }}", "changelog validation must authenticate GitHub Release queries")
 	require(strings.TrimSpace(changelogCheck.Run) == "go run ./.github/scripts/changelog-check", "CI must run the tested changelog validator")
 
+	codexReview := ci.Jobs["codex-review"]
+	require(codexReview.Name == "Current-head Codex Review", "CI must publish the current-head Codex review check")
+	require(codexReview.If == "github.event_name == 'pull_request' || startsWith(github.head_ref || github.ref_name, 'chore/changelog-') || inputs.changelog_branch != '' || inputs.changelog_head != ''", "Codex review must run for every pull request and generated changelog dispatch")
+	require(reflect.DeepEqual(codexReview.Permissions, map[string]string{"contents": "read", "checks": "read", "pull-requests": "read"}), "Codex verification must remain read-only")
+	require(len(codexReview.Steps) >= 3 && codexReview.Steps[0].With["ref"] == "${{ github.event_name == 'workflow_dispatch' && inputs.changelog_branch != '' && github.sha || github.event.repository.default_branch }}", "Codex verification must execute trusted helper code")
+	codexStep := namedStep(codexReview, "Require a clean current-head Codex review")
+	require(codexStep.Env["PULL_REQUEST_NUMBER"] == "${{ github.event.pull_request.number }}", "ordinary review must bind the event pull request number")
+	require(codexStep.Env["REVIEW_SETUP_AT"] == "${{ github.event.pull_request.updated_at }}", "ordinary review setup must bind the triggering pull request update")
+	require(codexStep.Env["EXPECTED_HEAD"] == "${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}", "Codex review must bind the immutable head")
+	require(strings.Contains(codexStep.Run, `REVIEW_SCOPE="$review_scope" go run ./.github/scripts/changelog-merge review`), "Codex verification must select explicit ordinary or changelog scope")
+
 	gate := ci.Jobs["gate"]
 	require(gate.Name == "Quality Gate", "CI must publish the Quality Gate check")
-	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review", "changelog-review", "performance"), "Quality Gate must depend on every build, quality, security, and performance job")
-	gateRun := namedStep(gate, "Evaluate all gates").Run
+	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review", "codex-review", "performance"), "Quality Gate must depend on every build, quality, security, review, and performance job")
+	gateStep := namedStep(gate, "Evaluate all gates")
+	gateRun := gateStep.Run
+	require(reflect.DeepEqual(gateStep.Env, map[string]string{
+		"EVENT_NAME":     "${{ github.event_name }}",
+		"REF":            "${{ github.ref }}",
+		"REF_NAME":       "${{ github.ref_name }}",
+		"DEFAULT_BRANCH": "${{ github.event.repository.default_branch }}",
+	}), "Quality Gate must bind event and ref identity through environment variables")
 	require(strings.Contains(gateRun, `"${{ needs.security-analysis.result }}" != "success"`), "Quality Gate must reject failed CodeQL analysis")
 	require(strings.Contains(gateRun, `"${{ needs.dependency-review.result }}" != "success"`), "Quality Gate must reject failed dependency review")
-	require(strings.Contains(gateRun, `"${{ needs.changelog-review.result }}" != "success"`), "Quality Gate must reject failed changelog review")
+	require(strings.Contains(gateRun, `if [[ "$EVENT_NAME" == "workflow_dispatch" && \`) && strings.Contains(gateRun, `"$REF_NAME" != chore/changelog-*`), "Quality Gate must reject non-changelog branch dispatches")
+	require(strings.Contains(gateRun, `if [[ "$EVENT_NAME" == "pull_request" && "${{ needs.codex-review.result }}" != "success" ]]`), "Quality Gate must reject a skipped or failed pull-request Codex review")
 	require(strings.Contains(gateRun, `"${{ needs.performance.result }}" != "success"`), "Quality Gate must reject failed performance budgets")
 	require(strings.Contains(gateRun, "::error::One or more quality gates failed"), "Quality Gate must report a failed dependency")
 	require(strings.Contains(gateRun, "exit 1"), "Quality Gate must fail when a dependency is unsuccessful")

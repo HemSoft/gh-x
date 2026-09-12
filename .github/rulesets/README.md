@@ -5,8 +5,10 @@
 
 The ruleset targets only `refs/heads/main`. Changes must arrive through a pull
 request, the `Quality Gate` check from GitHub Actions must pass, and every
-review conversation must be resolved. Integration ID `15368` is the GitHub
-Actions app that publishes this repository's check.
+review conversation must be resolved. `Quality Gate` includes the required
+clean current-head Codex review for every pull request to `main`; it accepts a
+skipped review job only on non-pull-request runs. Integration ID `15368` is the
+GitHub Actions app that publishes this repository's check.
 
 The ruleset has no bypass actors and requires zero approving reviews. It does
 not dismiss stale approvals after a push, require code-owner review, require
