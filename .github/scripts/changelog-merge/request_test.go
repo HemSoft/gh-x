@@ -145,47 +145,50 @@ func TestSetupWindowDoesNotRestart(t *testing.T) {
 	}
 }
 
-func TestOrdinaryPendingReviewUsesPersistedEvidence(t *testing.T) {
+func TestOrdinaryPendingReviewUsesCurrentHeadActivity(t *testing.T) {
 	committed := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
-	request := reviewComment{
-		Body:      "@codex review",
-		Author:    actor{connectedRequester},
-		CreatedAt: committed.Add(time.Minute),
-		URL:       "https://github.com/HemSoft/gh-x/pull/12#issuecomment-request",
+	started := committed.Add(time.Minute)
+	activity := reviewComment{
+		Body:      `<!-- codex-pull-request-review-summary --> ` + "`" + testHead[:7] + "` **Running** <relative-time datetime=\"" + started.Format(time.RFC3339Nano) + `">`,
+		Author:    actor{"chatgpt-codex-connector"},
+		CreatedAt: committed.Add(-time.Hour), // The connector updates one long-lived summary comment.
+		URL:       "https://github.com/HemSoft/gh-x/pull/12#issuecomment-activity",
 	}
 	state := reviewState{HeadRefOID: testHead, CommittedAt: committed}
-	state.Comments.Nodes = []reviewComment{request}
-	if err := pendingOrdinaryReview(state, testConfig, "12", request.CreatedAt.Add(9*time.Minute)); err != nil {
+	state.Comments.Nodes = []reviewComment{activity}
+	if err := pendingOrdinaryReview(state, testConfig, "12", started.Add(9*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := pendingOrdinaryReview(state, testConfig, "12", request.CreatedAt.Add(reviewWindow)); err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("rerun must retain the ordinary request deadline: %v", err)
+	if err := pendingOrdinaryReview(state, testConfig, "12", started.Add(reviewWindow)); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("rerun must retain the current-head activity deadline: %v", err)
 	}
 
-	state.Comments.Nodes = []reviewComment{{
-		Body:      "<!-- codex-pull-request-review-summary --> `" + testHead[:7] + "` **Running**",
-		Author:    actor{"chatgpt-codex-connector"},
-		CreatedAt: committed.Add(20 * time.Minute),
-	}}
-	if err := pendingOrdinaryReview(state, testConfig, "12", committed.Add(time.Hour)); err != nil {
-		t.Fatalf("active current-head review must remain pending: %v", err)
-	}
 	state.Comments.Nodes = nil
 	if err := pendingOrdinaryReview(state, testConfig, "12", committed.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "request once with @codex review") {
-		t.Fatalf("missing ordinary request must be actionable: %v", err)
+		t.Fatalf("missing ordinary activity must be actionable: %v", err)
+	}
+	state.CommittedAt = time.Time{}
+	if err := pendingOrdinaryReview(state, testConfig, "12", committed); err == nil || !strings.Contains(err.Error(), "commit lacks a timestamp") {
+		t.Fatalf("missing commit timestamp must fail closed: %v", err)
 	}
 }
 
-func TestOrdinaryRefusalAndNewRequestSupersedeOldClean(t *testing.T) {
+func TestOrdinaryRefusalAndNewActivitySupersedeOldClean(t *testing.T) {
 	committed := time.Now().Add(-5 * time.Minute)
 	state := cleanState()
 	state.CommittedAt = committed
 	state.Comments.Nodes[0].CreatedAt = committed.Add(time.Minute)
-	request := reviewComment{Body: "@codex review", Author: actor{connectedRequester}, CreatedAt: committed.Add(2 * time.Minute), URL: "request-url"}
-	state.Comments.Nodes = append(state.Comments.Nodes, request)
+	started := committed.Add(2 * time.Minute)
+	activity := reviewComment{
+		Body:      `<!-- codex-pull-request-review-summary --> ` + "`" + testHead[:7] + "` **Running** <relative-time datetime=\"" + started.Format(time.RFC3339Nano) + `">`,
+		Author:    actor{"chatgpt-codex-connector"},
+		CreatedAt: committed.Add(-time.Hour),
+		URL:       "activity-url",
+	}
+	state.Comments.Nodes = append(state.Comments.Nodes, activity)
 	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
 	if ready || err != nil {
-		t.Fatalf("a newer ordinary request must supersede old clean evidence: %v,%v", ready, err)
+		t.Fatalf("newer current-head activity must supersede old clean evidence: %v,%v", ready, err)
 	}
 	refusal := reviewComment{Body: "permission denied", Author: actor{"chatgpt-codex-connector"}, CreatedAt: committed.Add(3 * time.Minute), URL: "response-url"}
 	state.Comments.Nodes = append(state.Comments.Nodes, refusal)

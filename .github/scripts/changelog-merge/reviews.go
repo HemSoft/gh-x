@@ -44,7 +44,10 @@ type reviewState struct {
 
 const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid commits(last:1){nodes{commit{committedDate}}} comments(last:100){nodes{body url createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}`
 
-var reviewedCommit = regexp.MustCompile("(?i)(?:\\*\\*)?Reviewed commit:(?:\\*\\*)?\\s*`?([0-9a-f]{10,40})\\b`?")
+var (
+	reviewedCommit        = regexp.MustCompile("(?i)(?:\\*\\*)?Reviewed commit:(?:\\*\\*)?\\s*`?([0-9a-f]{10,40})\\b`?")
+	codexActivityDatetime = regexp.MustCompile(`datetime="([^"]+)"`)
+)
 
 func fetchReviewState(gh command, cfg config, number string) (reviewState, error) {
 	var response struct {
@@ -148,6 +151,50 @@ func codexEvidence(state reviewState, head string) (time.Time, time.Time, bool) 
 		}
 	}
 	return clean, latest, requested
+}
+
+func currentHeadCodexActivity(state reviewState, head string) (reviewComment, error) {
+	var latest reviewComment
+	for _, comment := range state.Comments.Nodes {
+		if !codexActor(comment.Author.Login) {
+			continue
+		}
+		summary := strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") && strings.Contains(comment.Body, "`"+head[:7]+"`")
+		if !summary && !receiptMatches(comment, head) {
+			continue
+		}
+		stamp := comment.CreatedAt
+		if summary {
+			matches := codexActivityDatetime.FindAllStringSubmatch(comment.Body, -1)
+			if len(matches) == 0 {
+				return latest, errors.New("current-head Codex activity lacks a timestamp")
+			}
+			parsed, err := time.Parse(time.RFC3339Nano, matches[len(matches)-1][1])
+			if err != nil {
+				return latest, errors.New("current-head Codex activity has an invalid timestamp")
+			}
+			stamp = parsed
+		}
+		if stamp.IsZero() {
+			return latest, errors.New("current-head Codex activity lacks a timestamp")
+		}
+		if stamp.After(latest.CreatedAt) {
+			latest = comment
+			latest.CreatedAt = stamp
+		}
+	}
+	for _, item := range state.Reviews.Nodes {
+		if !codexActor(item.Author.Login) || item.Commit.OID != head {
+			continue
+		}
+		if item.SubmittedAt.IsZero() {
+			return latest, errors.New("current-head Codex review lacks a timestamp")
+		}
+		if item.SubmittedAt.After(latest.CreatedAt) {
+			latest = reviewComment{Body: item.Body, CreatedAt: item.SubmittedAt, Author: item.Author}
+		}
+	}
+	return latest, nil
 }
 
 func codexCommentEvidence(state reviewState, head string) (time.Time, time.Time, bool) {
