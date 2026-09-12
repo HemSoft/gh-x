@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -265,7 +266,7 @@ func executeMonitorFetch(ctx context.Context, cfg *monitorConfig, now time.Time)
 func fetchMonitorHost(ctx context.Context, request monitorHostQuery, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
 	args := []string{"api", "--hostname", request.Host, "graphql", "-f", fmt.Sprintf("query=%s", request.Query)}
 	stdoutBuf, stderrBuf, execErr := monitorGHExecFunc(ctx, args...)
-	if execErr != nil && !hasUsableGraphQLData(stdoutBuf.Bytes()) {
+	if execErr != nil && (errors.Is(execErr, context.Canceled) || errors.Is(execErr, context.DeadlineExceeded) || !hasUsableGraphQLData(stdoutBuf.Bytes())) {
 		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", execErr), stderrBuf.String())
 	}
 	result, err := parseMonitorHostResponse(stdoutBuf.Bytes(), cfg, request.Repositories, now)

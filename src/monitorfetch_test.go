@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -178,6 +179,27 @@ func TestExecuteMonitorFetchKeepsSuccessfulHostWhenAnotherTimesOut(t *testing.T)
 	warning := strings.Join(result.Warnings, "; ")
 	if !strings.Contains(warning, "ghe.example.com") || !strings.Contains(warning, "github request timed out") {
 		t.Fatalf("timeout warning = %q", warning)
+	}
+}
+
+func TestFetchMonitorHostRejectsCanceledPartialData(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	monitorGHExecFunc = func(context.Context, ...string) (bytes.Buffer, bytes.Buffer, error) {
+		partial := `{"data":{"rateLimit":{"remaining":42,"resetAt":"2026-08-23T13:00:00Z"}}}`
+		return *bytes.NewBufferString(partial), bytes.Buffer{}, githubContextError(context.Canceled)
+	}
+	cfg := defaultMonitorConfig("owner/public")
+	queries, err := buildMonitorHostQueries(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fetchMonitorHost(ctx, queries[0], cfg, time.Now())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled partial response error = %v", err)
 	}
 }
 

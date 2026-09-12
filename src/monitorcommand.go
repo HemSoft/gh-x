@@ -66,10 +66,25 @@ func runMonitorCmd(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 	program := newMonitorProgramFunc(model)
-	if _, err := program.Run(); err != nil {
-		return fmt.Errorf("monitor session: %w", err)
+	finalModel, runErr := program.Run()
+	stopMonitorRefresh(model, finalModel)
+	if runErr != nil {
+		return fmt.Errorf("monitor session: %w", runErr)
 	}
 	return nil
+}
+
+func stopMonitorRefresh(initial monitorModel, final tea.Model) {
+	current := initial
+	if finalMonitor, ok := final.(monitorModel); ok {
+		current = finalMonitor
+	}
+	if current.cancelRefresh != nil {
+		current.cancelRefresh()
+	}
+	if current.refreshDone != nil {
+		<-current.refreshDone
+	}
 }
 
 // printMonitorQuery renders the batched GraphQL document without running it.

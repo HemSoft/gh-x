@@ -41,7 +41,11 @@ func TestRunMonitorCmdBootstrapErrorSurfaces(t *testing.T) {
 
 	var ran bool
 	newMonitorProgramFunc = func(model monitorModel) monitorProgram {
-		return fakeMonitorProgram{onRun: func() (tea.Model, error) { ran = true; return model, nil }}
+		return fakeMonitorProgram{onRun: func() (tea.Model, error) {
+			ran = true
+			close(model.refreshDone)
+			return model, nil
+		}}
 	}
 	// bootstrap reads the real user config dir; point it at a temp HOME.
 	isolateMonitorHome(t)
@@ -51,6 +55,36 @@ func TestRunMonitorCmdBootstrapErrorSurfaces(t *testing.T) {
 	}
 	if !ran {
 		t.Fatal("program did not run")
+	}
+}
+
+func TestRunMonitorCmdCancelsRefreshOnProgramError(t *testing.T) {
+	savedTTY := monitorTTYFunc
+	savedProgram := newMonitorProgramFunc
+	t.Cleanup(func() {
+		monitorTTYFunc = savedTTY
+		newMonitorProgramFunc = savedProgram
+	})
+	monitorTTYFunc = func() bool { return true }
+	isolateMonitorHome(t)
+
+	var refreshContext context.Context
+	newMonitorProgramFunc = func(model monitorModel) monitorProgram {
+		refreshContext = model.refreshContext
+		return fakeMonitorProgram{onRun: func() (tea.Model, error) {
+			close(model.refreshDone)
+			return model, errBoom()
+		}}
+	}
+
+	err := runMonitorCmd(nil, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "monitor session") {
+		t.Fatalf("program error = %v", err)
+	}
+	select {
+	case <-refreshContext.Done():
+	default:
+		t.Fatal("program error did not cancel monitor refresh context")
 	}
 }
 
