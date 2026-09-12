@@ -592,9 +592,11 @@ or unresolved evidence cannot pass.
 Every published binary carries GitHub build provenance created from the same
 trusted release job before asset publication. The attestation binds its SHA-256
 digest to this repository, the release workflow, and the validated source
-commit. Existing release assets are never replaced: a retry reuses bytes with a
-matching digest, uploads only missing attested assets, and fails closed on a
-digest mismatch.
+commit. The initial attestation covers the complete build before any upload, so
+an interrupted publication can upload a missing, already-attested asset without
+signing it under a later workflow context. Existing release assets are never
+replaced: a retry reuses bytes with a matching digest, uploads only missing
+attested assets, and fails closed on a digest mismatch.
 
 After downloading an asset, verify it with this exact command:
 

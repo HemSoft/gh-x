@@ -230,7 +230,7 @@ func main() {
 	)
 
 	attest := namedStep(releaseJob, "Attest release binaries")
-	require(attest.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "provenance must run for new and resumed releases")
+	require(attest.If == "steps.check.outputs.skip == 'false'", "provenance must bind only the initial release workflow source identity")
 	requirePinnedAction(autoReleaseContent, attest, "actions/attest-build-provenance", "v3")
 	require(reflect.DeepEqual(attest.With, map[string]string{"subject-path": "dist/*"}), "provenance must cover every release binary")
 	require(!attest.ContinueOnError, "provenance failure must stop release publication")
