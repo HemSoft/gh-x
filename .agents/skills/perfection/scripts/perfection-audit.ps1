@@ -202,6 +202,9 @@ function Assert-MutationThresholds {
     if ($text -notmatch 'Killed:\s*(?<killed>\d+), Lived:\s*(?<lived>\d+), Not covered:\s*(?<uncovered>\d+)') {
         throw 'Mutation output omitted killed, lived, or not-covered counts.'
     }
+    $killed = [int]$Matches.killed
+    $lived = [int]$Matches.lived
+    $notCovered = [int]$Matches.uncovered
     if ($text -notmatch 'Test efficacy:\s*(?<efficacy>[0-9.]+)%') {
         throw 'Mutation output omitted test efficacy.'
     }
@@ -210,13 +213,22 @@ function Assert-MutationThresholds {
         throw 'Mutation output omitted mutator coverage.'
     }
     $mutatorCoverage = [double]::Parse($Matches.coverage, [System.Globalization.CultureInfo]::InvariantCulture)
-    if ($efficacy -lt $EfficacyThreshold) {
-        throw "Mutation efficacy $efficacy% is below $EfficacyThreshold%."
+    $covered = $killed + $lived
+    $total = $covered + $notCovered
+    $efficacyLeft = $killed * 100
+    $efficacyRight = $EfficacyThreshold * $covered
+    $coverageLeft = $covered * 100
+    $coverageRight = $CoverageThreshold * $total
+    if ($efficacyLeft -lt $efficacyRight) {
+        throw "Mutation efficacy from $killed killed and $lived lived mutants is below $EfficacyThreshold% (reported $efficacy%)."
     }
-    if ($mutatorCoverage -lt $CoverageThreshold) {
-        throw "Mutator coverage $mutatorCoverage% is below $CoverageThreshold%."
+    if ($coverageLeft -lt $coverageRight) {
+        throw "Mutator coverage from $covered covered and $notCovered not-covered mutants is below $CoverageThreshold% (reported $mutatorCoverage%)."
     }
-    if ($exitCode -notin @(0, 10, 11)) {
+    # Gremlins v0.6.0 reserves exit codes 10 and 11 for its <= threshold checks.
+    $thresholdEquality = ($exitCode -eq 10 -and $efficacyLeft -eq $efficacyRight) -or
+        ($exitCode -eq 11 -and $coverageLeft -eq $coverageRight)
+    if ($exitCode -ne 0 -and -not $thresholdEquality) {
         throw "Mutation testing failed with exit code $exitCode."
     }
 }

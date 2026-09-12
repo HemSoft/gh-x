@@ -44,14 +44,18 @@ expect_failure() {
 
 uncovered="$temp_dir/uncovered.txt"
 write_report "$uncovered" 90 0 11 100.00 89.11
-expect_failure "$uncovered" "Mutator coverage 89.11% is below 90%"
+expect_failure "$uncovered" "Mutator coverage from 90 covered and 11 not-covered mutants is below 90%"
 
 live="$temp_dir/live.txt"
 write_report "$live" 8 1 0 88.89 100.00
-expect_failure "$live" "Mutation efficacy 88.89% is below 90%" 10
+expect_failure "$live" "Mutation efficacy from 8 killed and 1 lived mutants is below 90%" 10
+
+rounded="$temp_dir/rounded.txt"
+write_report "$rounded" 1808 0 201 100.00 90.00
+expect_failure "$rounded" "Mutator coverage from 1808 covered and 201 not-covered mutants is below 90%" 11
 
 passing="$temp_dir/passing.txt"
-write_report "$passing" 91 0 9 100.00 90.00
+write_report "$passing" 90 0 10 100.00 90.00
 # Equality satisfies the documented floor even though Gremlins v0.6.0 returns
 # its threshold code for an exact match.
 GREMLINS_BIN="$fake" GREMLINS_FIXTURE="$passing" GREMLINS_FIXTURE_EXIT=11 bash "$repo_root/.github/scripts/run-mutation-gate.sh" >/dev/null
