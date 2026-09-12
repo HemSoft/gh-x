@@ -194,6 +194,26 @@ func TestFetchReviewStatePaginatesTimeline(t *testing.T) {
 	}
 }
 
+func TestFetchReviewStatePaginatesComments(t *testing.T) {
+	newer := commentConnection{Nodes: []reviewComment{{URL: "newer"}}, PageInfo: pageInfo{HasPreviousPage: true, StartCursor: "comment-cursor"}}
+	older := commentConnection{Nodes: []reviewComment{{URL: "older"}}}
+	calls := 0
+	gh := func(args ...string) ([]byte, error) {
+		calls++
+		comments := newer
+		if strings.Contains(strings.Join(args, " "), "before=comment-cursor") {
+			comments = older
+		}
+		return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"headRefOid": testHead, "comments": comments,
+		}}}}), nil
+	}
+	state, err := fetchReviewState(gh, testConfig, "12")
+	if err != nil || calls != 2 || len(state.Comments.Nodes) != 2 || state.Comments.Nodes[0].URL != "older" || state.Comments.PageInfo.HasPreviousPage {
+		t.Fatalf("comment pagination failed: calls=%d state=%+v err=%v", calls, state.Comments, err)
+	}
+}
+
 func TestFetchReviewStateRejectsMissingTimelineCursor(t *testing.T) {
 	gh := func(...string) ([]byte, error) {
 		timeline := timelineConnection{PageInfo: pageInfo{HasPreviousPage: true}}

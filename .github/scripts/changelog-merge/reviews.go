@@ -42,11 +42,8 @@ type reviewState struct {
 			Commit struct{ CommittedDate time.Time }
 		}
 	}
-	Comments struct {
-		Nodes    []reviewComment
-		PageInfo pageInfo
-	}
-	Reviews struct {
+	Comments commentConnection
+	Reviews  struct {
 		Nodes    []review
 		PageInfo pageInfo
 	}
@@ -57,13 +54,20 @@ type reviewState struct {
 	TimelineItems timelineConnection
 }
 
+type commentConnection struct {
+	Nodes    []reviewComment
+	PageInfo pageInfo
+}
+
 type timelineConnection struct {
 	Nodes    []timelineItem
 	PageInfo pageInfo
 }
 
+const commentFields = `nodes{body url createdAt author{login}} pageInfo{hasPreviousPage startCursor}`
 const timelineFields = `nodes{__typename ... on IssueComment{body url createdAt author{login}} ... on PullRequestCommit{commit{oid}} ... on HeadRefForcePushedEvent{createdAt afterCommit{oid}}} pageInfo{hasPreviousPage startCursor}`
-const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid commits(last:1){nodes{commit{committedDate}}} comments(last:100){nodes{body url createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} timelineItems(last:100,itemTypes:[PULL_REQUEST_COMMIT,ISSUE_COMMENT,HEAD_REF_FORCE_PUSHED_EVENT]){` + timelineFields + `}}}}`
+const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid commits(last:1){nodes{commit{committedDate}}} comments(last:100){` + commentFields + `} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} timelineItems(last:100,itemTypes:[PULL_REQUEST_COMMIT,ISSUE_COMMENT,HEAD_REF_FORCE_PUSHED_EVENT]){` + timelineFields + `}}}}`
+const earlierCommentsQuery = `query($owner:String!,$repo:String!,$number:Int!,$before:String!){repository(owner:$owner,name:$repo){pullRequest(number:$number){comments(last:100,before:$before){` + commentFields + `}}}}`
 const earlierTimelineQuery = `query($owner:String!,$repo:String!,$number:Int!,$before:String!){repository(owner:$owner,name:$repo){pullRequest(number:$number){timelineItems(last:100,before:$before,itemTypes:[PULL_REQUEST_COMMIT,ISSUE_COMMENT,HEAD_REF_FORCE_PUSHED_EVENT]){` + timelineFields + `}}}}`
 
 var (
@@ -86,10 +90,36 @@ func fetchReviewState(gh command, cfg config, number string) (reviewState, error
 	if len(state.Commits.Nodes) == 1 {
 		state.CommittedAt = state.Commits.Nodes[0].Commit.CommittedDate
 	}
+	if err := fetchEarlierComments(gh, number, owner, repo, &state.Comments); err != nil {
+		return state, err
+	}
 	if err := fetchEarlierTimeline(gh, number, owner, repo, &state.TimelineItems); err != nil {
 		return state, err
 	}
 	return state, nil
+}
+
+func fetchEarlierComments(gh command, number, owner, repo string, comments *commentConnection) error {
+	for page := 0; comments.PageInfo.HasPreviousPage; page++ {
+		if page == 100 || comments.PageInfo.StartCursor == "" {
+			return errors.New("pull request comment pagination is incomplete")
+		}
+		var response struct {
+			Data struct {
+				Repository struct {
+					PullRequest struct{ Comments commentConnection }
+				}
+			}
+		}
+		err := readJSON(gh, &response, "api", "graphql", "-f", "query="+earlierCommentsQuery, "-f", "owner="+owner, "-f", "repo="+repo, "-F", "number="+number, "-f", "before="+comments.PageInfo.StartCursor)
+		if err != nil {
+			return fmt.Errorf("fetch earlier pull request comments: %w", err)
+		}
+		earlier := response.Data.Repository.PullRequest.Comments
+		comments.Nodes = append(earlier.Nodes, comments.Nodes...)
+		comments.PageInfo = earlier.PageInfo
+	}
+	return nil
 }
 
 func fetchEarlierTimeline(gh command, number, owner, repo string, timeline *timelineConnection) error {
@@ -298,10 +328,36 @@ func hasCurrentHeadCodexSummary(comments []reviewComment, head string) (bool, er
 }
 
 func ordinaryCodexCandidates(state reviewState, head string) ([]reviewComment, error) {
+	candidates, err := ordinaryNonSummaryCandidates(state, head)
+	if err != nil {
+		return nil, err
+	}
+	for _, comment := range state.Comments.Nodes {
+		if !strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") {
+			continue
+		}
+		candidate, matched, collides, err := ordinaryCommentCandidate(state, comment, head)
+		if err != nil {
+			return nil, err
+		}
+		if collides && len(exactCodexReviewCandidates(state.Reviews.Nodes, head)) == 0 {
+			return nil, errors.New("abbreviated Codex receipt matches distinct pull request heads; exact review evidence required")
+		}
+		if matched {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates, nil
+}
+
+func ordinaryNonSummaryCandidates(state reviewState, head string) ([]reviewComment, error) {
 	candidates := exactCodexReviewCandidates(state.Reviews.Nodes, head)
 	hasExactReview := len(candidates) != 0
 	collision := false
 	for _, comment := range state.Comments.Nodes {
+		if strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") {
+			continue
+		}
 		candidate, matched, collides, err := ordinaryCommentCandidate(state, comment, head)
 		if err != nil {
 			return nil, err
@@ -344,26 +400,22 @@ func ordinaryCommentCandidate(state reviewState, comment reviewComment, head str
 }
 
 func completedSummaryIsClean(state reviewState, head string, completedAt time.Time) (bool, error) {
-	var latest review
-	for _, item := range state.Reviews.Nodes {
-		if !codexActor(item.Author.Login) || item.Commit.OID != head {
-			continue
-		}
-		if item.SubmittedAt.IsZero() {
-			return false, errors.New("current-head Codex activity lacks a timestamp")
-		}
-		if latest.SubmittedAt.IsZero() || item.SubmittedAt.After(latest.SubmittedAt) {
-			latest = item
-		}
-	}
-	if latest.SubmittedAt.IsZero() || latest.State == "APPROVED" {
-		return true, nil
-	}
-	request, err := latestBoundOrdinaryRequest(state, head, latest.SubmittedAt)
+	candidates, err := ordinaryNonSummaryCandidates(state, head)
 	if err != nil {
 		return false, err
 	}
-	return !request.CreatedAt.IsZero() && request.CreatedAt.After(latest.SubmittedAt) && !request.CreatedAt.After(completedAt), nil
+	latest, err := latestCodexActivity(candidates)
+	if err != nil {
+		return false, err
+	}
+	if latest.CreatedAt.IsZero() || latest.Clean {
+		return true, nil
+	}
+	request, err := latestBoundOrdinaryRequest(state, head, latest.CreatedAt)
+	if err != nil {
+		return false, err
+	}
+	return !request.CreatedAt.IsZero() && request.CreatedAt.After(latest.CreatedAt) && !request.CreatedAt.After(completedAt), nil
 }
 
 func exactCodexReviewCandidates(reviews []review, head string) []reviewComment {

@@ -228,6 +228,23 @@ func TestCompletedSummaryIsCleanOnlyWithoutExactFindings(t *testing.T) {
 	}
 }
 
+func TestCompletedSummaryDoesNotClearSameRunCommentFinding(t *testing.T) {
+	completed := time.Now().Add(-time.Minute)
+	state := cleanState()
+	finding := state.Comments.Nodes[0]
+	finding.Body = "Codex found an issue.\nReviewed commit: `" + testHead + "`"
+	finding.CreatedAt = completed.Add(-time.Second)
+	state.Comments.Nodes = []reviewComment{finding, {
+		Body: strings.Replace(runningActivity(completed), "🔄 **Running** since", "✅ **Completed**", 1), Author: actor{"chatgpt-codex-connector"}, URL: "summary-url",
+	}}
+	state.TimelineItems.Nodes[1].Body = finding.Body
+	state.TimelineItems.Nodes[1].CreatedAt = finding.CreatedAt
+	ready, requested, err := ordinaryReviewReady(state, testHead)
+	if ready || !requested || err != nil {
+		t.Fatalf("same-run comment finding must survive completion: %v,%v,%v", ready, requested, err)
+	}
+}
+
 func TestCurrentHeadSummaryAllowsOlderCommentsToBeTruncated(t *testing.T) {
 	completed := time.Now().Add(-time.Minute)
 	state := cleanState()
