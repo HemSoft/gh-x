@@ -387,15 +387,11 @@ jobs:
       - name: Install gremlins
         run: bash .github/scripts/install-quality-tools.sh mutation
 
-      - name: "Enforce: mutation score ≥ 90%"
-        run: |
-          set -o pipefail
-          results=$(mktemp)
-          gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src 2>&1 | tee "$results"
-          if grep -Fq "No results to report" "$results"; then
-            echo "::error::Mutation testing produced no results"
-            exit 1
-          fi
+      - name: Verify mutation threshold fixtures
+        run: bash .github/scripts/test-mutation-gate.sh
+
+      - name: "Enforce: mutation efficacy ≥ 90% and mutator coverage ≥ 90%"
+        run: bash .github/scripts/run-mutation-gate.sh
 
   # Read-only review verification uses the default-branch helper for every PR.
   # Auto Release remains the sole automated requester for generated changelogs.

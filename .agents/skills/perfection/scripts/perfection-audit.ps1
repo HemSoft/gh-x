@@ -184,6 +184,43 @@ function Assert-CrapThreshold {
     Write-Host "All functions have CRAP score below $Threshold."
 }
 
+function Assert-MutationThresholds {
+    param(
+        [Parameter(Mandatory)][double]$EfficacyThreshold,
+        [Parameter(Mandatory)][double]$CoverageThreshold,
+        [Parameter(Mandatory)][string]$PackageScope
+    )
+
+    Show-Section "mutation efficacy >= $EfficacyThreshold% and mutator coverage >= $CoverageThreshold%"
+    $output = @(& gremlins unleash --timeout-coefficient 10 --threshold-efficacy $EfficacyThreshold --threshold-mcover $CoverageThreshold $PackageScope 2>&1)
+    $exitCode = $LASTEXITCODE
+    $output | ForEach-Object { Write-Host $_ }
+    $text = $output -join "`n"
+    if ($text.Contains('No results to report')) {
+        throw 'Mutation testing produced no results.'
+    }
+    if ($text -notmatch 'Killed:\s*(?<killed>\d+), Lived:\s*(?<lived>\d+), Not covered:\s*(?<uncovered>\d+)') {
+        throw 'Mutation output omitted killed, lived, or not-covered counts.'
+    }
+    if ($text -notmatch 'Test efficacy:\s*(?<efficacy>[0-9.]+)%') {
+        throw 'Mutation output omitted test efficacy.'
+    }
+    $efficacy = [double]$Matches.efficacy
+    if ($text -notmatch 'Mutator coverage:\s*(?<coverage>[0-9.]+)%') {
+        throw 'Mutation output omitted mutator coverage.'
+    }
+    $mutatorCoverage = [double]$Matches.coverage
+    if ($efficacy -lt $EfficacyThreshold) {
+        throw "Mutation efficacy $efficacy% is below $EfficacyThreshold%."
+    }
+    if ($mutatorCoverage -lt $CoverageThreshold) {
+        throw "Mutator coverage $mutatorCoverage% is below $CoverageThreshold%."
+    }
+    if ($exitCode -ne 0) {
+        throw "Mutation testing failed with exit code $exitCode."
+    }
+}
+
 $repoRoot = (& git rev-parse --show-toplevel 2>$null).Trim()
 if (-not $repoRoot -or $LASTEXITCODE -ne 0) {
     throw 'Run this script from a gh-x worktree.'
@@ -210,8 +247,11 @@ if ($missingTools.Count -gt 0) {
 }
 $qualityToolPins = Assert-PinnedToolVersions (Join-Path $repoRoot '.github\quality-tools.env')
 $markdownlintVersion = $qualityToolPins['MARKDOWNLINT_CLI2_VERSION']
-if (-not $markdownlintVersion) {
-    throw 'Missing MARKDOWNLINT_CLI2_VERSION in .github/quality-tools.env.'
+$mutationEfficacyThreshold = $qualityToolPins['MUTATION_EFFICACY_THRESHOLD']
+$mutationCoverageThreshold = $qualityToolPins['MUTATION_COVERAGE_THRESHOLD']
+$mutationPackageScope = $qualityToolPins['MUTATION_PACKAGE_SCOPE']
+if (-not $markdownlintVersion -or -not $mutationEfficacyThreshold -or -not $mutationCoverageThreshold -or -not $mutationPackageScope) {
+    throw 'Missing a quality threshold or tool version in .github/quality-tools.env.'
 }
 
 $tempRoot = [System.IO.Path]::GetTempPath()
@@ -258,16 +298,7 @@ try {
     Assert-CrapThreshold $coveragePath 30.0
     Invoke-CheckedCommand 'Markdown lint' 'npx' @('--yes', "markdownlint-cli2@$markdownlintVersion", '**/*.md', '#node_modules', '#.agents', '#.github/agents')
 
-    Show-Section 'mutation efficacy >= 90%'
-    $mutationOutput = @(& gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 ./src 2>&1)
-    $mutationExitCode = $LASTEXITCODE
-    $mutationOutput | ForEach-Object { Write-Host $_ }
-    if ($mutationExitCode -ne 0) {
-        throw "Mutation testing failed with exit code $mutationExitCode."
-    }
-    if (($mutationOutput -join "`n").Contains('No results to report')) {
-        throw 'Mutation testing produced no results.'
-    }
+    Assert-MutationThresholds ([double]$mutationEfficacyThreshold) ([double]$mutationCoverageThreshold) $mutationPackageScope
 
     Write-Host "`nAll quality gates passed." -ForegroundColor Green
 } finally {
