@@ -217,7 +217,7 @@ func latestCodexActivity(candidates []reviewComment) (reviewComment, error) {
 		if candidate.CreatedAt.IsZero() {
 			return reviewComment{}, errors.New("current-head Codex activity lacks a timestamp")
 		}
-		if candidate.CreatedAt.Equal(latest.CreatedAt) && (candidate.URL != latest.URL || candidate.Body != latest.Body || candidate.Author.Login != latest.Author.Login) {
+		if candidate.CreatedAt.Equal(latest.CreatedAt) && (candidate.URL != latest.URL || candidate.Body != latest.Body || candidate.Author.Login != latest.Author.Login || candidate.Clean != latest.Clean) {
 			return reviewComment{}, errors.New("distinct current-head Codex activity shares a timestamp; manual review required")
 		}
 		if candidate.CreatedAt.After(latest.CreatedAt) {

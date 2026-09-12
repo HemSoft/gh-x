@@ -196,6 +196,16 @@ func TestOrdinaryActivityTimeIgnoresProseAndRejectsAmbiguity(t *testing.T) {
 	}
 }
 
+func TestSameTimeReviewsWithDifferentStatesFailClosed(t *testing.T) {
+	stamp := time.Now()
+	first := reviewComment{Body: "same review", Author: actor{"chatgpt-codex-connector"}, CreatedAt: stamp}
+	second := first
+	second.Clean = true
+	if _, err := latestCodexActivity([]reviewComment{first, second}); err == nil || !strings.Contains(err.Error(), "shares a timestamp") {
+		t.Fatalf("same-time review state conflict must fail closed: %v", err)
+	}
+}
+
 func TestOrdinaryDistinctSameTimeEvidenceFailsClosed(t *testing.T) {
 	started := time.Now().Add(-time.Minute)
 	state := cleanState()
