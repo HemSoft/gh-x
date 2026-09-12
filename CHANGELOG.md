@@ -12,8 +12,6 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
-- fix: resolve SSH remote aliases before routing GitHub API calls
-
 ## [0.12.2] - 2026-09-12
 
 - fix: resolve SSH aliases for status API routing (#92)
