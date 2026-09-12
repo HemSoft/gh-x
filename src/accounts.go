@@ -267,14 +267,25 @@ func isSSHRemoteScheme(scheme string) bool {
 	return normalized == "ssh" || strings.HasSuffix(normalized, "+ssh")
 }
 
-// configuredSSHHost returns the configured HostName when it is suitable for a
-// gh API endpoint. A missing ssh binary, invalid config, timeout, or unresolved
-// alias falls back to the original remote host.
+// knownGitHubHostFunc identifies API hosts already configured in gh. Tests
+// replace it so host-routing cases stay independent of local authentication.
+var knownGitHubHostFunc = knownGitHubHost
+
+func knownGitHubHost(host string) bool {
+	return host == defaultGitHubHost || len(listAccountsFunc(host)) > 0
+}
+
+// configuredSSHHost preserves known API hosts and accepts a configured
+// HostName only when gh also knows that destination as an API host. This keeps
+// SSH transport endpoints such as ssh.github.com out of gh --hostname. A
+// missing binary, invalid config, timeout, or unknown destination falls back
+// to the original remote host.
 func configuredSSHHost(host string) string {
-	if host == "" || host == defaultGitHubHost || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+	if host == "" || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || knownGitHubHostFunc(host) {
 		return host
 	}
-	if resolved := normalizeRemoteHost(sshConfigHostFunc(host)); plausibleRemoteHost(resolved) {
+	resolved := normalizeRemoteHost(sshConfigHostFunc(host))
+	if plausibleRemoteHost(resolved) && knownGitHubHostFunc(resolved) {
 		return resolved
 	}
 	return host

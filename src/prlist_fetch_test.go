@@ -665,6 +665,7 @@ func TestFetchSupplementalDataUsesConfiguredSSHHost(t *testing.T) {
 	t.Setenv("GH_REPO", "")
 	t.Setenv("GH_HOST", "")
 	withRemoteURLStub(t, "git@github.com-hemsoft:HemSoft/codexbar-ios.git")
+	withKnownGitHubHostStub(t, func(host string) bool { return host == defaultGitHubHost })
 	withSSHConfigHostStub(t, func(host string) string {
 		if host != "github.com-hemsoft" {
 			t.Fatalf("SSH resolver host = %q, want github.com-hemsoft", host)

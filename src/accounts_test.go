@@ -29,6 +29,13 @@ func withSSHConfigHostStub(t *testing.T, stub func(string) string) {
 	t.Cleanup(func() { sshConfigHostFunc = saved })
 }
 
+func withKnownGitHubHostStub(t *testing.T, stub func(string) bool) {
+	t.Helper()
+	saved := knownGitHubHostFunc
+	knownGitHubHostFunc = stub
+	t.Cleanup(func() { knownGitHubHostFunc = saved })
+}
+
 func withRemoteURLStub(t *testing.T, remote string) {
 	t.Helper()
 	saved := gitRemoteURLFunc
@@ -369,6 +376,7 @@ func TestParseAuthStatusJSONInvalidPayload(t *testing.T) {
 
 func TestTargetHostResolvesDottedSSHRemoteAlias(t *testing.T) {
 	t.Setenv("GH_REPO", "")
+	withKnownGitHubHostStub(t, func(host string) bool { return host == defaultGitHubHost })
 	t.Setenv("GH_HOST", "ghe.fallback.example")
 	savedRemote := gitRemoteURLFunc
 	savedResolver := sshConfigHostFunc
@@ -478,6 +486,9 @@ func TestTargetHostUsesRepoEnvAndGitRemote(t *testing.T) {
 	resetRemoteCache()
 	savedRemote := gitRemoteURLFunc
 	withSSHConfigHostStub(t, func(host string) string { return host })
+	withKnownGitHubHostStub(t, func(host string) bool {
+		return host == defaultGitHubHost || host == "ghe.internal.acme.io"
+	})
 	t.Cleanup(func() { gitRemoteURLFunc = savedRemote; resetRemoteCache() })
 
 	t.Run("GH_REPO with host prefix", func(t *testing.T) {
@@ -528,6 +539,9 @@ func TestTargetHostUsesRepoEnvAndGitRemote(t *testing.T) {
 
 func TestHostFromRemoteURL(t *testing.T) {
 	withSSHConfigHostStub(t, func(host string) string { return host })
+	withKnownGitHubHostStub(t, func(host string) bool {
+		return host == defaultGitHubHost || host == "ghe.example.com"
+	})
 	cases := map[string]string{
 		"https://ghe.example.com/acme/widgets.git": "ghe.example.com",
 		"ssh://git@ghe.example.com/acme/widgets":   "ghe.example.com",
@@ -553,13 +567,16 @@ func TestHostFromRemoteURL(t *testing.T) {
 
 func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 	resolverCalls := 0
+	withKnownGitHubHostStub(t, func(host string) bool {
+		return host == defaultGitHubHost || host == "ghe.example.com"
+	})
 	withSSHConfigHostStub(t, func(host string) string {
 		resolverCalls++
 		switch host {
 		case "github.com-hemsoft", "workserver":
 			return defaultGitHubHost
-		case defaultGitHubHost:
-			return "ssh.github.com"
+		case "ghe.example-alias":
+			return "ghe.example.com"
 		default:
 			return host
 		}
@@ -575,6 +592,7 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 		{name: "ssh scheme alias", value: "ssh://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "git plus ssh alias", value: "git+ssh://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "genuine enterprise ssh host", value: "git@ghe.example.com:acme/widgets.git", want: "ghe.example.com"},
+		{name: "enterprise SSH alias", value: "git@ghe.example-alias:acme/widgets.git", want: "ghe.example.com"},
 		{name: "canonical public host over SSH", value: "git@github.com:HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "https host is not an SSH alias", value: "https://github.com-hemsoft/HemSoft/codexbar-ios.git", want: "github.com-hemsoft"},
 	}
@@ -610,7 +628,56 @@ func TestParseSSHConfigHost(t *testing.T) {
 	}
 }
 
+func TestKnownGitHubHost(t *testing.T) {
+	saved := listAccountsFunc
+	listAccountsFunc = func(host string) []ghAccount {
+		if host == "ghe.example.com" {
+			return []ghAccount{{Login: "enterprise-user", Active: true}}
+		}
+		return nil
+	}
+	t.Cleanup(func() { listAccountsFunc = saved })
+
+	if !knownGitHubHost(defaultGitHubHost) {
+		t.Fatal("github.com must always be a known API host")
+	}
+	if !knownGitHubHost("ghe.example.com") {
+		t.Fatal("an authenticated Enterprise host must be known")
+	}
+	if knownGitHubHost("ssh.ghe.example.com") {
+		t.Fatal("an unauthenticated SSH transport endpoint must not be an API host")
+	}
+}
+
+func TestConfiguredSSHHostPreservesKnownAPIHosts(t *testing.T) {
+	withKnownGitHubHostStub(t, func(host string) bool {
+		return host == defaultGitHubHost || host == "ghe.example.com"
+	})
+	resolverCalls := 0
+	withSSHConfigHostStub(t, func(string) string {
+		resolverCalls++
+		return "ssh.transport.example"
+	})
+	for _, host := range []string{defaultGitHubHost, "ghe.example.com"} {
+		if got := configuredSSHHost(host); got != host {
+			t.Fatalf("configuredSSHHost(%q) = %q, want known API host unchanged", host, got)
+		}
+	}
+	if resolverCalls != 0 {
+		t.Fatalf("SSH resolver calls = %d, want 0 for known API hosts", resolverCalls)
+	}
+}
+
+func TestConfiguredSSHHostRejectsUnknownTransportHost(t *testing.T) {
+	withKnownGitHubHostStub(t, func(host string) bool { return host == defaultGitHubHost })
+	withSSHConfigHostStub(t, func(string) string { return "ssh.transport.example" })
+	if got := configuredSSHHost("github.com-hemsoft"); got != "github.com-hemsoft" {
+		t.Fatalf("configuredSSHHost() = %q, want original alias when resolved host is not a known API host", got)
+	}
+}
+
 func TestConfiguredSSHHostFallsBack(t *testing.T) {
+	withKnownGitHubHostStub(t, func(string) bool { return false })
 	withSSHConfigHostStub(t, func(string) string { return "" })
 	if got := configuredSSHHost("ghe.example.com"); got != "ghe.example.com" {
 		t.Fatalf("configuredSSHHost() = %q, want original Enterprise host", got)
