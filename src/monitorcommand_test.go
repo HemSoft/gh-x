@@ -137,7 +137,7 @@ func TestMonitorSeedRepoHonorsGHRepoHostOverCheckoutRemote(t *testing.T) {
 		resetRemoteCache()
 	}()
 	t.Setenv("GH_REPO", "ghe.example.com/Acme/Widgets")
-	gitRemoteURLFunc = func() string { return "https://github.com/HemSoft/gh-x.git" }
+	gitRemoteURLFunc = func(context.Context) string { return "https://github.com/HemSoft/gh-x.git" }
 	resetRemoteCache()
 	monitorResolveRepoFunc = func(string) (string, string, error) {
 		return "Acme", "Widgets", nil

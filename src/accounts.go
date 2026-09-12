@@ -146,14 +146,17 @@ func execGHContext(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buf
 	if contextErr := githubContextError(ctx.Err()); contextErr != nil {
 		return stdout, stderr, contextErr
 	}
-	if !fallbackEligible(args, stderr.String()) {
+	host, eligible := fallbackHost(ctx, args, stderr.String())
+	if contextErr := githubContextError(ctx.Err()); contextErr != nil {
+		return stdout, stderr, contextErr
+	}
+	if !eligible {
 		return stdout, stderr, err
 	}
-	return retryGHWithAccounts(ctx, args, stdout, stderr, err)
+	return retryGHWithAccounts(ctx, host, args, stdout, stderr, err)
 }
 
-func retryGHWithAccounts(ctx context.Context, args []string, originalOut, originalErrs bytes.Buffer, originalErr error) (bytes.Buffer, bytes.Buffer, error) {
-	host := targetHost(args)
+func retryGHWithAccounts(ctx context.Context, host string, args []string, originalOut, originalErrs bytes.Buffer, originalErr error) (bytes.Buffer, bytes.Buffer, error) {
 	logins := fallbackAccountLoginsFor(ctx, host)
 	if contextErr := githubContextError(ctx.Err()); contextErr != nil {
 		return originalOut, originalErrs, contextErr
@@ -209,6 +212,10 @@ func execGHActiveContext(ctx context.Context, args ...string) (bytes.Buffer, byt
 // --repo/-R, the GH_REPO environment variable, the current repository's git
 // remote after SSH alias resolution, GH_HOST, then github.com.
 func targetHost(args []string) string {
+	return targetHostContext(context.Background(), args)
+}
+
+func targetHostContext(ctx context.Context, args []string) string {
 	if host := hostFromHostnameArgs(args); host != "" {
 		return host
 	}
@@ -218,7 +225,7 @@ func targetHost(args []string) string {
 	if host := hostFromRepoValue(os.Getenv("GH_REPO")); host != "" {
 		return host
 	}
-	if host := cachedRemoteTargetHost(); host != "" {
+	if host := cachedRemoteTargetHost(ctx); host != "" {
 		return host
 	}
 	if host := strings.TrimSpace(os.Getenv("GH_HOST")); host != "" {
@@ -262,19 +269,29 @@ var (
 
 // cachedRemoteTargetHost memoizes both the git remote probe and SSH alias
 // resolution so commands in one process do not repeatedly invoke ssh -G.
-func cachedRemoteTargetHost() string {
+func cachedRemoteTargetHost(ctx context.Context) string {
 	remoteMu.Lock()
 	defer remoteMu.Unlock()
-	if !remoteResolved {
-		cachedRemoteHost = hostFromRemoteURL(gitRemoteURLFunc())
-		remoteResolved = true
+	if remoteResolved {
+		return cachedRemoteHost
 	}
+	remoteURL := gitRemoteURLFunc(ctx)
+	if ctx.Err() != nil {
+		return ""
+	}
+	resolvedHost := hostFromRemoteURLContext(ctx, remoteURL)
+	if ctx.Err() != nil {
+		return ""
+	}
+	cachedRemoteHost = resolvedHost
+	remoteResolved = true
 	return cachedRemoteHost
 }
 
 // defaultGitRemoteURL reads the origin remote of the current repository.
-func defaultGitRemoteURL() string {
-	cmd := exec.Command("git", "config", "--get", "remote.origin.url")
+func defaultGitRemoteURL(ctx context.Context) string {
+	cmd := exec.CommandContext(ctx, "git", "config", "--get", "remote.origin.url")
+	cmd.WaitDelay = githubCommandWaitDelay
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -327,7 +344,7 @@ func hostFromRepoValue(value string) string {
 // without an ssh user), or bare host/path git remote URLs. SSH destinations
 // are resolved through ssh -G before they become API hosts; unrecognized
 // values return "" so inference degrades to the next signal.
-func hostFromRemoteURL(raw string) string {
+func hostFromRemoteURLContext(ctx context.Context, raw string) string {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return ""
@@ -335,7 +352,7 @@ func hostFromRemoteURL(raw string) string {
 	if matches := remoteSchemeHost.FindStringSubmatch(value); len(matches) == 3 {
 		host := normalizeRemoteHost(matches[2])
 		if isSSHRemoteScheme(matches[1]) {
-			host = configuredSSHHost(matches[2])
+			host = configuredSSHHostContext(ctx, matches[2])
 		}
 		if plausibleRemoteHost(host) {
 			return host
@@ -343,7 +360,7 @@ func hostFromRemoteURL(raw string) string {
 		return ""
 	}
 	if matches := remoteScpHost.FindStringSubmatch(value); len(matches) == 2 {
-		host := configuredSSHHost(matches[1])
+		host := configuredSSHHostContext(ctx, matches[1])
 		if plausibleRemoteHost(host) {
 			return host
 		}
@@ -403,12 +420,12 @@ func knownGitHubHost(host string) bool {
 // SSH transport endpoints such as ssh.github.com out of gh --hostname. A
 // missing binary, invalid config, timeout, or unknown destination falls back
 // to the original remote host.
-func configuredSSHHost(host string) string {
+func configuredSSHHostContext(ctx context.Context, host string) string {
 	normalizedHost := normalizeRemoteHost(host)
 	if normalizedHost == "" || strings.HasPrefix(normalizedHost, ".") || strings.HasSuffix(normalizedHost, ".") || knownGitHubHostFunc(normalizedHost) {
 		return normalizedHost
 	}
-	resolved := normalizeRemoteHost(sshConfigHostFunc(host))
+	resolved := normalizeRemoteHost(sshConfigHostFunc(ctx, host))
 	if resolved == publicGitHubSSHHost {
 		return defaultGitHubHost
 	}
@@ -418,8 +435,8 @@ func configuredSSHHost(host string) string {
 	return normalizedHost
 }
 
-func defaultSSHConfigHost(host string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), sshConfigTimeout)
+func defaultSSHConfigHost(ctx context.Context, host string) string {
+	ctx, cancel := context.WithTimeout(ctx, sshConfigTimeout)
 	defer cancel()
 	out, err := newSSHConfigCommand(ctx, host).Output()
 	if err != nil {
@@ -462,14 +479,12 @@ func credentialEnvFor(host, token string) []string {
 // account attempt. Auth-plane commands never fall back, explicit token
 // environment overrides for the target host are respected, and only
 // access-shaped errors qualify.
-func fallbackEligible(args []string, stderr string) bool {
-	if len(args) == 0 || args[0] == "auth" {
-		return false
+func fallbackHost(ctx context.Context, args []string, stderr string) (string, bool) {
+	if len(args) == 0 || args[0] == "auth" || !isAccessError(stderr) {
+		return "", false
 	}
-	if explicitTokenSet(targetHost(args)) {
-		return false
-	}
-	return isAccessError(stderr)
+	host := targetHostContext(ctx, args)
+	return host, ctx.Err() == nil && !explicitTokenSet(host)
 }
 
 // explicitTokenSet reports whether the caller pinned credentials for host via
