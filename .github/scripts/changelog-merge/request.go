@@ -230,7 +230,7 @@ func ensureRequest(gh command, cfg config, number string) error {
 	if err := verifyRequester(gh, cfg); err != nil {
 		return reviewBlocked(cfg, number, reviewComment{}, "", err.Error())
 	}
-	if err := inspectEligibility(gh, cfg, number); err != nil {
+	if err := inspectEligibility(gh, cfg, number, true); err != nil {
 		return err
 	}
 	body := "@codex review\n\n" + requestMarker("codex", cfg.head)

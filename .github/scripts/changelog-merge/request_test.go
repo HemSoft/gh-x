@@ -91,7 +91,7 @@ func TestRefusalThenConnectedSuccess(t *testing.T) {
 	human := markedRequest("HemSoft", clean.CreatedAt.Add(-time.Minute))
 	state.Comments.Nodes = []reviewComment{bot, refusal, human, clean}
 	for i := 0; i < 2; i++ {
-		if err := waitForReview(context.Background(), reviewFixture(t, &state), testConfig, "12"); err != nil {
+		if err := waitForReview(context.Background(), reviewFixture(t, &state), testConfig, "12", true); err != nil {
 			t.Fatalf("verification rerun must reuse the clean connected result: %v", err)
 		}
 	}
@@ -223,12 +223,12 @@ func TestRefusalDoesNotOverrideLaterHeadReceipt(t *testing.T) {
 	clean := state.Comments.Nodes[0]
 	request := markedRequest("github-actions", clean.CreatedAt.Add(-time.Minute))
 	state.Comments.Nodes = append(state.Comments.Nodes, request, reviewComment{Body: "create a Codex account", Author: actor{"chatgpt-codex-connector"}, CreatedAt: request.CreatedAt.Add(time.Second)})
-	ready, err := pollReview(reviewFixture(t, &state), testConfig, "12")
+	ready, err := pollReview(reviewFixture(t, &state), testConfig, "12", true)
 	if !ready || err != nil {
 		t.Fatalf("PR 78 legacy unmarked human recovery must accept its explicit head receipt: %v,%v", ready, err)
 	}
 	state.Comments.Nodes = append(state.Comments.Nodes, markedRequest("HemSoft", time.Now()))
-	ready, err = pollReview(reviewFixture(t, &state), testConfig, "12")
+	ready, err = pollReview(reviewFixture(t, &state), testConfig, "12", true)
 	if ready || err != nil {
 		t.Fatalf("new current-head request supersedes old clean receipt: %v,%v", ready, err)
 	}
@@ -308,13 +308,13 @@ func TestLateCompletionAddsEvidenceWithoutRestartingWait(t *testing.T) {
 	request := markedRequest("HemSoft", time.Now().Add(-time.Hour))
 	state.Comments.Nodes = []reviewComment{request}
 	gh := reviewFixture(t, &state) // Any request/comment mutation fails this fixture.
-	if err := waitForReview(context.Background(), gh, testConfig, "12"); err == nil || !strings.Contains(err.Error(), "timed out") {
+	if err := waitForReview(context.Background(), gh, testConfig, "12", true); err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("absent evidence must retain the expired deadline: %v", err)
 	}
 	clean := cleanState().Comments.Nodes[0]
 	clean.CreatedAt = time.Now()
 	state.Comments.Nodes = append(state.Comments.Nodes, clean)
-	if err := waitForReview(context.Background(), gh, testConfig, "12"); err != nil {
+	if err := waitForReview(context.Background(), gh, testConfig, "12", true); err != nil {
 		t.Fatalf("genuine later head-specific completion needs no new wait: %v", err)
 	}
 	if !requestStart(state, request, testHead).Equal(request.CreatedAt) {
@@ -324,7 +324,7 @@ func TestLateCompletionAddsEvidenceWithoutRestartingWait(t *testing.T) {
 
 func TestCodexAlonePassesWithoutOptionalProducts(t *testing.T) {
 	state := cleanState()
-	ready, err := pollReview(reviewFixture(t, &state), testConfig, "12")
+	ready, err := pollReview(reviewFixture(t, &state), testConfig, "12", true)
 	if err != nil || !ready {
 		t.Fatalf("clean Codex-only review must pass: %v, %v", ready, err)
 	}
@@ -338,7 +338,7 @@ func TestRefusalIsImmediate(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err := waitForReview(ctx, reviewFixture(t, &state), testConfig, "12")
+	err := waitForReview(ctx, reviewFixture(t, &state), testConfig, "12", true)
 	if err == nil || !strings.Contains(err.Error(), "refused") || ctx.Err() != nil {
 		t.Fatalf("must report refusal before waiting: %v", err)
 	}

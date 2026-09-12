@@ -18,7 +18,7 @@ var branchPattern = regexp.MustCompile(`^chore/changelog-(0|[1-9][0-9]*)\.(0|[1-
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
-type config struct{ repo, branch, head string }
+type config struct{ repo, branch, head, number string }
 type command func(...string) ([]byte, error)
 type pullRequest struct {
 	Number       int
@@ -45,7 +45,15 @@ type changedFile struct{ Filename, Status string }
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), executionTimeout(os.Args[1:]))
 	defer cancel()
-	cfg := config{os.Getenv("GITHUB_REPOSITORY"), os.Getenv("CHANGELOG_BRANCH"), os.Getenv("EXPECTED_HEAD")}
+	branch := os.Getenv("REVIEW_BRANCH")
+	if branch == "" {
+		branch = os.Getenv("CHANGELOG_BRANCH")
+	}
+	head := os.Getenv("REVIEW_HEAD")
+	if head == "" {
+		head = os.Getenv("EXPECTED_HEAD")
+	}
+	cfg := config{repo: os.Getenv("GITHUB_REPOSITORY"), branch: branch, head: head, number: os.Getenv("PULL_REQUEST_NUMBER")}
 	if err := run(ctx, cfg, os.Args[1:], ghCommand(ctx)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -68,22 +76,22 @@ func run(ctx context.Context, cfg config, args []string, gh command) error {
 	if len(args) != 1 || (args[0] != "review" && args[0] != "enable" && args[0] != "request") {
 		return errors.New("usage: changelog-merge <request|review|enable>")
 	}
-	if !repoPattern.MatchString(cfg.repo) || !branchPattern.MatchString(cfg.branch) || !shaPattern.MatchString(cfg.head) {
-		return errors.New("invalid repository, changelog branch, or expected head")
+	if !repoPattern.MatchString(cfg.repo) || !shaPattern.MatchString(cfg.head) {
+		return errors.New("invalid repository or expected head")
 	}
-	var matches []struct{ Number int }
-	if err := readJSON(gh, &matches, "pr", "list", "--repo", cfg.repo, "--head", cfg.branch, "--state", "open", "--json", "number"); err != nil {
+	changelogOnly := branchPattern.MatchString(cfg.branch)
+	if args[0] != "review" && !changelogOnly {
+		return errors.New("request and enable require a generated changelog branch")
+	}
+	number, err := resolvePullRequestNumber(gh, cfg, changelogOnly)
+	if err != nil {
 		return err
 	}
-	if len(matches) != 1 {
-		return errors.New("expected exactly one open changelog pull request")
-	}
-	number := strconv.Itoa(matches[0].Number)
-	if err := inspectEligibility(gh, cfg, number); err != nil {
+	if err := inspectEligibility(gh, cfg, number, changelogOnly); err != nil {
 		return err
 	}
 	if args[0] == "review" {
-		return waitForReview(ctx, gh, cfg, number)
+		return waitForReview(ctx, gh, cfg, number, changelogOnly)
 	}
 	if args[0] == "request" {
 		return ensureRequest(gh, cfg, number)
@@ -111,30 +119,64 @@ func readJSON(gh command, target any, args ...string) error {
 	return nil
 }
 
-func inspectEligibility(gh command, cfg config, number string) error {
+func resolvePullRequestNumber(gh command, cfg config, changelogOnly bool) (string, error) {
+	if cfg.number != "" {
+		number, err := strconv.Atoi(cfg.number)
+		if err != nil || number <= 0 {
+			return "", errors.New("invalid pull request number")
+		}
+		return strconv.Itoa(number), nil
+	}
+	if !changelogOnly {
+		return "", errors.New("ordinary pull request review requires PULL_REQUEST_NUMBER")
+	}
+	var matches []struct{ Number int }
+	if err := readJSON(gh, &matches, "pr", "list", "--repo", cfg.repo, "--head", cfg.branch, "--state", "open", "--json", "number"); err != nil {
+		return "", err
+	}
+	if len(matches) != 1 {
+		return "", errors.New("expected exactly one open changelog pull request")
+	}
+	return strconv.Itoa(matches[0].Number), nil
+}
+
+func inspectEligibility(gh command, cfg config, number string, changelogOnly bool) error {
 	var pr pullRequest
 	if err := readJSON(gh, &pr, "api", "repos/"+cfg.repo+"/pulls/"+number); err != nil {
 		return err
+	}
+	if err := eligiblePullRequest(cfg, pr); err != nil {
+		return err
+	}
+	if !changelogOnly {
+		return nil
 	}
 	var files []changedFile
 	if err := readJSON(gh, &files, "api", "repos/"+cfg.repo+"/pulls/"+number+"/files?per_page=100"); err != nil {
 		return err
 	}
-	return eligible(cfg, pr, files)
+	return eligibleChangelog(cfg, pr, files)
 }
 
-func eligible(cfg config, pr pullRequest, files []changedFile) error {
+func eligiblePullRequest(cfg config, pr pullRequest) error {
 	if pr.State != "open" || pr.Draft || pr.Merged {
-		return errors.New("changelog PR must be open and non-draft")
+		return errors.New("pull request must be open and non-draft")
+	}
+	if pr.Base.Repo.FullName != cfg.repo || pr.Base.Ref != "main" {
+		return errors.New("pull request must target this repository's main branch")
+	}
+	if pr.Head.Ref != cfg.branch || pr.Head.SHA != cfg.head {
+		return errors.New("pull request branch or head changed")
+	}
+	return nil
+}
+
+func eligibleChangelog(cfg config, pr pullRequest, files []changedFile) error {
+	if pr.Head.Repo.FullName != cfg.repo {
+		return errors.New("changelog PR must be same-repository")
 	}
 	if pr.User.Login != "github-actions[bot]" || pr.User.Type != "Bot" {
 		return errors.New("changelog PR must be authored by github-actions[bot]")
-	}
-	if pr.Head.Repo.FullName != cfg.repo || pr.Base.Repo.FullName != cfg.repo || pr.Base.Ref != "main" {
-		return errors.New("changelog PR must be same-repository and target main")
-	}
-	if pr.Head.Ref != cfg.branch || pr.Head.SHA != cfg.head {
-		return errors.New("changelog PR branch or head changed")
 	}
 	if pr.ChangedFiles != 1 || len(files) != 1 || files[0].Filename != "CHANGELOG.md" || files[0].Status != "modified" {
 		return errors.New("changelog PR may only modify CHANGELOG.md")
@@ -178,7 +220,7 @@ func waitForMerge(ctx context.Context, gh command, cfg config, number string) er
 }
 
 func requireCurrentReviews(gh command, cfg config, number string) error {
-	ready, err := pollReview(gh, cfg, number)
+	ready, err := pollReview(gh, cfg, number, true)
 	if err != nil {
 		return err
 	}
@@ -215,14 +257,14 @@ func commandContext(ctx context.Context, args []string) context.Context {
 	return ctx
 }
 
-func waitForReview(ctx context.Context, gh command, cfg config, number string) error {
+func waitForReview(ctx context.Context, gh command, cfg config, number string, changelogOnly bool) error {
 	ctx, cancel := context.WithTimeout(ctx, executionTimeout([]string{"review"}))
 	defer cancel()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		ready, err := pollReview(gh, cfg, number)
+		ready, err := pollReview(gh, cfg, number, changelogOnly)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -230,7 +272,7 @@ func waitForReview(ctx context.Context, gh command, cfg config, number string) e
 			return err
 		}
 		if ready {
-			return inspectEligibility(gh, cfg, number)
+			return inspectEligibility(gh, cfg, number, changelogOnly)
 		}
 		if err := pause(ctx); err != nil {
 			return fmt.Errorf("PR #%s lacks a clean current-head AI review or resolved conversations: %w", number, err)
@@ -238,8 +280,8 @@ func waitForReview(ctx context.Context, gh command, cfg config, number string) e
 	}
 }
 
-func pollReview(gh command, cfg config, number string) (bool, error) {
-	if err := inspectEligibility(gh, cfg, number); err != nil {
+func pollReview(gh command, cfg config, number string, changelogOnly bool) (bool, error) {
+	if err := inspectEligibility(gh, cfg, number, changelogOnly); err != nil {
 		return false, err
 	}
 	state, err := fetchReviewState(gh, cfg, number)
