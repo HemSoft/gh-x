@@ -225,7 +225,7 @@ func main() {
 	require(build.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "new and resumed releases must build the complete asset set")
 	require(build.Env["TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}" && build.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release builds must bind the new or resumed tag and validated source")
 	require(
-		strings.Contains(build.Run, `build_date=$(git show -s --format=%cs "$RELEASE_SHA")`) && strings.Contains(build.Run, `main.buildDate=${build_date}`),
+		strings.Contains(build.Run, `build_date=$(git show -s --format=%cs "$RELEASE_SHA")`) && strings.Contains(build.Run, `go build -buildvcs=false -trimpath`) && strings.Contains(build.Run, `main.buildDate=${build_date}`),
 		"release builds must derive and embed a rerun-stable source date",
 	)
 
