@@ -189,10 +189,19 @@ jobs:
             echo "::error::CI dispatch did not return a run ID; leaving $pr_url open."
             exit 1
           fi
-          timeout 40m gh run watch "$ci_run" --exit-status --interval 30
+          if ! timeout 40m gh run watch "$ci_run" --exit-status --interval 30; then
+            echo "::error::PR $pr_url expected head $head_sha authoritative run $ci_run stopped before a successful Quality Gate. Inspect https://github.com/${GITHUB_REPOSITORY}/actions/runs/${ci_run}."
+            exit 1
+          fi
           ci_head=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ci_run}" --jq '.head_sha')
           if [[ "$ci_head" != "$head_sha" ]]; then
-            echo "::error::Dispatched CI head changed; leaving $pr_url open."
+            echo "::error::PR $pr_url expected head $head_sha authoritative run $ci_run reported head $ci_head; leaving the pull request open."
+            exit 1
+          fi
+          gate_conclusion=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ci_run}/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.name == "Quality Gate")] | if length == 1 then .[0].conclusion else "ambiguous" end')
+          if [[ "$gate_conclusion" != "success" ]]; then
+            echo "::error::PR $pr_url expected head $head_sha authoritative run $ci_run has Quality Gate conclusion '$gate_conclusion'; leaving the pull request open."
             exit 1
           fi
 

@@ -100,6 +100,60 @@ func TestWorkflowHasOneRequestOwnerAndReusesVerification(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeDispatchHasAnIsolatedConcurrencyLane(t *testing.T) {
+	ci, err := os.ReadFile("../../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := "group: codex-review-${{ github.event.pull_request.number || inputs.changelog_branch || github.ref_name }}-${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || 'pull-request' }}"
+	if !strings.Contains(string(ci), group) {
+		t.Fatal("Codex review concurrency must isolate each authoritative dispatch from pull-request events")
+	}
+
+	key := func(event, runID, head string) string {
+		lane := "pull-request"
+		if event == "workflow_dispatch" {
+			lane = "dispatch-" + runID
+		}
+		return "chore/changelog-1.2.3-" + head + "-" + lane
+	}
+	for _, tt := range []struct {
+		name                  string
+		first, second         string
+		firstRun, secondRun   string
+		firstHead, secondHead string
+		wantSame              bool
+	}{
+		{"pull request before dispatch", "pull_request", "workflow_dispatch", "11", "22", testHead, testHead, false},
+		{"dispatch before pull request", "workflow_dispatch", "pull_request", "22", "11", testHead, testHead, false},
+		{"duplicate edited events", "pull_request", "pull_request", "11", "12", testHead, testHead, true},
+		{"authoritative rerun", "workflow_dispatch", "workflow_dispatch", "22", "22", testHead, testHead, true},
+		{"head replacement", "pull_request", "pull_request", "11", "12", testHead, strings.Repeat("d", 40), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			same := key(tt.first, tt.firstRun, tt.firstHead) == key(tt.second, tt.secondRun, tt.secondHead)
+			if same != tt.wantSame {
+				t.Fatalf("same group=%v, want %v", same, tt.wantSame)
+			}
+		})
+	}
+
+	release, err := os.ReadFile("../../workflows/auto-release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`authoritative run $ci_run stopped before a successful Quality Gate`,
+		`actions/runs/${ci_run}/jobs?per_page=100`,
+		`select(.name == "Quality Gate")`,
+		`expected head $head_sha authoritative run $ci_run reported head $ci_head`,
+	} {
+		if !strings.Contains(string(release), required) {
+			t.Fatalf("authoritative release verification missing %q", required)
+		}
+	}
+}
+
 func markedRequest(login string, at time.Time) reviewComment {
 	return reviewComment{Body: "@codex review\n" + requestMarker("codex", testHead), Author: actor{login}, CreatedAt: at, URL: "https://github.com/HemSoft/gh-x/pull/12#issuecomment-request"}
 }

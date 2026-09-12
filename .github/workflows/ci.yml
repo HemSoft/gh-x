@@ -405,7 +405,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 24
     concurrency:
-      group: codex-review-${{ github.event.pull_request.number || inputs.changelog_branch || github.ref_name }}-${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}
+      # A release dispatch is authoritative and gets a run-specific lane. PR
+      # events for one immutable head still replace their own stale verifier.
+      group: codex-review-${{ github.event.pull_request.number || inputs.changelog_branch || github.ref_name }}-${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', github.run_id) || 'pull-request' }}
       cancel-in-progress: true
     permissions:
       contents: read
