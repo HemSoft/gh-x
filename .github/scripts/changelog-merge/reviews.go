@@ -64,6 +64,8 @@ type timelineConnection struct {
 	PageInfo pageInfo
 }
 
+const maxReviewPages = 100
+
 const commentFields = `nodes{body url createdAt author{login}} pageInfo{hasPreviousPage startCursor}`
 const timelineFields = `nodes{__typename ... on IssueComment{body url createdAt author{login}} ... on PullRequestCommit{commit{oid}} ... on HeadRefForcePushedEvent{createdAt afterCommit{oid}}} pageInfo{hasPreviousPage startCursor}`
 const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid commits(last:1){nodes{commit{committedDate}}} comments(last:100){` + commentFields + `} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} timelineItems(last:100,itemTypes:[PULL_REQUEST_COMMIT,ISSUE_COMMENT,HEAD_REF_FORCE_PUSHED_EVENT]){` + timelineFields + `}}}}`
@@ -101,7 +103,7 @@ func fetchReviewState(gh command, cfg config, number string) (reviewState, error
 
 func fetchEarlierComments(gh command, number, owner, repo string, comments *commentConnection) error {
 	for page := 0; comments.PageInfo.HasPreviousPage; page++ {
-		if page == 100 || comments.PageInfo.StartCursor == "" {
+		if page == maxReviewPages-1 || comments.PageInfo.StartCursor == "" {
 			return errors.New("pull request comment pagination is incomplete")
 		}
 		var response struct {
@@ -124,7 +126,7 @@ func fetchEarlierComments(gh command, number, owner, repo string, comments *comm
 
 func fetchEarlierTimeline(gh command, number, owner, repo string, timeline *timelineConnection) error {
 	for page := 0; timeline.PageInfo.HasPreviousPage; page++ {
-		if page == 100 || timeline.PageInfo.StartCursor == "" {
+		if page == maxReviewPages-1 || timeline.PageInfo.StartCursor == "" {
 			return errors.New("pull request timeline pagination is incomplete")
 		}
 		var response struct {

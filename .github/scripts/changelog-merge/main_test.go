@@ -214,6 +214,28 @@ func TestFetchReviewStatePaginatesComments(t *testing.T) {
 	}
 }
 
+func TestPaginationCapsIncludeInitialPage(t *testing.T) {
+	comments := commentConnection{PageInfo: pageInfo{HasPreviousPage: true, StartCursor: "cursor"}}
+	commentCalls := 0
+	commentGH := func(...string) ([]byte, error) {
+		commentCalls++
+		return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{"comments": comments}}}}), nil
+	}
+	if err := fetchEarlierComments(commentGH, "12", "HemSoft", "gh-x", &comments); err == nil || commentCalls != maxReviewPages-1 {
+		t.Fatalf("comment cap excluded initial page: calls=%d err=%v", commentCalls, err)
+	}
+
+	timeline := timelineConnection{PageInfo: pageInfo{HasPreviousPage: true, StartCursor: "cursor"}}
+	timelineCalls := 0
+	timelineGH := func(...string) ([]byte, error) {
+		timelineCalls++
+		return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{"timelineItems": timeline}}}}), nil
+	}
+	if err := fetchEarlierTimeline(timelineGH, "12", "HemSoft", "gh-x", &timeline); err == nil || timelineCalls != maxReviewPages-1 {
+		t.Fatalf("timeline cap excluded initial page: calls=%d err=%v", timelineCalls, err)
+	}
+}
+
 func TestFetchReviewStateRejectsMissingTimelineCursor(t *testing.T) {
 	gh := func(...string) ([]byte, error) {
 		timeline := timelineConnection{PageInfo: pageInfo{HasPreviousPage: true}}
