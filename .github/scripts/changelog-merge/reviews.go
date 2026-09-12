@@ -13,6 +13,7 @@ type reviewComment struct {
 	CreatedAt time.Time
 	Author    actor
 	Clean     bool
+	Request   bool
 }
 type review struct {
 	Body, State string

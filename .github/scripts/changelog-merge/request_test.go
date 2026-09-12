@@ -234,6 +234,20 @@ func TestOrdinaryLaterRequestIsBoundByTimelineOrder(t *testing.T) {
 	}
 }
 
+func TestOrdinarySameTimeRequestWaits(t *testing.T) {
+	stamp := time.Now().Add(-time.Minute)
+	state := cleanState()
+	state.Comments.Nodes[0].CreatedAt = stamp
+	state.TimelineItems.Nodes = []timelineItem{
+		{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}},
+		{TypeName: "IssueComment", Body: "@codex review", URL: "request-url", CreatedAt: stamp, Author: actor{connectedRequester}},
+	}
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if ready || err != nil {
+		t.Fatalf("same-time bound request must wait rather than error: %v,%v", ready, err)
+	}
+}
+
 func TestOrdinaryRequestBeforeLatestHeadBoundaryIsIgnored(t *testing.T) {
 	cleanAt := time.Now().Add(-2 * time.Minute)
 	state := cleanState()

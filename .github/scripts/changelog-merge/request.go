@@ -220,7 +220,7 @@ func latestBoundOrdinaryRequest(state reviewState, head string, after time.Time)
 			return reviewComment{}, errors.New("Codex request cannot be bound to a current-head timeline event")
 		}
 		if i > boundary {
-			latest = reviewComment{Body: item.Body, URL: item.URL, CreatedAt: item.CreatedAt, Author: item.Author}
+			latest = reviewComment{Body: item.Body, URL: item.URL, CreatedAt: item.CreatedAt, Author: item.Author, Request: true}
 		}
 	}
 	return latest, nil
@@ -258,6 +258,9 @@ func currentOrdinaryRequestAllowsClean(state reviewState, cfg config, number str
 		return false, reviewBlocked(cfg, number, activity, response.URL, "Codex refused this review; "+correction)
 	}
 	if activity.CreatedAt.After(clean) {
+		return false, pendingOrdinaryReview(state, cfg, number, time.Now())
+	}
+	if activity.CreatedAt.Equal(clean) && activity.Request {
 		return false, pendingOrdinaryReview(state, cfg, number, time.Now())
 	}
 	if activity.CreatedAt.Equal(clean) && !activity.Clean {
