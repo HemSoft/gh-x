@@ -87,8 +87,32 @@ func TestOrdinaryPullRequestEligibility(t *testing.T) {
 	}
 }
 
+func TestReviewScopeIsExplicit(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfg       config
+		want      bool
+		wantError bool
+	}{
+		{"ordinary scope on changelog-shaped branch", config{branch: testConfig.branch, number: "12", scope: "ordinary"}, false, false},
+		{"event number defaults to ordinary", config{branch: testConfig.branch, number: "12"}, false, false},
+		{"legacy invocation defaults to changelog", config{branch: testConfig.branch}, true, false},
+		{"explicit changelog scope", config{branch: testConfig.branch, number: "12", scope: "changelog"}, true, false},
+		{"changelog scope rejects other branch", config{branch: "fix/ordinary", number: "12", scope: "changelog"}, false, true},
+		{"unknown scope", config{branch: "fix/ordinary", number: "12", scope: "other"}, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := reviewScope(tt.cfg, "review")
+			if got != tt.want || (err != nil) != tt.wantError {
+				t.Fatalf("reviewScope=%v,%v; want %v,error=%v", got, err, tt.want, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestReviewOrdinaryPullRequestByEventNumber(t *testing.T) {
-	cfg := config{repo: testConfig.repo, branch: "fix/ordinary", head: testHead, number: "12"}
+	cfg := config{repo: testConfig.repo, branch: "fix/ordinary", head: testHead, number: "12", scope: "ordinary"}
 	var listed, fetchedFiles, mutated bool
 	gh := func(args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
@@ -122,7 +146,7 @@ func TestReviewOrdinaryPullRequestByEventNumber(t *testing.T) {
 }
 
 func TestOrdinaryReviewRequiresEventNumber(t *testing.T) {
-	cfg := config{repo: testConfig.repo, branch: "fix/ordinary", head: testHead}
+	cfg := config{repo: testConfig.repo, branch: "fix/ordinary", head: testHead, scope: "ordinary"}
 	if err := run(context.Background(), cfg, []string{"review"}, func(...string) ([]byte, error) {
 		t.Fatal("invalid ordinary review must fail before GitHub access")
 		return nil, nil

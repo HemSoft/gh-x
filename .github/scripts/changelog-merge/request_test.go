@@ -145,6 +145,62 @@ func TestSetupWindowDoesNotRestart(t *testing.T) {
 	}
 }
 
+func TestOrdinaryPendingReviewUsesPersistedEvidence(t *testing.T) {
+	committed := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	request := reviewComment{
+		Body:      "@codex review",
+		Author:    actor{connectedRequester},
+		CreatedAt: committed.Add(time.Minute),
+		URL:       "https://github.com/HemSoft/gh-x/pull/12#issuecomment-request",
+	}
+	state := reviewState{HeadRefOID: testHead, CommittedAt: committed}
+	state.Comments.Nodes = []reviewComment{request}
+	if err := pendingOrdinaryReview(state, testConfig, "12", request.CreatedAt.Add(9*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pendingOrdinaryReview(state, testConfig, "12", request.CreatedAt.Add(reviewWindow)); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("rerun must retain the ordinary request deadline: %v", err)
+	}
+
+	state.Comments.Nodes = []reviewComment{{
+		Body:      "<!-- codex-pull-request-review-summary --> `" + testHead[:7] + "` **Running**",
+		Author:    actor{"chatgpt-codex-connector"},
+		CreatedAt: committed.Add(20 * time.Minute),
+	}}
+	if err := pendingOrdinaryReview(state, testConfig, "12", committed.Add(time.Hour)); err != nil {
+		t.Fatalf("active current-head review must remain pending: %v", err)
+	}
+	state.Comments.Nodes = nil
+	if err := pendingOrdinaryReview(state, testConfig, "12", committed.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "request once with @codex review") {
+		t.Fatalf("missing ordinary request must be actionable: %v", err)
+	}
+}
+
+func TestOrdinaryRefusalAndNewRequestSupersedeOldClean(t *testing.T) {
+	committed := time.Now().Add(-5 * time.Minute)
+	state := cleanState()
+	state.CommittedAt = committed
+	state.Comments.Nodes[0].CreatedAt = committed.Add(time.Minute)
+	request := reviewComment{Body: "@codex review", Author: actor{connectedRequester}, CreatedAt: committed.Add(2 * time.Minute), URL: "request-url"}
+	state.Comments.Nodes = append(state.Comments.Nodes, request)
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if ready || err != nil {
+		t.Fatalf("a newer ordinary request must supersede old clean evidence: %v,%v", ready, err)
+	}
+	refusal := reviewComment{Body: "permission denied", Author: actor{"chatgpt-codex-connector"}, CreatedAt: committed.Add(3 * time.Minute), URL: "response-url"}
+	state.Comments.Nodes = append(state.Comments.Nodes, refusal)
+	if err := pendingOrdinaryReview(state, testConfig, "12", committed.Add(4*time.Minute)); err == nil || !strings.Contains(err.Error(), "response-url") {
+		t.Fatalf("ordinary refusal must fail immediately with context: %v", err)
+	}
+	clean := cleanState().Comments.Nodes[0]
+	clean.CreatedAt = committed.Add(4 * time.Minute)
+	state.Comments.Nodes = append(state.Comments.Nodes, clean)
+	ready, err = currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if !ready || err != nil {
+		t.Fatalf("later clean evidence must supersede the refusal: %v,%v", ready, err)
+	}
+}
+
 func TestVerifierBudgetIncludesLateRequest(t *testing.T) {
 	processStart := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	requestPosted := processStart.Add(9 * time.Minute)

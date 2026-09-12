@@ -18,7 +18,7 @@ var branchPattern = regexp.MustCompile(`^chore/changelog-(0|[1-9][0-9]*)\.(0|[1-
 var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
-type config struct{ repo, branch, head, number string }
+type config struct{ repo, branch, head, number, scope string }
 type command func(...string) ([]byte, error)
 type pullRequest struct {
 	Number       int
@@ -53,7 +53,13 @@ func main() {
 	if head == "" {
 		head = os.Getenv("EXPECTED_HEAD")
 	}
-	cfg := config{repo: os.Getenv("GITHUB_REPOSITORY"), branch: branch, head: head, number: os.Getenv("PULL_REQUEST_NUMBER")}
+	cfg := config{
+		repo:   os.Getenv("GITHUB_REPOSITORY"),
+		branch: branch,
+		head:   head,
+		number: os.Getenv("PULL_REQUEST_NUMBER"),
+		scope:  os.Getenv("REVIEW_SCOPE"),
+	}
 	if err := run(ctx, cfg, os.Args[1:], ghCommand(ctx)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -79,9 +85,9 @@ func run(ctx context.Context, cfg config, args []string, gh command) error {
 	if !repoPattern.MatchString(cfg.repo) || !shaPattern.MatchString(cfg.head) {
 		return errors.New("invalid repository or expected head")
 	}
-	changelogOnly := branchPattern.MatchString(cfg.branch)
-	if args[0] != "review" && !changelogOnly {
-		return errors.New("request and enable require a generated changelog branch")
+	changelogOnly, err := reviewScope(cfg, args[0])
+	if err != nil {
+		return err
 	}
 	number, err := resolvePullRequestNumber(gh, cfg, changelogOnly)
 	if err != nil {
@@ -117,6 +123,31 @@ func readJSON(gh command, target any, args ...string) error {
 		return fmt.Errorf("decode GitHub response: %w", err)
 	}
 	return nil
+}
+
+func reviewScope(cfg config, action string) (bool, error) {
+	if action != "review" {
+		if !branchPattern.MatchString(cfg.branch) {
+			return false, errors.New("request and enable require a generated changelog branch")
+		}
+		return true, nil
+	}
+	var changelogOnly bool
+	switch cfg.scope {
+	case "":
+		// Legacy changelog workflow invocations do not carry a PR number.
+		changelogOnly = cfg.number == ""
+	case "ordinary":
+		changelogOnly = false
+	case "changelog":
+		changelogOnly = true
+	default:
+		return false, errors.New("REVIEW_SCOPE must be ordinary or changelog")
+	}
+	if changelogOnly && !branchPattern.MatchString(cfg.branch) {
+		return false, errors.New("changelog review requires a generated changelog branch")
+	}
+	return changelogOnly, nil
 }
 
 func resolvePullRequestNumber(gh command, cfg config, changelogOnly bool) (string, error) {
@@ -293,9 +324,15 @@ func pollReview(gh command, cfg config, number string, changelogOnly bool) (bool
 		return false, err
 	}
 	if ready {
-		return currentRequestAllowsClean(state, cfg, number)
+		if changelogOnly {
+			return currentRequestAllowsClean(state, cfg, number)
+		}
+		return currentOrdinaryRequestAllowsClean(state, cfg, number)
 	}
-	return false, pendingReview(state, cfg, number, time.Now())
+	if changelogOnly {
+		return false, pendingReview(state, cfg, number, time.Now())
+	}
+	return false, pendingOrdinaryReview(state, cfg, number, time.Now())
 }
 
 // A legacy CI workflow without this job must not be auto-merged by this helper.

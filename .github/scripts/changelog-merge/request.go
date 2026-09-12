@@ -36,6 +36,29 @@ func latestRequest(state reviewState, head string) (reviewComment, error) {
 	return latest, nil
 }
 
+func latestOrdinaryRequest(state reviewState) (reviewComment, error) {
+	var latest reviewComment
+	for _, comment := range state.Comments.Nodes {
+		first, _, _ := strings.Cut(strings.TrimSpace(comment.Body), "\n")
+		if comment.Author.Login != connectedRequester || first != "@codex review" {
+			continue
+		}
+		if comment.CreatedAt.IsZero() {
+			return latest, errors.New("Codex request lacks a timestamp; inspect request history before retrying")
+		}
+		if state.CommittedAt.IsZero() || comment.CreatedAt.Before(state.CommittedAt) {
+			continue
+		}
+		if comment.CreatedAt.Equal(latest.CreatedAt) && comment.URL != latest.URL {
+			return latest, errors.New("ambiguous simultaneous Codex requests; inspect request history")
+		}
+		if comment.CreatedAt.After(latest.CreatedAt) {
+			latest = comment
+		}
+	}
+	return latest, nil
+}
+
 var accessRefusal = regexp.MustCompile(`(?i)^(?:to use codex here,?\s*|(?:please )?create a codex account|(?:please )?connect to github|permission denied|not authorized|access denied|(?:codex |you |this account )does not have access|code review is not enabled)`)
 var quotaRefusal = regexp.MustCompile(`(?i)^(?:(?:codex )?(?:usage|rate) limit|quota (?:exceeded|exhausted)|(?:please )?upgrade (?:your plan|to a paid)|insufficient credits|you(?: have|'ve) (?:hit|reached|exceeded) (?:your |the )?(?:codex )?(?:usage|rate|review|code review)|(?:codex )?review (?:is unavailable|requires a paid plan))`)
 var refusalPreamble = regexp.MustCompile(`(?i)^(?:(?:sorry|unfortunately|i'm sorry|i am sorry)[,:.!]?\s*|(?:i (?:couldn't|cannot|can't) (?:start|complete) (?:the |this )?review|(?:the |this )?review (?:cannot|can't|could not) (?:start|continue|complete))[,:.!]?\s*)+`)
@@ -152,6 +175,54 @@ func pendingReview(state reviewState, cfg config, number string, now time.Time) 
 		return reviewBlocked(cfg, number, request, request.URL, "Codex review timed out at "+deadline.Format(time.RFC3339)+"; inspect the existing request, do not rerun to reset its deadline")
 	}
 	return nil
+}
+
+func pendingOrdinaryReview(state reviewState, cfg config, number string, now time.Time) error {
+	request, err := latestOrdinaryRequest(state)
+	if err != nil {
+		return err
+	}
+	response, correction, err := requestRefusal(state, request)
+	if err != nil {
+		return err
+	}
+	if correction != "" {
+		return reviewBlocked(cfg, number, request, response.URL, "Codex refused this request; "+correction)
+	}
+	if !request.CreatedAt.IsZero() {
+		deadline := request.CreatedAt.Add(reviewWindow)
+		if !now.Before(deadline) {
+			return reviewBlocked(cfg, number, request, request.URL, "Codex review timed out at "+deadline.Format(time.RFC3339)+"; inspect the existing request, do not rerun to reset its deadline")
+		}
+		return nil
+	}
+	_, _, active := codexEvidence(state, cfg.head)
+	if active {
+		return nil
+	}
+	if !state.CommittedAt.IsZero() && now.Before(state.CommittedAt.Add(reviewWindow)) {
+		return nil
+	}
+	return reviewBlocked(cfg, number, request, "", "no current-head Codex request or active review; request once with @codex review and rerun CI")
+}
+
+func currentOrdinaryRequestAllowsClean(state reviewState, cfg config, number string) (bool, error) {
+	request, err := latestOrdinaryRequest(state)
+	if err != nil {
+		return false, err
+	}
+	clean, _, _ := codexEvidence(state, cfg.head)
+	response, correction, err := requestRefusal(state, request)
+	if err != nil {
+		return false, err
+	}
+	if correction != "" && (response.CreatedAt.IsZero() || !clean.After(response.CreatedAt)) {
+		return false, reviewBlocked(cfg, number, request, response.URL, "Codex refused this request; "+correction)
+	}
+	if !request.CreatedAt.IsZero() && !clean.After(request.CreatedAt) {
+		return false, pendingOrdinaryReview(state, cfg, number, time.Now())
+	}
+	return true, nil
 }
 
 func currentRequestAllowsClean(state reviewState, cfg config, number string) (bool, error) {
