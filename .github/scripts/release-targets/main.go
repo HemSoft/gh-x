@@ -77,7 +77,7 @@ func loadSupportedTargets() (map[string]struct{}, error) {
 		supported[target] = struct{}{}
 	}
 	if len(supported) == 0 {
-		return nil, errors.New("Go toolchain returned no supported targets")
+		return nil, errors.New("go toolchain returned no supported targets")
 	}
 	return supported, nil
 }
@@ -160,11 +160,10 @@ func buildTargets(targets []releaseTarget, config buildConfig) error {
 	if err := os.MkdirAll(config.outputDir, 0o755); err != nil {
 		return fmt.Errorf("create release output directory: %w", err)
 	}
-	ldflags := fmt.Sprintf("-s -w -X main.version=%s -X main.buildDate=%s", config.version, config.buildDate)
 	for _, target := range targets {
 		output := filepath.Join(config.outputDir, target.asset())
 		fmt.Fprintf(os.Stdout, "Building %s -> %s\n", target.id(), output)
-		command := exec.Command("go", "build", "-buildvcs=false", "-trimpath", "-ldflags", ldflags, "-o", output, "./src")
+		command := exec.Command("go", buildArguments(output, config)...)
 		command.Env = append(os.Environ(), "GOOS="+target.GOOS, "GOARCH="+target.GOARCH, "CGO_ENABLED=0")
 		command.Stdout = os.Stdout
 		command.Stderr = os.Stderr
@@ -173,6 +172,11 @@ func buildTargets(targets []releaseTarget, config buildConfig) error {
 		}
 	}
 	return nil
+}
+
+func buildArguments(output string, config buildConfig) []string {
+	ldflags := fmt.Sprintf("-s -w -X main.version=%s -X main.buildDate=%s", config.version, config.buildDate)
+	return []string{"build", "-buildvcs=false", "-trimpath", "-ldflags", ldflags, "-o", output, "./src"}
 }
 
 func fatal(message string) {

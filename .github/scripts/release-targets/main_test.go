@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -23,10 +26,9 @@ var repositoryTargets = []string{
 }
 
 func TestRepositoryManifestDefinesExpectedTargets(t *testing.T) {
-	supported := make(map[string]struct{}, len(repositoryTargets))
-	for _, expected := range repositoryTargets {
-		id, _, _ := strings.Cut(expected, "=")
-		supported[id] = struct{}{}
+	supported, err := loadSupportedTargets()
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	targets, err := loadTargets("../../release-targets.json", supported)
@@ -65,6 +67,52 @@ func TestDecodeTargetsRejectsInvalidManifest(t *testing.T) {
 				t.Fatalf("decodeTargets() error = %v, want text %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestBuildArgumentsBindDeterministicMetadata(t *testing.T) {
+	config := buildConfig{version: "v1.2.3", buildDate: "2026-09-12", outputDir: "unused"}
+	want := []string{
+		"build", "-buildvcs=false", "-trimpath", "-ldflags",
+		"-s -w -X main.version=v1.2.3 -X main.buildDate=2026-09-12",
+		"-o", "dist/linux-amd64", "./src",
+	}
+	if got := buildArguments("dist/linux-amd64", config); !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildArguments() = %q, want %q", got, want)
+	}
+}
+
+func TestBuildTargetsEmbedsConfiguredMetadata(t *testing.T) {
+	originalDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir("../../.."); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalDirectory); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+
+	config := buildConfig{
+		version:   "v99.88.77-release-target-test",
+		buildDate: "2099-12-31",
+		outputDir: t.TempDir(),
+	}
+	target := releaseTarget{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH}
+	if err := buildTargets([]releaseTarget{target}, config); err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(filepath.Join(config.outputDir, target.asset()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{config.version, config.buildDate} {
+		if !bytes.Contains(binary, []byte(value)) {
+			t.Errorf("built binary does not contain configured value %q", value)
+		}
 	}
 }
 

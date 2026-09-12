@@ -110,7 +110,6 @@ func main() {
 	autoRelease, autoReleaseContent := loadWorkflowWithContent(".github/workflows/auto-release.yml")
 	authoritativeRunContent := loadText(".github/scripts/verify-authoritative-run.sh")
 	qualityToolsContent := loadText(".github/quality-tools.env")
-	releaseTargetsContent := loadText(".github/scripts/release-targets/main.go")
 
 	if err := validateRuleset(configuredRuleset); err != nil {
 		fail(err.Error())
@@ -249,7 +248,6 @@ go run ./.github/scripts/release-targets build`, "CI must build the canonical re
 	require(strings.TrimSpace(build.Run) == `RELEASE_BUILD_DATE="$(git show -s --format=%cs "$RELEASE_SHA")"
 export RELEASE_BUILD_DATE
 go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the trusted canonical target builder")
-	require(strings.Contains(releaseTargetsContent, `"-buildvcs=false", "-trimpath"`) && strings.Contains(releaseTargetsContent, `main.buildDate=%s`), "canonical release builds must disable VCS stamping, trim paths, and embed a source-derived date")
 
 	attest := namedStep(releaseJob, "Attest release binaries")
 	require(attest.If == "steps.check.outputs.skip == 'false'", "provenance must bind only the initial release workflow source identity")
