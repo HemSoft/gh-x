@@ -91,7 +91,7 @@ func TestRefusalThenConnectedSuccess(t *testing.T) {
 	human := markedRequest("HemSoft", clean.CreatedAt.Add(-time.Minute))
 	state.Comments.Nodes = []reviewComment{bot, refusal, human, clean}
 	for i := 0; i < 2; i++ {
-		if err := waitForReview(context.Background(), reviewFixture(t, &state), testConfig, "12"); err != nil {
+		if err := waitForReview(context.Background(), reviewFixture(t, &state), testConfig, "12", true); err != nil {
 			t.Fatalf("verification rerun must reuse the clean connected result: %v", err)
 		}
 	}
@@ -142,6 +142,180 @@ func TestSetupWindowDoesNotRestart(t *testing.T) {
 	}
 	if err := pendingReview(state, testConfig, "12", state.CommittedAt.Add(time.Hour)); err == nil {
 		t.Fatal("a rerun must not create a new setup window")
+	}
+}
+
+func runningActivity(started time.Time) string {
+	return `<!-- codex-pull-request-review-summary --> ` + "`" + testHead[:7] + "`\n| 📝 **Code Review** | 🔄 **Running** since <relative-time datetime=\"" + started.Format(time.RFC3339Nano) + `"> |`
+}
+
+func TestOrdinaryPendingReviewUsesCurrentHeadActivity(t *testing.T) {
+	committed := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	started := committed.Add(time.Minute)
+	activity := reviewComment{
+		Body:      runningActivity(started),
+		Author:    actor{"chatgpt-codex-connector"},
+		CreatedAt: committed.Add(-time.Hour), // The connector updates one long-lived summary comment.
+		URL:       "https://github.com/HemSoft/gh-x/pull/12#issuecomment-activity",
+	}
+	state := reviewState{HeadRefOID: testHead, CommittedAt: committed}
+	state.Comments.Nodes = []reviewComment{activity}
+	if err := pendingOrdinaryReview(state, testConfig, "12", started.Add(9*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pendingOrdinaryReview(state, testConfig, "12", started.Add(reviewWindow)); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("rerun must retain the current-head activity deadline: %v", err)
+	}
+
+	state.Comments.Nodes = nil
+	if err := pendingOrdinaryReview(state, testConfig, "12", committed.Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "request once with @codex review") {
+		t.Fatalf("missing ordinary activity must be actionable: %v", err)
+	}
+	state.CommittedAt = time.Time{}
+	if err := pendingOrdinaryReview(state, testConfig, "12", committed); err == nil || !strings.Contains(err.Error(), "commit lacks a timestamp") {
+		t.Fatalf("missing commit timestamp must fail closed: %v", err)
+	}
+}
+
+func TestOrdinaryActivityTimeIgnoresProseAndRejectsAmbiguity(t *testing.T) {
+	started := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	comment := reviewComment{
+		Body:   runningActivity(started) + "\nQuoted example: <relative-time datetime=\"2099-01-01T00:00:00Z\">",
+		Author: actor{"chatgpt-codex-connector"},
+		URL:    "activity-url",
+	}
+	state := reviewState{HeadRefOID: testHead}
+	state.Comments.Nodes = []reviewComment{comment}
+	activity, err := currentHeadCodexActivity(state, testHead)
+	if err != nil || !activity.CreatedAt.Equal(started) {
+		t.Fatalf("activity=%v err=%v", activity.CreatedAt, err)
+	}
+	state.Comments.Nodes[0].Body += "\n| 📝 **Code Review** | completed <relative-time datetime=\"2099-01-01T00:00:00Z\"> |"
+	if _, err := currentHeadCodexActivity(state, testHead); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("duplicate activity rows must fail closed: %v", err)
+	}
+}
+
+func TestSameTimeReviewsWithDifferentStatesFailClosed(t *testing.T) {
+	stamp := time.Now()
+	first := reviewComment{Body: "same review", Author: actor{"chatgpt-codex-connector"}, CreatedAt: stamp}
+	second := first
+	second.Clean = true
+	if _, err := latestCodexActivity([]reviewComment{first, second}); err == nil || !strings.Contains(err.Error(), "shares a timestamp") {
+		t.Fatalf("same-time review state conflict must fail closed: %v", err)
+	}
+}
+
+func TestOrdinaryDistinctSameTimeEvidenceFailsClosed(t *testing.T) {
+	started := time.Now().Add(-time.Minute)
+	state := cleanState()
+	state.CommittedAt = started.Add(-time.Minute)
+	state.Comments.Nodes[0].CreatedAt = started
+	state.Comments.Nodes = append(state.Comments.Nodes, reviewComment{
+		Body: runningActivity(started), Author: actor{"chatgpt-codex-connector"}, URL: "activity-url",
+	})
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if ready || err == nil || !strings.Contains(err.Error(), "shares a timestamp") {
+		t.Fatalf("same-time distinct evidence must fail closed: %v,%v", ready, err)
+	}
+}
+
+func TestOrdinaryLaterRequestIsBoundByTimelineOrder(t *testing.T) {
+	cleanAt := time.Now().Add(-2 * time.Minute)
+	state := cleanState()
+	state.Comments.Nodes[0].CreatedAt = cleanAt
+	state.TimelineItems.Nodes = append(state.TimelineItems.Nodes,
+		timelineItem{TypeName: "IssueComment", Body: "@codex review", URL: "request-url", CreatedAt: cleanAt.Add(time.Minute), Author: actor{connectedRequester}},
+	)
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if ready || err != nil {
+		t.Fatalf("later same-head request must remain pending: %v,%v", ready, err)
+	}
+}
+
+func TestOrdinarySameTimeRequestWaits(t *testing.T) {
+	stamp := time.Now().Add(-time.Minute)
+	state := cleanState()
+	state.Comments.Nodes[0].CreatedAt = stamp
+	state.TimelineItems.Nodes = append(state.TimelineItems.Nodes,
+		timelineItem{TypeName: "IssueComment", Body: "@codex review", URL: "request-url", CreatedAt: stamp, Author: actor{connectedRequester}},
+	)
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if ready || err != nil {
+		t.Fatalf("same-time bound request must wait rather than error: %v,%v", ready, err)
+	}
+}
+
+func TestOrdinaryRequestBeforeLatestHeadBoundaryIsIgnored(t *testing.T) {
+	cleanAt := time.Now().Add(-2 * time.Minute)
+	state := cleanState()
+	state.Comments.Nodes[0].CreatedAt = cleanAt
+	state.TimelineItems.Nodes = append(state.TimelineItems.Nodes,
+		timelineItem{TypeName: "IssueComment", Body: "@codex review", URL: "old-request", CreatedAt: cleanAt.Add(time.Minute), Author: actor{connectedRequester}},
+		timelineItem{TypeName: "HeadRefForcePushedEvent", CreatedAt: cleanAt.Add(90 * time.Second), AfterCommit: struct{ OID string }{testHead}},
+	)
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if !ready || err != nil {
+		t.Fatalf("request before the current head update must not become pending: %v,%v", ready, err)
+	}
+}
+
+func TestOrdinaryReceiptPrefixCannotCrossHeadBoundary(t *testing.T) {
+	state := cleanState()
+	collision := testHead[:10] + "ffffffffffffffffffffffffffffff"
+	state.HeadRefOID = collision
+	state.TimelineItems.Nodes = append(state.TimelineItems.Nodes, timelineItem{
+		TypeName: "HeadRefForcePushedEvent", CreatedAt: state.Comments.Nodes[0].CreatedAt.Add(time.Minute), AfterCommit: struct{ OID string }{collision},
+	})
+	cfg := testConfig
+	cfg.head = collision
+	ready, err := currentOrdinaryRequestAllowsClean(state, cfg, "12")
+	if ready || err == nil || !strings.Contains(err.Error(), "exact current-head clean evidence") {
+		t.Fatalf("abbreviated old receipt must not validate a colliding head: %v,%v", ready, err)
+	}
+}
+
+func TestOrdinaryUnboundRequestFailsClosed(t *testing.T) {
+	state := cleanState()
+	state.Comments.Nodes = nil
+	approval := review{State: "APPROVED", SubmittedAt: time.Now().Add(-time.Minute), Author: actor{"chatgpt-codex-connector"}}
+	approval.Commit.OID = testHead
+	state.Reviews.Nodes = []review{approval}
+	state.TimelineItems.Nodes = []timelineItem{{TypeName: "IssueComment", Body: "@codex review", CreatedAt: time.Now(), Author: actor{connectedRequester}}}
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if ready || err == nil || !strings.Contains(err.Error(), "cannot be bound") {
+		t.Fatalf("unbound ordinary request must fail closed: %v,%v", ready, err)
+	}
+}
+
+func TestOrdinaryRefusalAndNewActivitySupersedeOldClean(t *testing.T) {
+	committed := time.Now().Add(-5 * time.Minute)
+	state := cleanState()
+	state.CommittedAt = committed
+	state.Comments.Nodes[0].CreatedAt = committed.Add(time.Minute)
+	started := committed.Add(2 * time.Minute)
+	activity := reviewComment{
+		Body:      runningActivity(started),
+		Author:    actor{"chatgpt-codex-connector"},
+		CreatedAt: committed.Add(-time.Hour),
+		URL:       "activity-url",
+	}
+	state.Comments.Nodes = append(state.Comments.Nodes, activity)
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if ready || err != nil {
+		t.Fatalf("newer current-head activity must supersede old clean evidence: %v,%v", ready, err)
+	}
+	refusal := reviewComment{Body: "permission denied", Author: actor{"chatgpt-codex-connector"}, CreatedAt: committed.Add(3 * time.Minute), URL: "response-url"}
+	state.Comments.Nodes = append(state.Comments.Nodes, refusal)
+	if err := pendingOrdinaryReview(state, testConfig, "12", committed.Add(4*time.Minute)); err == nil || !strings.Contains(err.Error(), "response-url") {
+		t.Fatalf("ordinary refusal must fail immediately with context: %v", err)
+	}
+	clean := cleanState().Comments.Nodes[0]
+	clean.CreatedAt = committed.Add(4 * time.Minute)
+	state.Comments.Nodes = append(state.Comments.Nodes, clean)
+	ready, err = currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if !ready || err != nil {
+		t.Fatalf("later clean evidence must supersede the refusal: %v,%v", ready, err)
 	}
 }
 
@@ -223,12 +397,12 @@ func TestRefusalDoesNotOverrideLaterHeadReceipt(t *testing.T) {
 	clean := state.Comments.Nodes[0]
 	request := markedRequest("github-actions", clean.CreatedAt.Add(-time.Minute))
 	state.Comments.Nodes = append(state.Comments.Nodes, request, reviewComment{Body: "create a Codex account", Author: actor{"chatgpt-codex-connector"}, CreatedAt: request.CreatedAt.Add(time.Second)})
-	ready, err := pollReview(reviewFixture(t, &state), testConfig, "12")
+	ready, err := pollReview(reviewFixture(t, &state), testConfig, "12", true)
 	if !ready || err != nil {
 		t.Fatalf("PR 78 legacy unmarked human recovery must accept its explicit head receipt: %v,%v", ready, err)
 	}
 	state.Comments.Nodes = append(state.Comments.Nodes, markedRequest("HemSoft", time.Now()))
-	ready, err = pollReview(reviewFixture(t, &state), testConfig, "12")
+	ready, err = pollReview(reviewFixture(t, &state), testConfig, "12", true)
 	if ready || err != nil {
 		t.Fatalf("new current-head request supersedes old clean receipt: %v,%v", ready, err)
 	}
@@ -308,13 +482,13 @@ func TestLateCompletionAddsEvidenceWithoutRestartingWait(t *testing.T) {
 	request := markedRequest("HemSoft", time.Now().Add(-time.Hour))
 	state.Comments.Nodes = []reviewComment{request}
 	gh := reviewFixture(t, &state) // Any request/comment mutation fails this fixture.
-	if err := waitForReview(context.Background(), gh, testConfig, "12"); err == nil || !strings.Contains(err.Error(), "timed out") {
+	if err := waitForReview(context.Background(), gh, testConfig, "12", true); err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("absent evidence must retain the expired deadline: %v", err)
 	}
 	clean := cleanState().Comments.Nodes[0]
 	clean.CreatedAt = time.Now()
 	state.Comments.Nodes = append(state.Comments.Nodes, clean)
-	if err := waitForReview(context.Background(), gh, testConfig, "12"); err != nil {
+	if err := waitForReview(context.Background(), gh, testConfig, "12", true); err != nil {
 		t.Fatalf("genuine later head-specific completion needs no new wait: %v", err)
 	}
 	if !requestStart(state, request, testHead).Equal(request.CreatedAt) {
@@ -324,7 +498,7 @@ func TestLateCompletionAddsEvidenceWithoutRestartingWait(t *testing.T) {
 
 func TestCodexAlonePassesWithoutOptionalProducts(t *testing.T) {
 	state := cleanState()
-	ready, err := pollReview(reviewFixture(t, &state), testConfig, "12")
+	ready, err := pollReview(reviewFixture(t, &state), testConfig, "12", true)
 	if err != nil || !ready {
 		t.Fatalf("clean Codex-only review must pass: %v, %v", ready, err)
 	}
@@ -338,7 +512,7 @@ func TestRefusalIsImmediate(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err := waitForReview(ctx, reviewFixture(t, &state), testConfig, "12")
+	err := waitForReview(ctx, reviewFixture(t, &state), testConfig, "12", true)
 	if err == nil || !strings.Contains(err.Error(), "refused") || ctx.Err() != nil {
 		t.Fatalf("must report refusal before waiting: %v", err)
 	}

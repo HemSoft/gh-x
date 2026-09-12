@@ -154,6 +154,128 @@ func pendingReview(state reviewState, cfg config, number string, now time.Time) 
 	return nil
 }
 
+func pendingOrdinaryReview(state reviewState, cfg config, number string, now time.Time) error {
+	activity, err := ordinaryReviewAnchor(state, cfg.head, time.Time{})
+	if err != nil {
+		return err
+	}
+	if activity.CreatedAt.IsZero() {
+		if state.CommittedAt.IsZero() {
+			return errors.New("pull request commit lacks a timestamp; inspect review history before retrying")
+		}
+		if now.Before(state.CommittedAt.Add(reviewWindow)) {
+			return nil
+		}
+		return reviewBlocked(cfg, number, activity, "", "no current-head Codex activity; request once with @codex review and rerun CI")
+	}
+	response, correction, err := requestRefusal(state, activity)
+	if err != nil {
+		return err
+	}
+	if correction != "" {
+		return reviewBlocked(cfg, number, activity, response.URL, "Codex refused this review; "+correction)
+	}
+	deadline := activity.CreatedAt.Add(reviewWindow)
+	if !now.Before(deadline) {
+		return reviewBlocked(cfg, number, activity, activity.URL, "Codex review timed out at "+deadline.Format(time.RFC3339)+"; inspect the current-head activity, do not rerun to reset its deadline")
+	}
+	return nil
+}
+
+func ordinaryReviewAnchor(state reviewState, head string, after time.Time) (reviewComment, error) {
+	request, err := latestBoundOrdinaryRequest(state, head, after)
+	if err != nil {
+		return reviewComment{}, err
+	}
+	if !request.CreatedAt.IsZero() {
+		return request, nil
+	}
+	return currentHeadOrdinaryCodexActivity(state, head)
+}
+
+func latestBoundOrdinaryRequest(state reviewState, head string, after time.Time) (reviewComment, error) {
+	if state.TimelineItems.PageInfo.HasPreviousPage {
+		return reviewComment{}, errors.New("pull request timeline is truncated; cannot bind Codex request to current head")
+	}
+	boundary := latestHeadBoundary(state.TimelineItems.Nodes, head)
+	var latest reviewComment
+	for i, item := range state.TimelineItems.Nodes {
+		request, err := ordinaryRequestTimelineItem(item)
+		if err != nil {
+			return reviewComment{}, err
+		}
+		if !request || item.CreatedAt.Before(after) {
+			continue
+		}
+		if boundary < 0 {
+			return reviewComment{}, errors.New("Codex request cannot be bound to a current-head timeline event")
+		}
+		if i > boundary {
+			latest = reviewComment{Body: item.Body, URL: item.URL, CreatedAt: item.CreatedAt, Author: item.Author, Request: true}
+		}
+	}
+	return latest, nil
+}
+
+func latestHeadBoundary(items []timelineItem, head string) int {
+	boundary := -1
+	for i, item := range items {
+		if timelineSetsHead(item, head) {
+			boundary = i
+		}
+	}
+	return boundary
+}
+
+func timelineSetsHead(item timelineItem, head string) bool {
+	return item.TypeName == "PullRequestCommit" && item.Commit.OID == head || item.TypeName == "HeadRefForcePushedEvent" && item.AfterCommit.OID == head
+}
+
+func ordinaryRequestTimelineItem(item timelineItem) (bool, error) {
+	if item.TypeName != "IssueComment" || item.Author.Login != connectedRequester {
+		return false, nil
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(item.Body), "\n")
+	if first != "@codex review" {
+		return false, nil
+	}
+	if item.CreatedAt.IsZero() {
+		return false, errors.New("Codex request timeline item lacks a timestamp")
+	}
+	return true, nil
+}
+
+func currentOrdinaryRequestAllowsClean(state reviewState, cfg config, number string) (bool, error) {
+	clean, _, _, err := ordinaryCodexEvidence(state, cfg.head)
+	if err != nil {
+		return false, err
+	}
+	if clean.IsZero() {
+		return false, errors.New("ordinary review lacks exact current-head clean evidence")
+	}
+	activity, err := ordinaryReviewAnchor(state, cfg.head, clean)
+	if err != nil {
+		return false, err
+	}
+	response, correction, err := requestRefusal(state, activity)
+	if err != nil {
+		return false, err
+	}
+	if correction != "" && (response.CreatedAt.IsZero() || !clean.After(response.CreatedAt)) {
+		return false, reviewBlocked(cfg, number, activity, response.URL, "Codex refused this review; "+correction)
+	}
+	if activity.CreatedAt.After(clean) {
+		return false, pendingOrdinaryReview(state, cfg, number, time.Now())
+	}
+	if activity.CreatedAt.Equal(clean) && activity.Request {
+		return false, pendingOrdinaryReview(state, cfg, number, time.Now())
+	}
+	if activity.CreatedAt.Equal(clean) && !activity.Clean {
+		return false, errors.New("latest current-head Codex activity is not the clean review receipt")
+	}
+	return true, nil
+}
+
 func currentRequestAllowsClean(state reviewState, cfg config, number string) (bool, error) {
 	request, err := latestRequest(state, cfg.head)
 	if err != nil {
@@ -230,7 +352,7 @@ func ensureRequest(gh command, cfg config, number string) error {
 	if err := verifyRequester(gh, cfg); err != nil {
 		return reviewBlocked(cfg, number, reviewComment{}, "", err.Error())
 	}
-	if err := inspectEligibility(gh, cfg, number); err != nil {
+	if err := inspectEligibility(gh, cfg, number, true); err != nil {
 		return err
 	}
 	body := "@codex review\n\n" + requestMarker("codex", cfg.head)

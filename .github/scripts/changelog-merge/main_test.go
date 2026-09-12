@@ -15,7 +15,7 @@ import (
 
 const testHead = "0123456789abcdef0123456789abcdef01234567"
 
-var testConfig = config{"HemSoft/gh-x", "chore/changelog-1.2.3", testHead}
+var testConfig = config{repo: "HemSoft/gh-x", branch: "chore/changelog-1.2.3", head: testHead}
 
 func validPR() pullRequest {
 	var pr pullRequest
@@ -57,17 +57,120 @@ func TestEligibility(t *testing.T) {
 			pr := validPR()
 			files := []changedFile{{"CHANGELOG.md", "modified"}}
 			tt.mutate(&pr, &files)
-			if err := eligible(testConfig, pr, files); (err != nil) != tt.wantError {
-				t.Fatalf("eligible error=%v, wantError=%v", err, tt.wantError)
+			err := eligiblePullRequest(testConfig, pr)
+			if err == nil {
+				err = eligibleChangelog(testConfig, pr, files)
+			}
+			if (err != nil) != tt.wantError {
+				t.Fatalf("eligibility error=%v, wantError=%v", err, tt.wantError)
 			}
 		})
+	}
+}
+
+func TestOrdinaryPullRequestEligibility(t *testing.T) {
+	cfg := config{repo: testConfig.repo, branch: "fix/ordinary", head: testHead, number: "12"}
+	pr := validPR()
+	pr.User.Login = "HemSoft"
+	pr.User.Type = "User"
+	pr.Head.Ref = cfg.branch
+	if err := eligiblePullRequest(cfg, pr); err != nil {
+		t.Fatalf("ordinary same-repository PR should be eligible: %v", err)
+	}
+	pr.Head.Repo.FullName = "someone/gh-x"
+	if err := eligiblePullRequest(cfg, pr); err != nil {
+		t.Fatalf("ordinary fork PR should be eligible: %v", err)
+	}
+	pr.Base.Repo.FullName = "someone/gh-x"
+	if err := eligiblePullRequest(cfg, pr); err == nil {
+		t.Fatal("PR targeting another repository must fail closed")
+	}
+}
+
+func TestReviewScopeIsExplicit(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfg       config
+		want      bool
+		wantError bool
+	}{
+		{"ordinary scope on changelog-shaped branch", config{branch: testConfig.branch, number: "12", scope: "ordinary"}, false, false},
+		{"event number defaults to ordinary", config{branch: testConfig.branch, number: "12"}, false, false},
+		{"legacy invocation defaults to changelog", config{branch: testConfig.branch}, true, false},
+		{"explicit changelog scope", config{branch: testConfig.branch, number: "12", scope: "changelog"}, true, false},
+		{"changelog scope rejects other branch", config{branch: "fix/ordinary", number: "12", scope: "changelog"}, false, true},
+		{"unknown scope", config{branch: "fix/ordinary", number: "12", scope: "other"}, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := reviewScope(tt.cfg, "review")
+			if got != tt.want || (err != nil) != tt.wantError {
+				t.Fatalf("reviewScope=%v,%v; want %v,error=%v", got, err, tt.want, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestReviewOrdinaryPullRequestByEventNumber(t *testing.T) {
+	cfg := config{repo: testConfig.repo, branch: "fix/ordinary", head: testHead, number: "12", scope: "ordinary"}
+	var listed, fetchedFiles, mutated bool
+	gh := func(args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case args[0] == "pr":
+			if args[1] == "list" {
+				listed = true
+			} else {
+				mutated = true
+			}
+			return nil, errors.New("ordinary review must not use gh pr commands")
+		case strings.Contains(joined, "/files?"):
+			fetchedFiles = true
+			return nil, errors.New("ordinary review must not inspect changelog files")
+		case args[1] == "graphql":
+			return encode(t, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": cleanState()}}}), nil
+		default:
+			pr := validPR()
+			pr.User.Login = "HemSoft"
+			pr.User.Type = "User"
+			pr.Head.Ref = cfg.branch
+			return encode(t, pr), nil
+		}
+	}
+	if err := run(context.Background(), cfg, []string{"review"}, gh); err != nil {
+		t.Fatal(err)
+	}
+	if listed || fetchedFiles || mutated {
+		t.Fatalf("ordinary review escaped read-only event scope: list=%v files=%v mutation=%v", listed, fetchedFiles, mutated)
+	}
+}
+
+func TestOrdinaryReviewRequiresEventNumber(t *testing.T) {
+	cfg := config{repo: testConfig.repo, branch: "fix/ordinary", head: testHead, scope: "ordinary"}
+	if err := run(context.Background(), cfg, []string{"review"}, func(...string) ([]byte, error) {
+		t.Fatal("invalid ordinary review must fail before GitHub access")
+		return nil, nil
+	}); err == nil || !strings.Contains(err.Error(), "PULL_REQUEST_NUMBER") {
+		t.Fatalf("expected event-number error, got %v", err)
+	}
+	cfg.number = "not-a-number"
+	if err := run(context.Background(), cfg, []string{"review"}, func(...string) ([]byte, error) {
+		t.Fatal("invalid PR number must fail before GitHub access")
+		return nil, nil
+	}); err == nil || !strings.Contains(err.Error(), "invalid pull request number") {
+		t.Fatalf("expected invalid-number error, got %v", err)
 	}
 }
 
 func cleanState() reviewState {
 	var state reviewState
 	state.HeadRefOID = testHead
-	state.Comments.Nodes = []reviewComment{{Body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `" + testHead[:10] + "`", Author: actor{"chatgpt-codex-connector"}, CreatedAt: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}}
+	comment := reviewComment{Body: "Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `" + testHead[:10] + "`", URL: "https://github.com/HemSoft/gh-x/pull/12#issuecomment-clean", Author: actor{"chatgpt-codex-connector"}, CreatedAt: time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)}
+	state.Comments.Nodes = []reviewComment{comment}
+	state.TimelineItems.Nodes = []timelineItem{
+		{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}},
+		{TypeName: "IssueComment", Body: comment.Body, URL: comment.URL, CreatedAt: comment.CreatedAt, Author: comment.Author},
+	}
 	return state
 }
 
@@ -86,6 +189,7 @@ func TestReviewEvidence(t *testing.T) {
 		{"comments truncated", func(s *reviewState) { s.Comments.PageInfo.HasPreviousPage = true }, false, false, true},
 		{"reviews truncated", func(s *reviewState) { s.Reviews.PageInfo.HasPreviousPage = true }, false, false, true},
 		{"threads truncated", func(s *reviewState) { s.ReviewThreads.PageInfo.HasNextPage = true }, false, false, true},
+		{"timeline truncated", func(s *reviewState) { s.TimelineItems.PageInfo.HasPreviousPage = true }, false, false, true},
 		{"unresolved conversation", func(s *reviewState) {
 			s.ReviewThreads.Nodes = append(s.ReviewThreads.Nodes, struct{ IsResolved bool }{false})
 		}, false, true, false},
@@ -291,7 +395,7 @@ func TestReadOnlyReviewNeverRequests(t *testing.T) {
 		}
 		return nil, nil
 	}
-	ready, err := pollReview(gh, testConfig, "12")
+	ready, err := pollReview(gh, testConfig, "12", true)
 	if err != nil || ready {
 		t.Fatalf("missing reviews must wait without writes: %v,%v", ready, err)
 	}
@@ -509,7 +613,7 @@ func TestExpiredReviewDoesNotPollOrRequest(t *testing.T) {
 		t.Fatal("expired review must not read evidence or request reviewers")
 		return nil, nil
 	}
-	if err := waitForReview(ctx, gh, testConfig, "12"); !errors.Is(err, context.Canceled) {
+	if err := waitForReview(ctx, gh, testConfig, "12", true); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled review, got %v", err)
 	}
 }
