@@ -12,7 +12,10 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
-- fix: restore available supplemental data with fail-closed diagnostics
+## [0.12.1] - 2026-09-09
+
+- fix: restore available supplemental data with fail-closed diagnostics (#88) (#89)
+- docs: record v0.12.0 release (#85)
 
 ## [0.12.0] - 2026-09-06
 
@@ -117,7 +120,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.1
 [0.12.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.0
 [0.11.10]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.10
 [0.11.9]: https://github.com/HemSoft/gh-x/releases/tag/v0.11.9
