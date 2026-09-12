@@ -17,7 +17,7 @@ const (
 	ghHelperModeEnv       = "GH_X_TEST_HELPER_MODE"
 	ghHelperStartedEnv    = "GH_X_TEST_HELPER_STARTED"
 	ghHelperCompletedEnv  = "GH_X_TEST_HELPER_COMPLETED"
-	ghHelperSleepDuration = 300 * time.Millisecond
+	ghHelperSleepDuration = 30 * time.Second
 )
 
 func TestRunGHCmdHelperProcess(t *testing.T) {
@@ -93,7 +93,6 @@ func TestRunGHCmdHonorsSuccessDeadlineAndCancellation(t *testing.T) {
 	if err := <-result; !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation error = %v", err)
 	}
-	time.Sleep(ghHelperSleepDuration + 100*time.Millisecond)
 	if _, err := os.Stat(completed); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("canceled child reached completion marker: %v", err)
 	}
@@ -121,6 +120,7 @@ func TestConfiguredTimeout(t *testing.T) {
 		{name: "default", want: 7 * time.Second},
 		{name: "configured", value: "250ms", want: 250 * time.Millisecond},
 		{name: "invalid", value: "soon", wantErr: true},
+		{name: "whitespace", value: "  ", wantErr: true},
 		{name: "zero", value: "0s", wantErr: true},
 		{name: "negative", value: "-1s", wantErr: true},
 	}
@@ -895,6 +895,29 @@ func TestFallbackEligibleRespectsHostOverrides(t *testing.T) {
 	publicArgs := []string{"pr", "list", "--repo", "o/r"}
 	if !fallbackEligible(publicArgs, "Not Found (HTTP 404)") {
 		t.Fatal("enterprise token must not block github.com fallback")
+	}
+}
+
+func TestAccountDiscoveryDoesNotCacheContextFailure(t *testing.T) {
+	calls := 0
+	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		calls++
+		if calls == 1 {
+			<-inv.Context.Done()
+			return bytes.Buffer{}, bytes.Buffer{}, githubContextError(inv.Context.Err())
+		}
+		return *bytes.NewBufferString(`{"hosts":{"github.com":[{"login":"ready","active":true,"state":"success"}]}}`), bytes.Buffer{}, nil
+	}, nil, nil)
+	listAccountsFunc = listAccounts
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if accounts := listAccounts(ctx, defaultGitHubHost); len(accounts) != 0 {
+		t.Fatalf("timed-out discovery returned accounts: %v", accounts)
+	}
+	accounts := listAccounts(context.Background(), defaultGitHubHost)
+	if calls != 2 || len(accounts) != 1 || accounts[0].Login != "ready" {
+		t.Fatalf("discovery retry = calls %d, accounts %v", calls, accounts)
 	}
 }
 

@@ -125,14 +125,13 @@ func TestCLIBehaviorSuccess(t *testing.T) {
 }
 
 func TestCLIBehaviorGitHubTimeout(t *testing.T) {
-	started := time.Now()
 	result := runCLIWithGitHubTimeout(t, newFixtureRepository(t), "gh-timeout", "150ms", "issue", "list", "--repo", "HemSoft/gh-x")
 
 	if result.exitCode == 0 {
 		t.Fatalf("exit code = 0, want nonzero\nstdout:\n%s", result.stdout)
 	}
-	if elapsed := time.Since(started); elapsed >= 2*time.Second {
-		t.Fatalf("internal timeout took %v", elapsed)
+	if result.elapsed >= 2*time.Second {
+		t.Fatalf("internal timeout took %v", result.elapsed)
 	}
 	if !strings.Contains(result.stderr, "github request timed out") {
 		t.Fatalf("stderr does not contain timeout guidance:\n%s", result.stderr)
@@ -163,6 +162,7 @@ type cliResult struct {
 	stderr   string
 	calls    string
 	exitCode int
+	elapsed  time.Duration
 }
 
 func runCLI(t *testing.T, workingDirectory, scenario string, args ...string) cliResult {
@@ -195,7 +195,9 @@ func runCLIWithGitHubTimeout(t *testing.T, workingDirectory, scenario, timeout s
 	var stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
+	started := time.Now()
 	err := command.Run()
+	elapsed := time.Since(started)
 
 	exitCode := 0
 	if err != nil {
@@ -215,6 +217,7 @@ func runCLIWithGitHubTimeout(t *testing.T, workingDirectory, scenario, timeout s
 		stderr:   stderr.String(),
 		calls:    string(calls),
 		exitCode: exitCode,
+		elapsed:  elapsed,
 	}
 }
 

@@ -90,9 +90,13 @@ func githubContextError(err error) error {
 }
 
 func configuredTimeout(name string, fallback time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
+	raw := os.Getenv(name)
+	if raw == "" {
 		return fallback, nil
+	}
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return 0, fmt.Errorf("%s must not contain only whitespace", name)
 	}
 	duration, err := time.ParseDuration(value)
 	if err != nil || duration <= 0 {
@@ -519,6 +523,9 @@ var (
 // probe is parsed and cached for every reported host. An empty result is
 // cached too so a broken auth state cannot cause repeated probing.
 func listAccounts(ctx context.Context, host string) []ghAccount {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	host = normalizeRemoteHost(host)
 	accountsMu.Lock()
 	defer accountsMu.Unlock()
@@ -527,6 +534,9 @@ func listAccounts(ctx context.Context, host string) []ghAccount {
 	}
 	stdout, _, err := ghTransportFunc(ghInvocation{Context: ctx, Args: []string{"auth", "status", "--json", "hosts"}})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		cachedAccounts[host] = []ghAccount{}
 		return cachedAccounts[host]
 	}
