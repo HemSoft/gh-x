@@ -206,8 +206,9 @@ var (
 )
 
 const (
-	sshConfigTimeout  = 2 * time.Second
-	authStatusTimeout = 2 * time.Second
+	sshConfigTimeout   = 2 * time.Second
+	sshConfigWaitDelay = 100 * time.Millisecond
+	authStatusTimeout  = 2 * time.Second
 )
 
 // sshConfigHostFunc resolves an SSH destination through the user's config.
@@ -309,11 +310,17 @@ func configuredSSHHost(host string) string {
 func defaultSSHConfigHost(host string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), sshConfigTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ssh", "-G", "--", host).Output()
+	out, err := newSSHConfigCommand(ctx, host).Output()
 	if err != nil {
 		return ""
 	}
 	return parseSSHConfigHost(out)
+}
+
+func newSSHConfigCommand(ctx context.Context, host string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "ssh", "-G", "--", host)
+	cmd.WaitDelay = sshConfigWaitDelay
+	return cmd
 }
 
 func parseSSHConfigHost(output []byte) string {
@@ -411,6 +418,7 @@ var (
 // probe is parsed and cached for every reported host. An empty result is
 // cached too so a broken auth state cannot cause repeated probing.
 func listAccounts(host string) []ghAccount {
+	host = normalizeRemoteHost(host)
 	accountsMu.Lock()
 	defer accountsMu.Unlock()
 	if cached, ok := cachedAccounts[host]; ok {
@@ -436,8 +444,9 @@ func listAccounts(host string) []ghAccount {
 }
 
 // parseAuthStatusJSON reads `gh auth status --json hosts` into per-host
-// account lists keyed by hostname. Only successful logins apply; expired or
-// pending entries are skipped because their tokens cannot authenticate.
+// account lists keyed by normalized hostname. Only successful logins apply;
+// expired or pending entries are skipped because their tokens cannot
+// authenticate.
 func parseAuthStatusJSON(data []byte) map[string][]ghAccount {
 	var payload struct {
 		Hosts map[string][]struct {
@@ -451,6 +460,10 @@ func parseAuthStatusJSON(data []byte) map[string][]ghAccount {
 		return byHost
 	}
 	for host, entries := range payload.Hosts {
+		host = normalizeRemoteHost(host)
+		if host == "" {
+			continue
+		}
 		for _, entry := range entries {
 			if entry.Login == "" {
 				continue

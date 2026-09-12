@@ -350,7 +350,7 @@ func TestParseAuthStatusJSON(t *testing.T) {
 				{"login": "expired", "active": false, "state": "unauthenticated"},
 				{"login": "fhemmerrelias", "active": false, "state": "success"}
 			],
-			"ghe.example.com": [
+			"GHE.Example.COM.": [
 				{"login": "enterprise-only", "active": true, "state": "success"}
 			]
 		}
@@ -613,6 +613,16 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 	}
 }
 
+func TestNewSSHConfigCommandBoundsPipeDrain(t *testing.T) {
+	cmd := newSSHConfigCommand(context.Background(), "GitHub.com-hemsoft")
+	if cmd.WaitDelay != sshConfigWaitDelay {
+		t.Fatalf("ssh WaitDelay = %s, want %s", cmd.WaitDelay, sshConfigWaitDelay)
+	}
+	if got := strings.Join(cmd.Args, "|"); got != "ssh|-G|--|GitHub.com-hemsoft" {
+		t.Fatalf("ssh command args = %q", got)
+	}
+}
+
 func TestParseSSHConfigHost(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -750,7 +760,7 @@ func TestAccountsAreCachedPerHost(t *testing.T) {
 	}, nil, nil)
 	listAccountsFunc = listAccounts
 
-	first := listAccounts("ghe.example.com")
+	first := listAccounts("GHE.Example.COM.")
 	second := listAccounts("github.com")
 	listAccounts("ghe.example.com")
 
