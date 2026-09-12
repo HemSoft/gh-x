@@ -151,7 +151,7 @@ func TestAuthoritativeDispatchHasAnIsolatedConcurrencyLane(t *testing.T) {
 	}
 	for _, required := range []string{
 		`timeout 40m gh run watch "$run_id" --repo "$repo" --exit-status`,
-		`actions/runs/${run_id}/jobs?per_page=100`,
+		`gh api --paginate --slurp "repos/${repo}/actions/runs/${run_id}/jobs?per_page=100"`,
 		`select(.name == "Quality Gate")] | if length == 1 then .[0].conclusion else "ambiguous" end`,
 		`"$actual_head" != "$expected_head"`,
 		`PR $pr_url expected head $expected_head authoritative run $run_id`,
