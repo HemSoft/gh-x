@@ -558,6 +558,8 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 		switch host {
 		case "github.com-hemsoft", "workserver":
 			return defaultGitHubHost
+		case defaultGitHubHost:
+			return "ssh.github.com"
 		default:
 			return host
 		}
@@ -573,6 +575,7 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 		{name: "ssh scheme alias", value: "ssh://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "git plus ssh alias", value: "git+ssh://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "genuine enterprise ssh host", value: "git@ghe.example.com:acme/widgets.git", want: "ghe.example.com"},
+		{name: "canonical public host over SSH", value: "git@github.com:HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "https host is not an SSH alias", value: "https://github.com-hemsoft/HemSoft/codexbar-ios.git", want: "github.com-hemsoft"},
 	}
 	for _, test := range cases {

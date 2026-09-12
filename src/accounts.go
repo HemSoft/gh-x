@@ -271,7 +271,7 @@ func isSSHRemoteScheme(scheme string) bool {
 // gh API endpoint. A missing ssh binary, invalid config, timeout, or unresolved
 // alias falls back to the original remote host.
 func configuredSSHHost(host string) string {
-	if host == "" || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+	if host == "" || host == defaultGitHubHost || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
 		return host
 	}
 	if resolved := normalizeRemoteHost(sshConfigHostFunc(host)); plausibleRemoteHost(resolved) {
