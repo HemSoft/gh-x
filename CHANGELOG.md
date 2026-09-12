@@ -12,6 +12,11 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+## [0.12.7] - 2026-09-12
+
+- docs: record v0.12.6 release (#108)
+- fix: require current-head Codex review in CI (#106)
+
 ## [0.12.6] - 2026-09-12
 
 - fix: complete Codex review evidence compatibility (#107)
@@ -145,7 +150,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.12.6...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.12.7...HEAD
+[0.12.7]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.7
 [0.12.6]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.6
 [0.12.5]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.5
 [0.12.4]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.4
