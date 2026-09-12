@@ -201,7 +201,11 @@ func runCreate() error {
 	view := exec.Command("gh", "release", "view", releaseTag, "--json", "tagName,assets,isDraft")
 	output, viewErr := view.Output()
 	if viewErr == nil {
-		return reconcileExistingRelease(releaseTag, releaseSHA, assets, output)
+		repository := os.Getenv("GITHUB_REPOSITORY")
+		if repository == "" {
+			return errors.New("GITHUB_REPOSITORY is required to verify release attestations")
+		}
+		return reconcileExistingRelease(repository, releaseTag, releaseSHA, assets, output)
 	} else if _, ok := viewErr.(*exec.ExitError); !ok {
 		return fmt.Errorf("inspect release %s: %w", releaseTag, viewErr)
 	}
@@ -209,7 +213,7 @@ func runCreate() error {
 	return runCommand("gh", createReleaseArgs(releaseTag, releaseSHA, assets)...)
 }
 
-func reconcileExistingRelease(releaseTag, releaseSHA string, assets []string, response []byte) error {
+func reconcileExistingRelease(repository, releaseTag, releaseSHA string, assets []string, response []byte) error {
 	var published existingRelease
 	if err := json.Unmarshal(response, &published); err != nil {
 		return fmt.Errorf("decode release %s: %w", releaseTag, err)
@@ -218,6 +222,9 @@ func reconcileExistingRelease(releaseTag, releaseSHA string, assets []string, re
 		return fmt.Errorf("release lookup returned tag %q, want %q", published.TagName, releaseTag)
 	}
 	if err := validateReleaseTarget(releaseTag, releaseSHA); err != nil {
+		return err
+	}
+	if err := verifyReleaseAssets(repository, releaseSHA, assets); err != nil {
 		return err
 	}
 	missing, err := missingReleaseAssets(assets, published.Assets)
@@ -235,6 +242,26 @@ func reconcileExistingRelease(releaseTag, releaseSHA string, assets []string, re
 		}
 	}
 	return nil
+}
+
+func verifyReleaseAssets(repository, releaseSHA string, assets []string) error {
+	for _, asset := range assets {
+		args := attestationVerificationArgs(repository, releaseSHA, asset)
+		if err := runCommand("gh", args...); err != nil {
+			return fmt.Errorf("verify release attestation for %s: %w", filepath.Base(asset), err)
+		}
+	}
+	return nil
+}
+
+func attestationVerificationArgs(repository, releaseSHA, asset string) []string {
+	return []string{
+		"attestation", "verify", asset,
+		"--repo", repository,
+		"--signer-workflow", repository + "/.github/workflows/auto-release.yml",
+		"--source-digest", releaseSHA,
+		"--predicate-type", "https://slsa.dev/provenance/v1",
+	}
 }
 
 func releaseReconciliationCommands(tag string, missing []string, isDraft bool) [][]string {

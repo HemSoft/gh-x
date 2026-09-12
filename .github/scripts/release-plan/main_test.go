@@ -285,6 +285,20 @@ func TestExistingReleaseAssetsAreNeverReplaced(t *testing.T) {
 	}
 }
 
+func TestAttestationVerificationArgsBindTrustedSource(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef012345e5"
+	want := []string{
+		"attestation", "verify", "dist/linux-amd64",
+		"--repo", "HemSoft/gh-x",
+		"--signer-workflow", "HemSoft/gh-x/.github/workflows/auto-release.yml",
+		"--source-digest", sha,
+		"--predicate-type", "https://slsa.dev/provenance/v1",
+	}
+	if got := attestationVerificationArgs("HemSoft/gh-x", sha, "dist/linux-amd64"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("attestationVerificationArgs() = %#v, want %#v", got, want)
+	}
+}
+
 func TestReleaseReconciliationPublishesDraftAfterAssets(t *testing.T) {
 	missing := []string{"dist/linux-amd64", "dist/windows-amd64.exe"}
 	want := [][]string{
