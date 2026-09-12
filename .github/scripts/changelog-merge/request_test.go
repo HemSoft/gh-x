@@ -61,10 +61,10 @@ func TestWorkflowHasOneRequestOwnerAndReusesVerification(t *testing.T) {
 		if step.Env["CODEX_REVIEW_TOKEN"] != "${{ secrets.CODEX_REVIEW_TOKEN }}" || !strings.Contains(step.Run, `GH_TOKEN="$CODEX_REVIEW_TOKEN"`) || !strings.Contains(step.Run, `-z "$CODEX_REVIEW_TOKEN"`) {
 			t.Fatal("request must use the explicit connected-user secret and guard missing setup")
 		}
-		watch := strings.Index(step.Run, `gh run watch "$ci_run"`)
+		verify := strings.Index(step.Run, "verify-authoritative-run.sh")
 		merge := strings.Index(step.Run, "changelog-merge enable")
-		if watch < 0 || watch > merge || !strings.Contains(step.Run, ".workflow_run_id") || !strings.Contains(step.Run, `"$ci_head" != "$head_sha"`) {
-			t.Fatal("must await the exact dispatched run and verify its head before reading the merge gate")
+		if verify < 0 || verify > merge || !strings.Contains(step.Run, ".workflow_run_id") || !strings.Contains(step.Run, `"$GITHUB_REPOSITORY" "$pr_url" "$head_sha" "$ci_run"`) {
+			t.Fatal("must verify the exact dispatched run and head before reading the merge gate")
 		}
 	}
 	if requests != 1 {
@@ -142,14 +142,23 @@ func TestAuthoritativeDispatchHasAnIsolatedConcurrencyLane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(string(release), `bash .github/scripts/verify-authoritative-run.sh`) || !strings.Contains(string(release), `"$GITHUB_REPOSITORY" "$pr_url" "$head_sha" "$ci_run"`) {
+		t.Fatal("release workflow must pass exact identities to the authoritative verifier")
+	}
+	verifier, err := os.ReadFile("../verify-authoritative-run.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, required := range []string{
-		`authoritative run $ci_run stopped before a successful Quality Gate`,
-		`actions/runs/${ci_run}/jobs?per_page=100`,
-		`select(.name == "Quality Gate")`,
-		`expected head $head_sha authoritative run $ci_run reported head $ci_head`,
+		`timeout 40m gh run watch "$run_id" --repo "$repo" --exit-status`,
+		`actions/runs/${run_id}/jobs?per_page=100`,
+		`select(.name == "Quality Gate")] | if length == 1 then .[0].conclusion else "ambiguous" end`,
+		`"$actual_head" != "$expected_head"`,
+		`PR $pr_url expected head $expected_head authoritative run $run_id`,
+		`Inspect $run_url.`,
 	} {
-		if !strings.Contains(string(release), required) {
-			t.Fatalf("authoritative release verification missing %q", required)
+		if !strings.Contains(string(verifier), required) {
+			t.Fatalf("authoritative run verifier missing %q", required)
 		}
 	}
 }

@@ -108,6 +108,11 @@ func main() {
 	loadJSON(".github/rulesets/main.json", &configuredRuleset)
 	ci, ciContent := loadWorkflowWithContent(".github/workflows/ci.yml")
 	autoRelease := loadWorkflow(".github/workflows/auto-release.yml")
+	authoritativeRun, err := os.ReadFile(".github/scripts/verify-authoritative-run.sh")
+	if err != nil {
+		fail("read authoritative run verifier: " + err.Error())
+	}
+	authoritativeRunContent := string(authoritativeRun)
 
 	if err := validateRuleset(configuredRuleset); err != nil {
 		fail(err.Error())
@@ -241,9 +246,15 @@ func main() {
 	require(mergeChangelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog pull request must receive the new or resumed release tag")
 	require(mergeChangelog.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "changelog reconciliation must retain the released commit SHA")
 	require(strings.Contains(mergeChangelog.Run, `"repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches"`) && strings.Contains(mergeChangelog.Run, `-f ref="$branch" --jq '.workflow_run_id'`), "changelog pull request must dispatch CI on its exact branch and capture the run ID")
-	require(strings.Contains(mergeChangelog.Run, `if ! timeout 40m gh run watch "$ci_run" --exit-status`) && strings.Contains(mergeChangelog.Run, `"$ci_head" != "$head_sha"`), "changelog merge must wait for the dispatched run and verify its head")
-	require(strings.Contains(mergeChangelog.Run, `actions/runs/${ci_run}/jobs?per_page=100`) && strings.Contains(mergeChangelog.Run, `select(.name == "Quality Gate")`) && strings.Contains(mergeChangelog.Run, `"$gate_conclusion" != "success"`), "authoritative changelog run must contain exactly one successful Quality Gate")
-	require(strings.Contains(mergeChangelog.Run, `PR $pr_url expected head $head_sha authoritative run $ci_run`), "authoritative validation failures must identify the pull request, head, and run")
+	require(strings.Contains(mergeChangelog.Run, `bash .github/scripts/verify-authoritative-run.sh \`) && strings.Contains(mergeChangelog.Run, `"$GITHUB_REPOSITORY" "$pr_url" "$head_sha" "$ci_run"`), "changelog merge must invoke the authoritative run verifier with exact identities")
+	require(strings.Contains(authoritativeRunContent, `timeout 40m gh run watch "$run_id" --repo "$repo" --exit-status`) && strings.Contains(authoritativeRunContent, `"$actual_head" != "$expected_head"`), "authoritative verifier must wait for the dispatched run and verify its head")
+	require(
+		strings.Contains(authoritativeRunContent, `actions/runs/${run_id}/jobs?per_page=100`) &&
+			strings.Contains(authoritativeRunContent, `select(.name == "Quality Gate")] | if length == 1 then .[0].conclusion else "ambiguous" end`) &&
+			strings.Contains(authoritativeRunContent, `"$gate_conclusion" != "success"`),
+		"authoritative changelog run must contain exactly one successful Quality Gate",
+	)
+	require(strings.Contains(authoritativeRunContent, `PR $pr_url expected head $expected_head authoritative run $run_id`) && strings.Contains(authoritativeRunContent, `Inspect $run_url.`), "authoritative validation failures must identify and link the pull request, head, and run")
 	require(strings.Contains(mergeChangelog.Run, `branch="chore/changelog-${RELEASE_TAG#v}"`), "release retries must reuse a deterministic changelog branch")
 	require(strings.Contains(mergeChangelog.Run, `gh pr list --base main --head "$branch" --state open`), "release retries must reuse an existing open changelog pull request")
 	require(strings.Contains(mergeChangelog.Run, `--jq '.[0].url // empty'`), "a missing changelog pull request must produce an empty lookup")

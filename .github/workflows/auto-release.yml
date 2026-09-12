@@ -181,29 +181,19 @@ jobs:
           GH_TOKEN="$CODEX_REVIEW_TOKEN" CHANGELOG_BRANCH="$branch" EXPECTED_HEAD="$head_sha" \
             go run ./.github/scripts/changelog-merge request
           # Bind recovery to this dispatch, not an old failed check for the head.
-          ci_run=$(gh api --method POST \
+          if ! ci_run=$(gh api --method POST \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches" \
-            -f ref="$branch" --jq '.workflow_run_id')
+            -f ref="$branch" --jq '.workflow_run_id'); then
+            echo "::error::PR $pr_url expected head $head_sha could not create its authoritative CI run; leaving the pull request open."
+            exit 1
+          fi
           if [[ ! "$ci_run" =~ ^[0-9]+$ ]]; then
-            echo "::error::CI dispatch did not return a run ID; leaving $pr_url open."
+            echo "::error::PR $pr_url expected head $head_sha received invalid authoritative run ID '$ci_run'; leaving the pull request open."
             exit 1
           fi
-          if ! timeout 40m gh run watch "$ci_run" --exit-status --interval 30; then
-            echo "::error::PR $pr_url expected head $head_sha authoritative run $ci_run stopped before a successful Quality Gate. Inspect https://github.com/${GITHUB_REPOSITORY}/actions/runs/${ci_run}."
-            exit 1
-          fi
-          ci_head=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ci_run}" --jq '.head_sha')
-          if [[ "$ci_head" != "$head_sha" ]]; then
-            echo "::error::PR $pr_url expected head $head_sha authoritative run $ci_run reported head $ci_head; leaving the pull request open."
-            exit 1
-          fi
-          gate_conclusion=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${ci_run}/jobs?per_page=100" \
-            --jq '[.jobs[] | select(.name == "Quality Gate")] | if length == 1 then .[0].conclusion else "ambiguous" end')
-          if [[ "$gate_conclusion" != "success" ]]; then
-            echo "::error::PR $pr_url expected head $head_sha authoritative run $ci_run has Quality Gate conclusion '$gate_conclusion'; leaving the pull request open."
-            exit 1
-          fi
+          bash .github/scripts/verify-authoritative-run.sh \
+            "$GITHUB_REPOSITORY" "$pr_url" "$head_sha" "$ci_run"
 
           CHANGELOG_BRANCH="$branch" EXPECTED_HEAD="$head_sha" \
             go run ./.github/scripts/changelog-merge enable
