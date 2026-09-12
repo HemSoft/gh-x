@@ -262,14 +262,12 @@ func (m monitorModel) quitMonitor() (tea.Model, tea.Cmd) {
 	if err := saveMonitorState(m.statePath, monitorSessionState{Tab: m.tab, SubTab: m.subTab, RepoIndex: m.repoIdx}); err != nil {
 		fmt.Fprintf(accountWarningWriter, "[gh-x] note: could not save session state: %v\n", err)
 	}
-	return m, waitForRefreshThenQuit(m.refreshDone)
+	return m, waitForRefreshThenQuit(m.refreshState)
 }
 
-func waitForRefreshThenQuit(done <-chan struct{}) tea.Cmd {
+func waitForRefreshThenQuit(state *monitorRefreshState) tea.Cmd {
 	return func() tea.Msg {
-		if done != nil {
-			<-done
-		}
+		state.waitIfStarted()
 		return tea.Quit()
 	}
 }

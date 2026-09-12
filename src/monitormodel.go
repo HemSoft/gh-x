@@ -52,7 +52,7 @@ type monitorModel struct {
 	refreshing     bool
 	refreshContext context.Context
 	cancelRefresh  context.CancelFunc
-	refreshDone    chan struct{}
+	refreshState   *monitorRefreshState
 	interval       time.Duration
 	backoff        time.Duration
 
@@ -74,12 +74,11 @@ func newMonitorModel(cfg *monitorConfig, configPath, statePath string, state mon
 	filter := textinput.New()
 	filter.Placeholder = "filter…"
 	refreshContext, cancelRefresh := context.WithCancel(context.Background())
-	initialRefreshDone := make(chan struct{})
 	model := monitorModel{
 		cfg:            cfg,
 		refreshContext: refreshContext,
 		cancelRefresh:  cancelRefresh,
-		refreshDone:    initialRefreshDone,
+		refreshState:   newMonitorRefreshState(),
 		refreshing:     true,
 		configPath:     configPath,
 		statePath:      statePath,

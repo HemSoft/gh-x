@@ -249,6 +249,27 @@ func TestExecGHFallsBackToAlternateAccount(t *testing.T) {
 	}
 }
 
+func TestExecGHContextSkipsFallbackAfterCancellation(t *testing.T) {
+	fallbackCalls := 0
+	withFallbackStubs(t, func(ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		return bytes.Buffer{}, *bytes.NewBufferString("HTTP 404: Not Found"), errors.New("exit status 1")
+	}, nil, nil)
+	listAccountsFunc = func(context.Context, string) []ghAccount {
+		fallbackCalls++
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := execGHContext(ctx, "pr", "list")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled command error = %v", err)
+	}
+	if fallbackCalls != 0 {
+		t.Fatalf("fallback discovery ran %d times after cancellation", fallbackCalls)
+	}
+}
+
 func TestExecGHContextBoundsAccountRetry(t *testing.T) {
 	calls := 0
 	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {

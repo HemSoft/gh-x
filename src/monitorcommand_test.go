@@ -43,7 +43,8 @@ func TestRunMonitorCmdBootstrapErrorSurfaces(t *testing.T) {
 	newMonitorProgramFunc = func(model monitorModel) monitorProgram {
 		return fakeMonitorProgram{onRun: func() (tea.Model, error) {
 			ran = true
-			close(model.refreshDone)
+			model.refreshState.markStarted()
+			model.refreshState.markDone()
 			return model, nil
 		}}
 	}
@@ -72,7 +73,8 @@ func TestRunMonitorCmdCancelsRefreshOnProgramError(t *testing.T) {
 	newMonitorProgramFunc = func(model monitorModel) monitorProgram {
 		refreshContext = model.refreshContext
 		return fakeMonitorProgram{onRun: func() (tea.Model, error) {
-			close(model.refreshDone)
+			model.refreshState.markStarted()
+			model.refreshState.markDone()
 			return model, errBoom()
 		}}
 	}
@@ -85,6 +87,25 @@ func TestRunMonitorCmdCancelsRefreshOnProgramError(t *testing.T) {
 	case <-refreshContext.Done():
 	default:
 		t.Fatal("program error did not cancel monitor refresh context")
+	}
+}
+
+func TestStopMonitorRefreshDoesNotWaitForUnstartedCommand(t *testing.T) {
+	model := newMonitorModel(monitorTestConfig(), "cfg.yml", "", monitorSessionState{})
+	stopped := make(chan struct{})
+	go func() {
+		stopMonitorRefresh(model, nil)
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown waited for a refresh command that never started")
+	}
+	select {
+	case <-model.refreshContext.Done():
+	default:
+		t.Fatal("unstarted refresh context was not canceled")
 	}
 }
 

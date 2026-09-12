@@ -19,8 +19,7 @@ func monitorTestConfig() *monitorConfig {
 
 func newTestMonitorModel() monitorModel {
 	model := newMonitorModel(monitorTestConfig(), "cfg.yml", "", monitorSessionState{})
-	close(model.refreshDone)
-	model.refreshDone = nil
+	model.refreshState = nil
 	model.refreshing = false
 	return model
 }
@@ -230,7 +229,7 @@ func TestQuitCancelsInFlightRefresh(t *testing.T) {
 	}
 	model := newTestMonitorModel()
 	model.refreshing = true
-	model.refreshDone = make(chan struct{})
+	model.refreshState = newMonitorRefreshState()
 	fetchDone := make(chan tea.Msg, 1)
 	go func() { fetchDone <- model.initialMonitorCmd()() }()
 	select {

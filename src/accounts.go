@@ -140,7 +140,13 @@ func execGHContext(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buf
 		ctx = context.Background()
 	}
 	stdout, stderr, err := ghTransportFunc(ghInvocation{Context: ctx, Args: args})
-	if err == nil || !fallbackEligible(args, stderr.String()) {
+	if err == nil {
+		return stdout, stderr, nil
+	}
+	if contextErr := githubContextError(ctx.Err()); contextErr != nil {
+		return stdout, stderr, contextErr
+	}
+	if !fallbackEligible(args, stderr.String()) {
 		return stdout, stderr, err
 	}
 	return retryGHWithAccounts(ctx, args, stdout, stderr, err)

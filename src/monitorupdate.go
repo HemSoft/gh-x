@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -15,6 +16,40 @@ const (
 
 // monitorNowFunc is swappable in tests.
 var monitorNowFunc = time.Now
+
+type monitorRefreshState struct {
+	started     chan struct{}
+	done        chan struct{}
+	startedOnce sync.Once
+	doneOnce    sync.Once
+}
+
+func newMonitorRefreshState() *monitorRefreshState {
+	return &monitorRefreshState{started: make(chan struct{}), done: make(chan struct{})}
+}
+
+func (state *monitorRefreshState) markStarted() {
+	if state != nil {
+		state.startedOnce.Do(func() { close(state.started) })
+	}
+}
+
+func (state *monitorRefreshState) markDone() {
+	if state != nil {
+		state.doneOnce.Do(func() { close(state.done) })
+	}
+}
+
+func (state *monitorRefreshState) waitIfStarted() {
+	if state == nil {
+		return
+	}
+	select {
+	case <-state.started:
+		<-state.done
+	default:
+	}
+}
 
 // Update dispatches messages; each branch delegates to a small handler.
 func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -54,20 +89,19 @@ func (m monitorModel) startRefresh() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refreshing = true
-	m.refreshDone = make(chan struct{})
-	return m, newMonitorFetchCmd(m.refreshContext, *m.cfg, m.refreshDone)
+	m.refreshState = newMonitorRefreshState()
+	return m, newMonitorFetchCmd(m.refreshContext, *m.cfg, m.refreshState)
 }
 
 // newMonitorFetchCmd snapshots the config and applies one total deadline to
 // every host query in the refresh cycle.
-func newMonitorFetchCmd(parent context.Context, cfg monitorConfig, done chan<- struct{}) tea.Cmd {
+func newMonitorFetchCmd(parent context.Context, cfg monitorConfig, state *monitorRefreshState) tea.Cmd {
 	if parent == nil {
 		parent = context.Background()
 	}
 	return func() tea.Msg {
-		if done != nil {
-			defer close(done)
-		}
+		state.markStarted()
+		defer state.markDone()
 		timeout, err := configuredTimeout(monitorRefreshTimeoutEnv, defaultMonitorRefreshTimeout)
 		if err != nil {
 			return monitorFetchedMsg{err: err, at: monitorNowFunc()}
@@ -82,12 +116,12 @@ func newMonitorFetchCmd(parent context.Context, cfg monitorConfig, done chan<- s
 // initialMonitorCmd performs the first fetch under the model's lifecycle
 // context, allowing a quit command to cancel it.
 func (m monitorModel) initialMonitorCmd() tea.Cmd {
-	return newMonitorFetchCmd(m.refreshContext, *m.cfg, m.refreshDone)
+	return newMonitorFetchCmd(m.refreshContext, *m.cfg, m.refreshState)
 }
 
 func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) {
 	m.refreshing = false
-	m.refreshDone = nil
+	m.refreshState = nil
 	if msg.err != nil {
 		m.refreshErr = sanitizeMonitorError(msg.err)
 		m.refreshWarn = ""

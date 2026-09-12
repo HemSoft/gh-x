@@ -82,9 +82,7 @@ func stopMonitorRefresh(initial monitorModel, final tea.Model) {
 	if current.cancelRefresh != nil {
 		current.cancelRefresh()
 	}
-	if current.refreshDone != nil {
-		<-current.refreshDone
-	}
+	current.refreshState.waitIfStarted()
 }
 
 // printMonitorQuery renders the batched GraphQL document without running it.
