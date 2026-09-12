@@ -40,6 +40,15 @@ jobs:
       - name: Build
         run: go build -o "$RUNNER_TEMP/bin/" ./...
 
+      - name: Build all release targets
+        env:
+          RELEASE_VERSION: ci
+          RELEASE_OUTPUT_DIR: ${{ runner.temp }}/release-targets
+        run: |
+          RELEASE_BUILD_DATE="$(git show -s --format=%cs HEAD)"
+          export RELEASE_BUILD_DATE
+          go run ./.github/scripts/release-targets build
+
       - name: Vet
         run: go vet ./...
 
