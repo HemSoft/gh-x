@@ -17,8 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      attestations: write
       checks: read
       contents: write
+      id-token: write
       pull-requests: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -30,71 +32,18 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Load trusted release helper
+        env:
+          TRUSTED_HELPER_SHA: ${{ github.workflow_sha }}
+        run: |
+          git fetch --no-tags origin "$TRUSTED_HELPER_SHA"
+          git show "$TRUSTED_HELPER_SHA:.github/scripts/release-plan/main.go" > "$RUNNER_TEMP/release-plan.go"
+
       - name: Check whether release is needed
         id: check
         env:
           RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: go run ./.github/scripts/release-plan check
-
-      - name: Run tests
-        if: steps.check.outputs.skip == 'false'
-        run: go test ./... -count=1
-
-      - name: Determine next version
-        if: steps.check.outputs.skip == 'false'
-        id: version
-        env:
-          LATEST_TAG: ${{ steps.check.outputs.latest }}
-          VERSION_BASE_TAG: ${{ steps.check.outputs.version_base }}
-        run: go run ./.github/scripts/release-plan version
-
-      - name: Build cross-platform binaries
-        if: steps.check.outputs.skip == 'false'
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          mkdir -p dist
-          tag="$TAG"
-          platforms=(
-            "darwin/amd64"
-            "darwin/arm64"
-            "freebsd/386"
-            "freebsd/amd64"
-            "freebsd/arm64"
-            "linux/386"
-            "linux/amd64"
-            "linux/arm"
-            "linux/arm64"
-            "windows/386"
-            "windows/amd64"
-            "windows/arm64"
-          )
-          build_date=$(date -u +%Y-%m-%d)
-          for platform in "${platforms[@]}"; do
-            os="${platform%/*}"
-            arch="${platform#*/}"
-            ext=""
-            [[ "$os" == "windows" ]] && ext=".exe"
-            output="dist/${os}-${arch}${ext}"
-            echo "Building ${output}..."
-            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${tag} -X main.buildDate=${build_date}" -o "$output" ./src
-          done
-
-      - name: Generate release notes
-        if: steps.check.outputs.skip == 'false'
-        id: notes
-        env:
-          LATEST_TAG: ${{ steps.check.outputs.latest }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: go run ./.github/scripts/release-plan notes
-
-      - name: Create release
-        if: steps.check.outputs.skip == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: go run ./.github/scripts/release-plan create
+        run: go run "$RUNNER_TEMP/release-plan.go" check
 
       - name: Load existing release notes
         id: existing_release
@@ -116,6 +65,76 @@ jobs:
             exit 1
           fi
 
+      - name: Run tests
+        if: steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'
+        run: go test ./... -count=1
+
+      - name: Determine next version
+        if: steps.check.outputs.skip == 'false'
+        id: version
+        env:
+          LATEST_TAG: ${{ steps.check.outputs.latest }}
+          VERSION_BASE_TAG: ${{ steps.check.outputs.version_base }}
+        run: go run "$RUNNER_TEMP/release-plan.go" version
+
+      - name: Build cross-platform binaries
+        if: steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          mkdir -p dist
+          tag="$TAG"
+          platforms=(
+            "darwin/amd64"
+            "darwin/arm64"
+            "freebsd/386"
+            "freebsd/amd64"
+            "freebsd/arm64"
+            "linux/386"
+            "linux/amd64"
+            "linux/arm"
+            "linux/arm64"
+            "windows/386"
+            "windows/amd64"
+            "windows/arm64"
+          )
+          build_date=$(git show -s --format=%cs "$RELEASE_SHA")
+          for platform in "${platforms[@]}"; do
+            os="${platform%/*}"
+            arch="${platform#*/}"
+            ext=""
+            [[ "$os" == "windows" ]] && ext=".exe"
+            output="dist/${os}-${arch}${ext}"
+            echo "Building ${output}..."
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w -X main.version=${tag} -X main.buildDate=${build_date}" -o "$output" ./src
+          done
+
+      - name: Attest release binaries
+        # Initial publication attests the complete set before any upload. A
+        # tagged retry reuses those digests instead of signing under a later
+        # workflow_run source identity.
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: 'dist/*'
+
+      - name: Generate release notes
+        if: steps.check.outputs.skip == 'false'
+        id: notes
+        env:
+          LATEST_TAG: ${{ steps.check.outputs.latest }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: go run "$RUNNER_TEMP/release-plan.go" notes
+
+      - name: Create release
+        if: steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}
+        run: go run "$RUNNER_TEMP/release-plan.go" create
+
       - name: Update changelog
         if: steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'
         env:
@@ -123,7 +142,7 @@ jobs:
         run: |
           git fetch origin main
           git switch --detach origin/main
-          go run ./.github/scripts/release-plan changelog
+          go run "$RUNNER_TEMP/release-plan.go" changelog
 
       - name: Queue guarded changelog auto-merge and await completion
         if: steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'

@@ -253,6 +253,69 @@ func TestNextVersion(t *testing.T) {
 	}
 }
 
+func TestExistingReleaseAssetsAreNeverReplaced(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "linux-amd64")
+	second := filepath.Join(dir, "windows-amd64.exe")
+	if err := os.WriteFile(first, []byte("linux"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("windows"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstDigest, err := fileSHA256(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, err := missingReleaseAssets([]string{first, second}, []releaseAsset{{Name: filepath.Base(first), Digest: "sha256:" + firstDigest}})
+	if err != nil || !reflect.DeepEqual(missing, []string{second}) {
+		t.Fatalf("missingReleaseAssets() = %v, %v", missing, err)
+	}
+	if _, err := missingReleaseAssets([]string{first}, []releaseAsset{{Name: filepath.Base(first), Digest: "sha256:" + strings.Repeat("0", 64)}}); err == nil || !strings.Contains(err.Error(), "refusing to replace") {
+		t.Fatalf("digest mismatch must fail closed: %v", err)
+	}
+	if _, err := missingReleaseAssets([]string{first}, []releaseAsset{{Name: filepath.Base(first)}, {Name: filepath.Base(first), Digest: "sha256:" + firstDigest}}); err == nil {
+		t.Fatal("missing or duplicate remote metadata must fail closed")
+	}
+	if _, err := missingReleaseAssets([]string{first}, []releaseAsset{{Name: "unexpected", Digest: "sha256:" + firstDigest}}); err == nil || !strings.Contains(err.Error(), "unexpected unattested asset") {
+		t.Fatalf("unexpected remote asset must fail closed: %v", err)
+	}
+	if _, err := missingReleaseAssets([]string{first, first}, nil); err == nil || !strings.Contains(err.Error(), "local release contains duplicate") {
+		t.Fatalf("duplicate local asset must fail closed: %v", err)
+	}
+}
+
+func TestAttestationVerificationArgsBindTrustedSource(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef012345e5"
+	want := []string{
+		"attestation", "verify", "dist/linux-amd64",
+		"--repo", "HemSoft/gh-x",
+		"--signer-workflow", "HemSoft/gh-x/.github/workflows/auto-release.yml",
+		"--source-digest", sha,
+		"--predicate-type", "https://slsa.dev/provenance/v1",
+	}
+	if got := attestationVerificationArgs("HemSoft/gh-x", sha, "dist/linux-amd64"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("attestationVerificationArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestReleaseReconciliationPublishesDraftAfterAssets(t *testing.T) {
+	missing := []string{"dist/linux-amd64", "dist/windows-amd64.exe"}
+	want := [][]string{
+		{"release", "upload", "v1.2.3", "dist/linux-amd64", "dist/windows-amd64.exe"},
+		{"release", "edit", "v1.2.3", "--draft=false"},
+	}
+	if got := releaseReconciliationCommands("v1.2.3", missing, true); !reflect.DeepEqual(got, want) {
+		t.Fatalf("releaseReconciliationCommands() = %#v, want %#v", got, want)
+	}
+	if got := releaseReconciliationCommands("v1.2.3", nil, true); !reflect.DeepEqual(got, want[1:]) {
+		t.Fatalf("complete draft reconciliation = %#v, want %#v", got, want[1:])
+	}
+	if got := releaseReconciliationCommands("v1.2.3", nil, false); len(got) != 0 {
+		t.Fatalf("complete published reconciliation = %#v, want no commands", got)
+	}
+}
+
 func TestCreateReleaseArgsPinsValidatedSHA(t *testing.T) {
 	sha := "0123456789abcdef0123456789abcdef01234567"
 	want := []string{"release", "create", "v1.2.3", "dist/linux-amd64", "--title", "v1.2.3", "--target", sha, "--notes-file", "release-notes.md"}

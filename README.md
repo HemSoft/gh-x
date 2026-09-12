@@ -589,6 +589,37 @@ the trusted default-branch helper and accepts only clean evidence attributable
 to that exact head. Missing, stale, truncated, ambiguous, refused, superseded,
 or unresolved evidence cannot pass.
 
+Every published binary carries GitHub build provenance created from the same
+trusted release job before asset publication. The attestation binds its SHA-256
+digest to this repository, the release workflow, and the validated source
+commit. The initial attestation covers the complete build before any upload, so
+an interrupted publication can upload a missing, already-attested asset without
+signing it under a later workflow context. A retry verifies every rebuilt asset
+against the repository, trusted workflow, original source commit, and SLSA
+predicate before continuing. It runs that reconciliation with the helper from
+the immutable trusted workflow revision, never the older released checkout.
+Existing release assets are never replaced: a retry reuses bytes with a matching
+digest, uploads only missing attested assets, and fails closed on a digest
+mismatch or unexpected asset.
+
+After downloading an asset, verify it with this exact command:
+
+```powershell
+$sourceCommit = gh release view v0.12.9 --repo HemSoft/gh-x `
+  --json targetCommitish --jq .targetCommitish
+gh attestation verify .\windows-amd64.exe `
+  --repo HemSoft/gh-x `
+  --signer-workflow HemSoft/gh-x/.github/workflows/auto-release.yml `
+  --source-digest $sourceCommit `
+  --predicate-type https://slsa.dev/provenance/v1
+```
+
+Replace `v0.12.9` and the asset path with the downloaded release. The command
+must exit successfully and name `HemSoft/gh-x`, the trusted release workflow,
+and the expected source commit. To verify all downloaded assets, run
+the same command once per file. See the exact options and output fields on the
+[`gh attestation verify` manual page](https://cli.github.com/manual/gh_attestation_verify).
+
 Generated changelog reviews retain stricter bot-author, same-repository,
 branch-name, and CHANGELOG-only checks on both pull-request and manually
 dispatched CI runs. The trusted release workflow requests connected Codex only.

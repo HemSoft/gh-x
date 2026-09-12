@@ -107,7 +107,7 @@ func main() {
 	var configuredRuleset ruleset
 	loadJSON(".github/rulesets/main.json", &configuredRuleset)
 	ci, ciContent := loadWorkflowWithContent(".github/workflows/ci.yml")
-	autoRelease := loadWorkflow(".github/workflows/auto-release.yml")
+	autoRelease, autoReleaseContent := loadWorkflowWithContent(".github/workflows/auto-release.yml")
 	authoritativeRun, err := os.ReadFile(".github/scripts/verify-authoritative-run.sh")
 	if err != nil {
 		fail("read authoritative run verifier: " + err.Error())
@@ -200,32 +200,55 @@ func main() {
 	)
 	require(releaseJob.Concurrency.Group == "auto-release", "eligible releases must share one concurrency group")
 	require(!releaseJob.Concurrency.CancelInProgress, "an active release must not be cancelled")
+	require(reflect.DeepEqual(releaseJob.Permissions, map[string]string{
+		"actions": "write", "attestations": "write", "checks": "read", "contents": "write", "id-token": "write", "pull-requests": "write",
+	}), "release permissions must be limited to publishing, provenance, CI dispatch, and changelog merge")
 	for _, job := range autoRelease.Jobs {
 		require(job.Uses != "./.github/workflows/ci.yml", "auto-release must not duplicate the CI suite")
 	}
 
+	validateTrustedReleaseHelper(releaseJob)
+
 	check := namedStep(releaseJob, "Check whether release is needed")
+	require(stepIndex(releaseJob, "Load trusted release helper") < stepIndex(releaseJob, "Check whether release is needed"), "trusted release helper must load before any release decision")
 	require(check.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release check must receive the validated SHA through env")
-	require(strings.TrimSpace(check.Run) == "go run ./.github/scripts/release-plan check", "release check must use the tested release-plan command")
+	require(strings.TrimSpace(check.Run) == `go run "$RUNNER_TEMP/release-plan.go" check`, "release check must use the trusted release-plan command")
 
 	version := namedStep(releaseJob, "Determine next version")
 	require(version.Env["LATEST_TAG"] == "${{ steps.check.outputs.latest }}", "version step must receive the latest tag through env")
 	require(version.Env["VERSION_BASE_TAG"] == "${{ steps.check.outputs.version_base }}", "version step must reserve versions across all semantic tags")
-	require(strings.TrimSpace(version.Run) == "go run ./.github/scripts/release-plan version", "version step must use the tested release-plan command")
+	require(strings.TrimSpace(version.Run) == `go run "$RUNNER_TEMP/release-plan.go" version`, "version step must use the trusted release-plan command")
 
 	notes := namedStep(releaseJob, "Generate release notes")
 	require(notes.Env["LATEST_TAG"] == "${{ steps.check.outputs.latest }}", "release notes must receive the latest tag through env")
 	require(notes.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "release notes must receive the calculated release tag through env")
-	require(strings.TrimSpace(notes.Run) == "go run ./.github/scripts/release-plan notes", "release notes must use the tested release-plan command")
+	require(strings.TrimSpace(notes.Run) == `go run "$RUNNER_TEMP/release-plan.go" notes`, "release notes must use the trusted release-plan command")
+
+	build := namedStep(releaseJob, "Build cross-platform binaries")
+	require(build.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "new and resumed releases must build the complete asset set")
+	require(build.Env["TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}" && build.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release builds must bind the new or resumed tag and validated source")
+	require(
+		strings.Contains(build.Run, `build_date=$(git show -s --format=%cs "$RELEASE_SHA")`) && strings.Contains(build.Run, `go build -buildvcs=false -trimpath`) && strings.Contains(build.Run, `main.buildDate=${build_date}`),
+		"release builds must disable VCS stamping, trim paths, and embed a source-derived date for deterministic retries",
+	)
+
+	attest := namedStep(releaseJob, "Attest release binaries")
+	require(attest.If == "steps.check.outputs.skip == 'false'", "provenance must bind only the initial release workflow source identity")
+	requirePinnedAction(autoReleaseContent, attest, "actions/attest-build-provenance", "v3")
+	require(reflect.DeepEqual(attest.With, map[string]string{"subject-path": "dist/*"}), "provenance must cover every release binary")
+	require(!attest.ContinueOnError, "provenance failure must stop release publication")
+	require(stepIndex(releaseJob, "Build cross-platform binaries") < stepIndex(releaseJob, "Attest release binaries") && stepIndex(releaseJob, "Attest release binaries") < stepIndex(releaseJob, "Create release"), "release binaries must be built and attested before publication")
 
 	create := namedStep(releaseJob, "Create release")
+	require(create.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "new and resumed releases must reconcile assets")
 	require(create.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release creation must receive the validated SHA through env")
-	require(create.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "release creation must receive the calculated release tag through env")
-	require(strings.TrimSpace(create.Run) == "go run ./.github/scripts/release-plan create", "release creation must use the tested release-plan command")
+	require(create.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "release creation must receive the new or resumed release tag")
+	require(strings.TrimSpace(create.Run) == `go run "$RUNNER_TEMP/release-plan.go" create`, "release creation must use the trusted release-plan command")
 
 	existingNotes := namedStep(releaseJob, "Load existing release notes")
 	require(existingNotes.ID == "existing_release", "existing release notes step must expose its outcome")
 	require(existingNotes.If == "steps.check.outputs.release_tag != ''", "tagged release runs must check for existing release notes")
+	require(stepIndex(releaseJob, "Load existing release notes") < stepIndex(releaseJob, "Build cross-platform binaries"), "tagged release existence must be known before asset reconciliation")
 	require(!existingNotes.ContinueOnError, "release lookup failures must not be suppressed")
 	require(existingNotes.Env["RELEASE_TAG"] == "${{ steps.check.outputs.release_tag }}", "existing release notes must use the tagged head")
 	require(strings.Contains(existingNotes.Run, `gh api --include --silent "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}"`), "existing release lookup must expose its HTTP status")
@@ -239,7 +262,7 @@ func main() {
 	require(changelog.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "changelog update must run for new and confirmed existing releases")
 	require(changelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog update must receive the new or resumed release tag")
 	require(strings.Contains(changelog.Run, "git switch --detach origin/main"), "changelog reconciliation must start from current main")
-	require(strings.Contains(changelog.Run, "go run ./.github/scripts/release-plan changelog"), "release workflow must use the tested changelog updater")
+	require(strings.Contains(changelog.Run, `go run "$RUNNER_TEMP/release-plan.go" changelog`), "release workflow must use the trusted changelog updater")
 
 	mergeChangelog := namedStep(releaseJob, "Queue guarded changelog auto-merge and await completion")
 	require(mergeChangelog.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "changelog pull request must run for new and confirmed existing releases")
@@ -356,11 +379,6 @@ func loadJSON(path string, target any) {
 	}
 }
 
-func loadWorkflow(path string) workflow {
-	result, _ := loadWorkflowWithContent(path)
-	return result
-}
-
 func loadWorkflowWithContent(path string) (workflow, string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -371,6 +389,23 @@ func loadWorkflowWithContent(path string) (workflow, string) {
 		fail(fmt.Sprintf("parse %s: %v", path, err))
 	}
 	return result, string(data)
+}
+
+func stepIndex(job workflowJob, name string) int {
+	for index, step := range job.Steps {
+		if step.Name == name {
+			return index
+		}
+	}
+	fail("missing workflow step: " + name)
+	return -1
+}
+
+func validateTrustedReleaseHelper(job workflowJob) {
+	trustedHelper := namedStep(job, "Load trusted release helper")
+	require(trustedHelper.Env["TRUSTED_HELPER_SHA"] == "${{ github.workflow_sha }}", "release helper must bind to the trusted workflow revision")
+	require(strings.TrimSpace(trustedHelper.Run) == `git fetch --no-tags origin "$TRUSTED_HELPER_SHA"
+git show "$TRUSTED_HELPER_SHA:.github/scripts/release-plan/main.go" > "$RUNNER_TEMP/release-plan.go"`, "release helper must load from the trusted workflow revision outside the target checkout")
 }
 
 func namedStep(job workflowJob, name string) workflowStep {
