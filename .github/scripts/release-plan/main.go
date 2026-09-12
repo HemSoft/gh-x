@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"os/exec"
@@ -165,6 +169,16 @@ func runNotes() error {
 	return nil
 }
 
+type releaseAsset struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+}
+
+type existingRelease struct {
+	TagName string         `json:"tagName"`
+	Assets  []releaseAsset `json:"assets"`
+}
+
 func runCreate() error {
 	releaseTag := os.Getenv("RELEASE_TAG")
 	if !semverTag.MatchString(releaseTag) {
@@ -183,25 +197,94 @@ func runCreate() error {
 	}
 	sort.Strings(assets)
 
-	view := exec.Command("gh", "release", "view", releaseTag, "--json", "tagName")
-	if err := view.Run(); err == nil {
-		if err := runCommand("git", "fetch", "--force", "--tags", "origin"); err != nil {
-			return err
-		}
-		tagSHA, err := gitOutput("rev-list", "-n", "1", releaseTag)
-		if err != nil {
-			return err
-		}
-		if tagSHA != releaseSHA {
-			return fmt.Errorf("release %s targets %s, not validated SHA %s", releaseTag, tagSHA, releaseSHA)
-		}
-		fmt.Fprintf(os.Stdout, "Release %s already exists - uploading assets with --clobber\n", releaseTag)
-		return runCommand("gh", append([]string{"release", "upload", releaseTag}, append(assets, "--clobber")...)...)
-	} else if _, ok := err.(*exec.ExitError); !ok {
-		return fmt.Errorf("inspect release %s: %w", releaseTag, err)
+	view := exec.Command("gh", "release", "view", releaseTag, "--json", "tagName,assets")
+	output, viewErr := view.Output()
+	if viewErr == nil {
+		return reconcileExistingRelease(releaseTag, releaseSHA, assets, output)
+	} else if _, ok := viewErr.(*exec.ExitError); !ok {
+		return fmt.Errorf("inspect release %s: %w", releaseTag, viewErr)
 	}
 
 	return runCommand("gh", createReleaseArgs(releaseTag, releaseSHA, assets)...)
+}
+
+func reconcileExistingRelease(releaseTag, releaseSHA string, assets []string, response []byte) error {
+	var published existingRelease
+	if err := json.Unmarshal(response, &published); err != nil {
+		return fmt.Errorf("decode release %s: %w", releaseTag, err)
+	}
+	if published.TagName != releaseTag {
+		return fmt.Errorf("release lookup returned tag %q, want %q", published.TagName, releaseTag)
+	}
+	if err := validateReleaseTarget(releaseTag, releaseSHA); err != nil {
+		return err
+	}
+	missing, err := missingReleaseAssets(assets, published.Assets)
+	if err != nil {
+		return err
+	}
+	if len(missing) == 0 {
+		fmt.Fprintf(os.Stdout, "Release %s already contains the attested assets\n", releaseTag)
+		return nil
+	}
+	fmt.Fprintf(os.Stdout, "Release %s already exists - uploading %d missing attested assets\n", releaseTag, len(missing))
+	return runCommand("gh", append([]string{"release", "upload", releaseTag}, missing...)...)
+}
+
+func validateReleaseTarget(tag, expectedSHA string) error {
+	if err := runCommand("git", "fetch", "--force", "--tags", "origin"); err != nil {
+		return err
+	}
+	tagSHA, err := gitOutput("rev-list", "-n", "1", tag)
+	if err != nil {
+		return err
+	}
+	if tagSHA != expectedSHA {
+		return fmt.Errorf("release %s targets %s, not validated SHA %s", tag, tagSHA, expectedSHA)
+	}
+	return nil
+}
+
+func missingReleaseAssets(paths []string, published []releaseAsset) ([]string, error) {
+	remote := make(map[string]string, len(published))
+	for _, asset := range published {
+		if asset.Name == "" || asset.Digest == "" {
+			return nil, errors.New("published release asset lacks a name or digest")
+		}
+		if _, exists := remote[asset.Name]; exists {
+			return nil, fmt.Errorf("published release contains duplicate asset %q", asset.Name)
+		}
+		remote[asset.Name] = strings.ToLower(asset.Digest)
+	}
+	missing := make([]string, 0, len(paths))
+	for _, path := range paths {
+		digest, err := fileSHA256(path)
+		if err != nil {
+			return nil, err
+		}
+		publishedDigest, exists := remote[filepath.Base(path)]
+		if !exists {
+			missing = append(missing, path)
+			continue
+		}
+		if publishedDigest != "sha256:"+digest {
+			return nil, fmt.Errorf("refusing to replace release asset %s: published digest %s does not match attested local digest sha256:%s", filepath.Base(path), publishedDigest, digest)
+		}
+	}
+	return missing, nil
+}
+
+func fileSHA256(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open release asset %s: %w", path, err)
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("hash release asset %s: %w", path, err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func runChangelog() error {

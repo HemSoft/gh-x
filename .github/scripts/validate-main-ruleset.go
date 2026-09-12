@@ -107,7 +107,7 @@ func main() {
 	var configuredRuleset ruleset
 	loadJSON(".github/rulesets/main.json", &configuredRuleset)
 	ci, ciContent := loadWorkflowWithContent(".github/workflows/ci.yml")
-	autoRelease := loadWorkflow(".github/workflows/auto-release.yml")
+	autoRelease, autoReleaseContent := loadWorkflowWithContent(".github/workflows/auto-release.yml")
 	authoritativeRun, err := os.ReadFile(".github/scripts/verify-authoritative-run.sh")
 	if err != nil {
 		fail("read authoritative run verifier: " + err.Error())
@@ -200,6 +200,9 @@ func main() {
 	)
 	require(releaseJob.Concurrency.Group == "auto-release", "eligible releases must share one concurrency group")
 	require(!releaseJob.Concurrency.CancelInProgress, "an active release must not be cancelled")
+	require(reflect.DeepEqual(releaseJob.Permissions, map[string]string{
+		"actions": "write", "attestations": "write", "checks": "read", "contents": "write", "id-token": "write", "pull-requests": "write",
+	}), "release permissions must be limited to publishing, provenance, CI dispatch, and changelog merge")
 	for _, job := range autoRelease.Jobs {
 		require(job.Uses != "./.github/workflows/ci.yml", "auto-release must not duplicate the CI suite")
 	}
@@ -217,6 +220,13 @@ func main() {
 	require(notes.Env["LATEST_TAG"] == "${{ steps.check.outputs.latest }}", "release notes must receive the latest tag through env")
 	require(notes.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag }}", "release notes must receive the calculated release tag through env")
 	require(strings.TrimSpace(notes.Run) == "go run ./.github/scripts/release-plan notes", "release notes must use the tested release-plan command")
+
+	attest := namedStep(releaseJob, "Attest release binaries")
+	require(attest.If == "steps.check.outputs.skip == 'false'", "provenance must run for every new release")
+	requirePinnedAction(autoReleaseContent, attest, "actions/attest-build-provenance", "v3")
+	require(reflect.DeepEqual(attest.With, map[string]string{"subject-path": "dist/*"}), "provenance must cover every release binary")
+	require(!attest.ContinueOnError, "provenance failure must stop release publication")
+	require(stepIndex(releaseJob, "Build cross-platform binaries") < stepIndex(releaseJob, "Attest release binaries") && stepIndex(releaseJob, "Attest release binaries") < stepIndex(releaseJob, "Create release"), "release binaries must be built and attested before publication")
 
 	create := namedStep(releaseJob, "Create release")
 	require(create.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release creation must receive the validated SHA through env")
@@ -371,6 +381,16 @@ func loadWorkflowWithContent(path string) (workflow, string) {
 		fail(fmt.Sprintf("parse %s: %v", path, err))
 	}
 	return result, string(data)
+}
+
+func stepIndex(job workflowJob, name string) int {
+	for index, step := range job.Steps {
+		if step.Name == name {
+			return index
+		}
+	}
+	fail("missing workflow step: " + name)
+	return -1
 }
 
 func namedStep(job workflowJob, name string) workflowStep {

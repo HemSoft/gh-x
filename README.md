@@ -589,6 +589,24 @@ the trusted default-branch helper and accepts only clean evidence attributable
 to that exact head. Missing, stale, truncated, ambiguous, refused, superseded,
 or unresolved evidence cannot pass.
 
+Every published binary carries GitHub build provenance created from the same
+trusted release job before asset publication. The attestation binds its SHA-256
+digest to this repository, the release workflow, and the validated source
+commit. Existing release assets are never replaced: a retry reuses bytes with a
+matching digest, uploads only missing attested assets, and fails closed on a
+digest mismatch.
+
+After downloading an asset, verify it with this exact command:
+
+```powershell
+gh attestation verify .\windows-amd64.exe --repo HemSoft/gh-x
+```
+
+The command must exit successfully and name `HemSoft/gh-x`, the trusted release
+workflow, and the expected source commit. To verify all downloaded assets, run
+the same command once per file. See the exact options and output fields on the
+[`gh attestation verify` manual page](https://cli.github.com/manual/gh_attestation_verify).
+
 Generated changelog reviews retain stricter bot-author, same-repository,
 branch-name, and CHANGELOG-only checks on both pull-request and manually
 dispatched CI runs. The trusted release workflow requests connected Codex only.

@@ -17,8 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      attestations: write
       checks: read
       contents: write
+      id-token: write
       pull-requests: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -79,6 +81,12 @@ jobs:
             echo "Building ${output}..."
             GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${tag} -X main.buildDate=${build_date}" -o "$output" ./src
           done
+
+      - name: Attest release binaries
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: 'dist/*'
 
       - name: Generate release notes
         if: steps.check.outputs.skip == 'false'
