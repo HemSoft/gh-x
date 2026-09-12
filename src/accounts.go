@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	ghconfig "github.com/cli/go-gh/v2/pkg/config"
 )
 
 // defaultGitHubHost is the public GitHub host; every other resolved host is
@@ -23,7 +25,6 @@ type ghInvocation struct {
 	Args     []string
 	Stdin    []byte
 	ExtraEnv []string
-	Timeout  time.Duration
 }
 
 // ghTransportFunc is the lowest-level seam for executing gh; tests replace it
@@ -44,13 +45,7 @@ func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("gh CLI not found in PATH")
 		}
 	}
-	ctx := context.Background()
-	cancel := func() {}
-	if inv.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, inv.Timeout)
-	}
-	defer cancel()
-	cmd := newGHCommand(ctx, path, inv)
+	cmd := exec.Command(path, inv.Args...)
 	if len(inv.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(inv.Stdin)
 	}
@@ -61,20 +56,9 @@ func runGHCmd(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		cmd.Env = append(os.Environ(), inv.ExtraEnv...)
 	}
 	if err := cmd.Run(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			err = fmt.Errorf("gh CLI timed out after %s: %w", inv.Timeout, ctxErr)
-		}
 		return stdout, stderr, err
 	}
 	return stdout, stderr, nil
-}
-
-func newGHCommand(ctx context.Context, path string, inv ghInvocation) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, path, inv.Args...)
-	if inv.Timeout > 0 {
-		cmd.WaitDelay = subprocessWaitDelay
-	}
-	return cmd
 }
 
 var (
@@ -214,9 +198,8 @@ var (
 )
 
 const (
-	sshConfigTimeout    = 2 * time.Second
-	authStatusTimeout   = 2 * time.Second
-	subprocessWaitDelay = 100 * time.Millisecond
+	sshConfigTimeout   = 2 * time.Second
+	sshConfigWaitDelay = 100 * time.Millisecond
 )
 
 // sshConfigHostFunc resolves an SSH destination through the user's config.
@@ -289,13 +272,39 @@ func isSSHRemoteScheme(scheme string) bool {
 	return normalized == "ssh" || normalized == "ssh+git" || strings.HasSuffix(normalized, "+ssh")
 }
 
-// knownGitHubHostFunc identifies API hosts already configured in gh. Tests
-// replace it so host-routing cases stay independent of local authentication.
+// ghConfigReadFunc reads gh's local configuration without testing account
+// credentials over the network. Tests replace it to avoid local config access.
+var ghConfigReadFunc = func() (*ghconfig.Config, error) { return ghconfig.Read(nil) }
+
+var configuredGitHubHostsFunc = configuredGitHubHosts
+
+func configuredGitHubHosts() []string {
+	cfg, err := ghConfigReadFunc()
+	if err != nil {
+		return nil
+	}
+	hosts, err := cfg.Keys([]string{"hosts"})
+	if err != nil {
+		return nil
+	}
+	return hosts
+}
+
+// knownGitHubHostFunc identifies API hosts from explicit environment or gh's
+// local configuration. Tests replace it so host-routing cases stay isolated.
 var knownGitHubHostFunc = knownGitHubHost
 
 func knownGitHubHost(host string) bool {
 	host = normalizeRemoteHost(host)
-	return host == defaultGitHubHost || len(listAccountsFunc(host)) > 0
+	if host == defaultGitHubHost || host == normalizeRemoteHost(os.Getenv("GH_HOST")) {
+		return host != ""
+	}
+	for _, configured := range configuredGitHubHostsFunc() {
+		if host == normalizeRemoteHost(configured) {
+			return true
+		}
+	}
+	return false
 }
 
 // configuredSSHHost preserves known API hosts and accepts a configured
@@ -327,7 +336,7 @@ func defaultSSHConfigHost(host string) string {
 
 func newSSHConfigCommand(ctx context.Context, host string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "ssh", "-G", "--", host)
-	cmd.WaitDelay = subprocessWaitDelay
+	cmd.WaitDelay = sshConfigWaitDelay
 	return cmd
 }
 
@@ -432,10 +441,7 @@ func listAccounts(host string) []ghAccount {
 	if cached, ok := cachedAccounts[host]; ok {
 		return cached
 	}
-	stdout, _, err := ghTransportFunc(ghInvocation{
-		Args:    []string{"auth", "status", "--json", "hosts"},
-		Timeout: authStatusTimeout,
-	})
+	stdout, _, err := ghTransportFunc(ghInvocation{Args: []string{"auth", "status", "--json", "hosts"}})
 	if err != nil {
 		cachedAccounts[host] = []ghAccount{}
 		return cachedAccounts[host]

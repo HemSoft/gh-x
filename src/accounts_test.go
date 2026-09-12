@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
-	"time"
+
+	ghconfig "github.com/cli/go-gh/v2/pkg/config"
 )
 
 func resetAccountCache() {
@@ -615,8 +615,8 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 
 func TestNewSSHConfigCommandBoundsPipeDrain(t *testing.T) {
 	cmd := newSSHConfigCommand(context.Background(), "GitHub.com-hemsoft")
-	if cmd.WaitDelay != subprocessWaitDelay {
-		t.Fatalf("ssh WaitDelay = %s, want %s", cmd.WaitDelay, subprocessWaitDelay)
+	if cmd.WaitDelay != sshConfigWaitDelay {
+		t.Fatalf("ssh WaitDelay = %s, want %s", cmd.WaitDelay, sshConfigWaitDelay)
 	}
 	if got := strings.Join(cmd.Args, "|"); got != "ssh|-G|--|GitHub.com-hemsoft" {
 		t.Fatalf("ssh command args = %q", got)
@@ -643,56 +643,40 @@ func TestParseSSHConfigHost(t *testing.T) {
 	}
 }
 
-func TestNewGHCommandBoundsTimedPipeDrain(t *testing.T) {
-	timed := newGHCommand(context.Background(), os.Args[0], ghInvocation{
-		Args:    []string{"-test.run=^$"},
-		Timeout: time.Second,
-	})
-	if timed.WaitDelay != subprocessWaitDelay {
-		t.Fatalf("timed gh WaitDelay = %s, want %s", timed.WaitDelay, subprocessWaitDelay)
+func TestConfiguredGitHubHosts(t *testing.T) {
+	saved := ghConfigReadFunc
+	t.Cleanup(func() { ghConfigReadFunc = saved })
+	ghConfigReadFunc = func() (*ghconfig.Config, error) {
+		return ghconfig.ReadFromString("hosts:\n  GHE.Example.COM.:\n    user: enterprise-user\n"), nil
 	}
-	untimed := newGHCommand(context.Background(), os.Args[0], ghInvocation{})
-	if untimed.WaitDelay != 0 {
-		t.Fatalf("untimed gh WaitDelay = %s, want 0", untimed.WaitDelay)
+	if got := configuredGitHubHosts(); len(got) != 1 || got[0] != "GHE.Example.COM." {
+		t.Fatalf("configuredGitHubHosts() = %#v", got)
 	}
-}
-
-func TestRunGHCmdHonorsTimeout(t *testing.T) {
-	const helperEnv = "GH_X_RUN_GH_TIMEOUT_HELPER"
-	if os.Getenv(helperEnv) == "1" {
-		time.Sleep(time.Minute)
-		return
+	ghConfigReadFunc = func() (*ghconfig.Config, error) {
+		return ghconfig.ReadFromString("editor: vim\n"), nil
 	}
-
-	t.Setenv("GH_PATH", os.Args[0])
-	_, _, err := runGHCmd(ghInvocation{
-		Args:     []string{"-test.run=^TestRunGHCmdHonorsTimeout$"},
-		ExtraEnv: []string{helperEnv + "=1"},
-		Timeout:  50 * time.Millisecond,
-	})
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("runGHCmd() error = %v, want context deadline exceeded", err)
+	if got := configuredGitHubHosts(); got != nil {
+		t.Fatalf("configuredGitHubHosts() without hosts = %#v, want nil", got)
+	}
+	ghConfigReadFunc = func() (*ghconfig.Config, error) { return nil, errors.New("broken config") }
+	if got := configuredGitHubHosts(); got != nil {
+		t.Fatalf("configuredGitHubHosts() after read failure = %#v, want nil", got)
 	}
 }
 
 func TestKnownGitHubHost(t *testing.T) {
-	saved := listAccountsFunc
-	listAccountsFunc = func(host string) []ghAccount {
-		if host == "ghe.example.com" {
-			return []ghAccount{{Login: "enterprise-user", Active: true}}
-		}
-		return nil
-	}
-	t.Cleanup(func() { listAccountsFunc = saved })
+	t.Setenv("GH_HOST", "Env.GHE.Example.")
+	saved := configuredGitHubHostsFunc
+	configuredGitHubHostsFunc = func() []string { return []string{"GHE.Example.COM."} }
+	t.Cleanup(func() { configuredGitHubHostsFunc = saved })
 
-	if !knownGitHubHost(defaultGitHubHost) {
-		t.Fatal("github.com must always be a known API host")
-	}
-	if !knownGitHubHost("GHE.Example.COM.") {
-		t.Fatal("an authenticated Enterprise host must be known after normalization")
+	for _, host := range []string{defaultGitHubHost, "GHE.Example.COM.", "env.ghe.example"} {
+		if !knownGitHubHost(host) {
+			t.Errorf("knownGitHubHost(%q) = false, want true", host)
+		}
 	}
 	if knownGitHubHost("ssh.ghe.example.com") {
-		t.Fatal("an unauthenticated SSH transport endpoint must not be an API host")
+		t.Fatal("an unknown SSH transport endpoint must not be an API host")
 	}
 }
 
@@ -762,10 +746,8 @@ func TestFallbackEligibleRespectsHostOverrides(t *testing.T) {
 
 func TestAccountsAreCachedPerHost(t *testing.T) {
 	authStatusCalls := 0
-	seenAuthStatusTimeout := time.Duration(0)
 	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 		authStatusCalls++
-		seenAuthStatusTimeout = inv.Timeout
 		payload := `{"hosts":{
 			"github.com":[{"login":"pub","active":true,"state":"success"}],
 			"ghe.example.com":[{"login":"ent","active":true,"state":"success"}]
@@ -780,9 +762,6 @@ func TestAccountsAreCachedPerHost(t *testing.T) {
 
 	if authStatusCalls != 1 {
 		t.Fatalf("one auth status probe should serve every host, got %d", authStatusCalls)
-	}
-	if seenAuthStatusTimeout != authStatusTimeout {
-		t.Fatalf("auth status timeout = %s, want %s", seenAuthStatusTimeout, authStatusTimeout)
 	}
 	if len(first) != 1 || first[0].Login != "ent" || len(second) != 1 || second[0].Login != "pub" {
 		t.Fatalf("per-host results mixed: ghe=%#v github=%#v", first, second)
