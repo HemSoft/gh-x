@@ -184,6 +184,7 @@ func TestReviewEvidence(t *testing.T) {
 		{"comments truncated", func(s *reviewState) { s.Comments.PageInfo.HasPreviousPage = true }, false, false, true},
 		{"reviews truncated", func(s *reviewState) { s.Reviews.PageInfo.HasPreviousPage = true }, false, false, true},
 		{"threads truncated", func(s *reviewState) { s.ReviewThreads.PageInfo.HasNextPage = true }, false, false, true},
+		{"timeline truncated", func(s *reviewState) { s.TimelineItems.PageInfo.HasPreviousPage = true }, false, false, true},
 		{"unresolved conversation", func(s *reviewState) {
 			s.ReviewThreads.Nodes = append(s.ReviewThreads.Nodes, struct{ IsResolved bool }{false})
 		}, false, true, false},

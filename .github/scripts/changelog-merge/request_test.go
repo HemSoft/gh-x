@@ -210,6 +210,44 @@ func TestOrdinaryDistinctSameTimeEvidenceFailsClosed(t *testing.T) {
 	}
 }
 
+func TestOrdinaryLaterRequestIsBoundByTimelineOrder(t *testing.T) {
+	cleanAt := time.Now().Add(-2 * time.Minute)
+	state := cleanState()
+	state.Comments.Nodes[0].CreatedAt = cleanAt
+	state.TimelineItems.Nodes = []timelineItem{
+		{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}},
+		{TypeName: "IssueComment", Body: "@codex review", URL: "request-url", CreatedAt: cleanAt.Add(time.Minute), Author: actor{connectedRequester}},
+	}
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if ready || err != nil {
+		t.Fatalf("later same-head request must remain pending: %v,%v", ready, err)
+	}
+}
+
+func TestOrdinaryRequestBeforeLatestHeadBoundaryIsIgnored(t *testing.T) {
+	cleanAt := time.Now().Add(-2 * time.Minute)
+	state := cleanState()
+	state.Comments.Nodes[0].CreatedAt = cleanAt
+	state.TimelineItems.Nodes = []timelineItem{
+		{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}},
+		{TypeName: "IssueComment", Body: "@codex review", URL: "old-request", CreatedAt: cleanAt.Add(time.Minute), Author: actor{connectedRequester}},
+		{TypeName: "HeadRefForcePushedEvent", CreatedAt: cleanAt.Add(90 * time.Second), AfterCommit: struct{ OID string }{testHead}},
+	}
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if !ready || err != nil {
+		t.Fatalf("request before the current head update must not become pending: %v,%v", ready, err)
+	}
+}
+
+func TestOrdinaryUnboundRequestFailsClosed(t *testing.T) {
+	state := cleanState()
+	state.TimelineItems.Nodes = []timelineItem{{TypeName: "IssueComment", Body: "@codex review", CreatedAt: time.Now(), Author: actor{connectedRequester}}}
+	ready, err := currentOrdinaryRequestAllowsClean(state, testConfig, "12")
+	if ready || err == nil || !strings.Contains(err.Error(), "cannot be bound") {
+		t.Fatalf("unbound ordinary request must fail closed: %v,%v", ready, err)
+	}
+}
+
 func TestOrdinaryRefusalAndNewActivitySupersedeOldClean(t *testing.T) {
 	committed := time.Now().Add(-5 * time.Minute)
 	state := cleanState()

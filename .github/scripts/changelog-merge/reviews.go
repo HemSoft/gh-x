@@ -21,6 +21,14 @@ type review struct {
 	Commit      struct{ OID string }
 }
 type pageInfo struct{ HasNextPage, HasPreviousPage bool }
+type timelineItem struct {
+	TypeName    string `json:"__typename"`
+	Body, URL   string
+	CreatedAt   time.Time
+	Author      actor
+	Commit      struct{ OID string }
+	AfterCommit struct{ OID string }
+}
 type reviewState struct {
 	HeadRefOID  string
 	CommittedAt time.Time
@@ -41,9 +49,13 @@ type reviewState struct {
 		Nodes    []struct{ IsResolved bool }
 		PageInfo pageInfo
 	}
+	TimelineItems struct {
+		Nodes    []timelineItem
+		PageInfo pageInfo
+	}
 }
 
-const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid commits(last:1){nodes{commit{committedDate}}} comments(last:100){nodes{body url createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}`
+const reviewQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid commits(last:1){nodes{commit{committedDate}}} comments(last:100){nodes{body url createdAt author{login}} pageInfo{hasPreviousPage}} reviews(last:100){nodes{body state submittedAt author{login} commit{oid}} pageInfo{hasPreviousPage}} reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}} timelineItems(last:100,itemTypes:[PULL_REQUEST_COMMIT,ISSUE_COMMENT,HEAD_REF_FORCE_PUSHED_EVENT]){nodes{__typename ... on IssueComment{body url createdAt author{login}} ... on PullRequestCommit{commit{oid}} ... on HeadRefForcePushedEvent{createdAt afterCommit{oid}}} pageInfo{hasPreviousPage}}}}}`
 
 var (
 	reviewedCommit   = regexp.MustCompile("(?i)(?:\\*\\*)?Reviewed commit:(?:\\*\\*)?\\s*`?([0-9a-f]{10,40})\\b`?")
@@ -73,7 +85,7 @@ func reviewReady(state reviewState, head string) (bool, bool, error) {
 	if state.HeadRefOID != head {
 		return false, false, errors.New("review response head does not match expected head")
 	}
-	if state.Comments.PageInfo.HasPreviousPage || state.Reviews.PageInfo.HasPreviousPage || state.ReviewThreads.PageInfo.HasNextPage {
+	if state.Comments.PageInfo.HasPreviousPage || state.Reviews.PageInfo.HasPreviousPage || state.ReviewThreads.PageInfo.HasNextPage || state.TimelineItems.PageInfo.HasPreviousPage {
 		return false, false, errors.New("review evidence truncated; manual review required")
 	}
 	if ambiguousCodexReview(state, head) {

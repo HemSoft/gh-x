@@ -155,7 +155,7 @@ func pendingReview(state reviewState, cfg config, number string, now time.Time) 
 }
 
 func pendingOrdinaryReview(state reviewState, cfg config, number string, now time.Time) error {
-	activity, err := currentHeadCodexActivity(state, cfg.head)
+	activity, err := ordinaryReviewAnchor(state, cfg.head, time.Time{})
 	if err != nil {
 		return err
 	}
@@ -182,9 +182,71 @@ func pendingOrdinaryReview(state reviewState, cfg config, number string, now tim
 	return nil
 }
 
+func ordinaryReviewAnchor(state reviewState, head string, after time.Time) (reviewComment, error) {
+	activity, err := currentHeadCodexActivity(state, head)
+	if err != nil {
+		return reviewComment{}, err
+	}
+	request, err := latestBoundOrdinaryRequest(state, head, after)
+	if err != nil {
+		return reviewComment{}, err
+	}
+	if !request.CreatedAt.IsZero() {
+		return request, nil
+	}
+	return activity, nil
+}
+
+func latestBoundOrdinaryRequest(state reviewState, head string, after time.Time) (reviewComment, error) {
+	if state.TimelineItems.PageInfo.HasPreviousPage {
+		return reviewComment{}, errors.New("pull request timeline is truncated; cannot bind Codex request to current head")
+	}
+	boundary := -1
+	for i, item := range state.TimelineItems.Nodes {
+		if timelineSetsHead(item, head) {
+			boundary = i
+		}
+	}
+	var latest reviewComment
+	for i, item := range state.TimelineItems.Nodes {
+		request, err := ordinaryRequestTimelineItem(item)
+		if err != nil {
+			return reviewComment{}, err
+		}
+		if !request || item.CreatedAt.Before(after) {
+			continue
+		}
+		if boundary < 0 {
+			return reviewComment{}, errors.New("Codex request cannot be bound to a current-head timeline event")
+		}
+		if i > boundary {
+			latest = reviewComment{Body: item.Body, URL: item.URL, CreatedAt: item.CreatedAt, Author: item.Author}
+		}
+	}
+	return latest, nil
+}
+
+func timelineSetsHead(item timelineItem, head string) bool {
+	return item.TypeName == "PullRequestCommit" && item.Commit.OID == head || item.TypeName == "HeadRefForcePushedEvent" && item.AfterCommit.OID == head
+}
+
+func ordinaryRequestTimelineItem(item timelineItem) (bool, error) {
+	if item.TypeName != "IssueComment" || item.Author.Login != connectedRequester {
+		return false, nil
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(item.Body), "\n")
+	if first != "@codex review" {
+		return false, nil
+	}
+	if item.CreatedAt.IsZero() {
+		return false, errors.New("Codex request timeline item lacks a timestamp")
+	}
+	return true, nil
+}
+
 func currentOrdinaryRequestAllowsClean(state reviewState, cfg config, number string) (bool, error) {
 	clean, _, _ := codexEvidence(state, cfg.head)
-	activity, err := currentHeadCodexActivity(state, cfg.head)
+	activity, err := ordinaryReviewAnchor(state, cfg.head, clean)
 	if err != nil {
 		return false, err
 	}
