@@ -210,8 +210,16 @@ func TestCompletedSummaryIsCleanOnlyWithoutExactFindings(t *testing.T) {
 	finding.Commit.OID = testHead
 	state.Reviews.Nodes = []review{finding}
 	ready, requested, err = ordinaryReviewReady(state, testHead)
+	if ready || !requested || err != nil {
+		t.Fatalf("completion status alone must not clear a finding: %v,%v,%v", ready, requested, err)
+	}
+	request := markedRequest("HemSoft", completed.Add(-time.Second/2))
+	state.TimelineItems.Nodes = append(state.TimelineItems.Nodes, timelineItem{
+		TypeName: "IssueComment", Body: request.Body, URL: request.URL, CreatedAt: request.CreatedAt, Author: request.Author,
+	})
+	ready, requested, err = ordinaryReviewReady(state, testHead)
 	if !ready || !requested || err != nil {
-		t.Fatalf("later completed summary must recover an old resolved finding: %v,%v,%v", ready, requested, err)
+		t.Fatalf("completed rerun after an old resolved finding must recover: %v,%v,%v", ready, requested, err)
 	}
 	state.Reviews.Nodes[0].SubmittedAt = completed.Add(time.Second)
 	ready, requested, err = ordinaryReviewReady(state, testHead)

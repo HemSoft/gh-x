@@ -286,6 +286,12 @@ func ordinaryCommentCandidate(state reviewState, comment reviewComment, head str
 		if err != nil || !matched {
 			return reviewComment{}, false, false, err
 		}
+		if candidate.Clean {
+			candidate.Clean, err = completedSummaryIsClean(state, head, candidate.CreatedAt)
+			if err != nil {
+				return reviewComment{}, false, false, err
+			}
+		}
 		collides := latestHeadBoundary(state.TimelineItems.Nodes, head) < 0 || timelineHasReceiptPrefixCollision(state.TimelineItems.Nodes, head, codexSummaryPrefix(comment.Body))
 		return candidate, !collides, collides, nil
 	}
@@ -298,6 +304,29 @@ func ordinaryCommentCandidate(state reviewState, comment reviewComment, head str
 	bound, err := timelineBindsComment(state, comment, head)
 	comment.Clean = cleanCodexComment(comment.Body)
 	return comment, bound, false, err
+}
+
+func completedSummaryIsClean(state reviewState, head string, completedAt time.Time) (bool, error) {
+	var latest review
+	for _, item := range state.Reviews.Nodes {
+		if !codexActor(item.Author.Login) || item.Commit.OID != head {
+			continue
+		}
+		if item.SubmittedAt.IsZero() {
+			return false, errors.New("current-head Codex activity lacks a timestamp")
+		}
+		if latest.SubmittedAt.IsZero() || item.SubmittedAt.After(latest.SubmittedAt) {
+			latest = item
+		}
+	}
+	if latest.SubmittedAt.IsZero() || latest.State == "APPROVED" {
+		return true, nil
+	}
+	request, err := latestBoundOrdinaryRequest(state, head, latest.SubmittedAt)
+	if err != nil {
+		return false, err
+	}
+	return !request.CreatedAt.IsZero() && request.CreatedAt.After(latest.SubmittedAt) && !request.CreatedAt.After(completedAt), nil
 }
 
 func exactCodexReviewCandidates(reviews []review, head string) []reviewComment {
