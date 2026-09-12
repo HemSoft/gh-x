@@ -16,9 +16,12 @@ import (
 	ghconfig "github.com/cli/go-gh/v2/pkg/config"
 )
 
-// defaultGitHubHost is the public GitHub host; every other resolved host is
-// treated as an Enterprise Server installation.
-const defaultGitHubHost = "github.com"
+// defaultGitHubHost is the public GitHub API host; publicGitHubSSHHost is its
+// documented SSH-over-443 transport endpoint.
+const (
+	defaultGitHubHost   = "github.com"
+	publicGitHubSSHHost = "ssh.github.com"
+)
 
 // ghInvocation describes one gh subprocess execution.
 type ghInvocation struct {
@@ -318,6 +321,9 @@ func configuredSSHHost(host string) string {
 		return normalizedHost
 	}
 	resolved := normalizeRemoteHost(sshConfigHostFunc(host))
+	if resolved == publicGitHubSSHHost {
+		return defaultGitHubHost
+	}
 	if plausibleRemoteHost(resolved) && knownGitHubHostFunc(resolved) {
 		return resolved
 	}

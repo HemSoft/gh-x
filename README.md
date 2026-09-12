@@ -66,9 +66,9 @@ a configured `HostName` becomes the API host only when it is `github.com`,
 matches `GH_HOST`, or is listed in gh's local host configuration. This lets a
 dotted alias such as `github.com-hemsoft` route to `github.com`. Canonical
 `github.com` and configured Enterprise API hosts are preserved before SSH
-resolution, so transport endpoints such as `ssh.github.com` cannot replace
-them. The SSH configuration lookup has a two-second deadline and bounded pipe
-drain. If it fails or the SSH destination is not a known API host, a plausible
+resolution; when a public alias resolves to the `ssh.github.com` transport
+endpoint, it maps back to the `github.com` API host. The SSH configuration
+lookup has a two-second deadline and bounded pipe drain. If it fails or the SSH destination is not a known API host, a plausible
 dotted remote host remains the fallback API host.
 Fallback candidates come from that same host in `gh auth status --json hosts`,
 and Enterprise Server

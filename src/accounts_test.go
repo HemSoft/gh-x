@@ -578,6 +578,8 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 		switch host {
 		case "github.com-hemsoft", "GitHub.com-hemsoft", "workserver":
 			return defaultGitHubHost
+		case "github.com-443":
+			return publicGitHubSSHHost
 		case "ghe.example-alias":
 			return "ghe.example.com"
 		default:
@@ -596,6 +598,7 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 		{name: "ssh scheme alias", value: "ssh://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "git plus ssh alias", value: "git+ssh://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "ssh plus git alias", value: "ssh+git://git@github.com-hemsoft/HemSoft/codexbar-ios.git", want: defaultGitHubHost},
+		{name: "public SSH over 443 alias", value: "git@github.com-443:HemSoft/codexbar-ios.git", want: defaultGitHubHost},
 		{name: "genuine enterprise ssh host", value: "git@ghe.example.com:acme/widgets.git", want: "ghe.example.com"},
 		{name: "enterprise SSH alias", value: "git@ghe.example-alias:acme/widgets.git", want: "ghe.example.com"},
 		{name: "canonical public host over SSH", value: "git@github.com:HemSoft/codexbar-ios.git", want: defaultGitHubHost},
@@ -608,8 +611,8 @@ func TestHostFromRemoteURLResolvesSSHAliasesOnly(t *testing.T) {
 			}
 		})
 	}
-	if resolverCalls != 7 {
-		t.Fatalf("SSH resolver calls = %d, want 7", resolverCalls)
+	if resolverCalls != 8 {
+		t.Fatalf("SSH resolver calls = %d, want 8", resolverCalls)
 	}
 }
 
