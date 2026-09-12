@@ -12,6 +12,11 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+## [0.12.3] - 2026-09-12
+
+- chore(deps): bump the go-modules group across 1 directory with 3 updates (#94)
+- docs: record v0.12.2 release (#93)
+
 ## [0.12.2] - 2026-09-12
 
 - fix: resolve SSH aliases for status API routing (#92)
@@ -125,7 +130,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.12.3...HEAD
+[0.12.3]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.3
 [0.12.2]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.2
 [0.12.1]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.1
 [0.12.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.12.0
