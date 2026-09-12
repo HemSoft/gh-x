@@ -12,7 +12,10 @@ import (
 	"strings"
 )
 
-const defaultManifest = ".github/release-targets.json"
+const (
+	defaultManifest = ".github/release-targets.json"
+	manifestEnv     = "RELEASE_TARGET_MANIFEST"
+)
 
 type releaseTarget struct {
 	GOOS   string `json:"goos"`
@@ -46,7 +49,11 @@ func main() {
 	if err != nil {
 		fatal(err.Error())
 	}
-	targets, err := loadTargets(defaultManifest, supported)
+	manifest, err := manifestPath()
+	if err != nil {
+		fatal(err.Error())
+	}
+	targets, err := loadTargets(manifest, supported)
 	if err != nil {
 		fatal(err.Error())
 	}
@@ -65,6 +72,20 @@ func main() {
 	if err := buildTargets(targets, config); err != nil {
 		fatal(err.Error())
 	}
+}
+
+func manifestPath() (string, error) {
+	path := os.Getenv(manifestEnv)
+	if path == "" {
+		return defaultManifest, nil
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("%s must not be blank", manifestEnv)
+	}
+	if strings.ContainsAny(path, "\r\n") {
+		return "", fmt.Errorf("%s must be a single line", manifestEnv)
+	}
+	return path, nil
 }
 
 func loadSupportedTargets() (map[string]struct{}, error) {

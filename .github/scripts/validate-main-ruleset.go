@@ -247,7 +247,11 @@ go run ./.github/scripts/release-targets build`, "CI must build the canonical re
 	}), "release builds must bind the version, validated source, and output directory")
 	require(strings.TrimSpace(build.Run) == `RELEASE_BUILD_DATE="$(git show -s --format=%cs "$RELEASE_SHA")"
 export RELEASE_BUILD_DATE
-go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the trusted canonical target builder")
+if [[ ! -f .github/release-targets.json ]]; then
+  RELEASE_TARGET_MANIFEST="$RUNNER_TEMP/release-targets-legacy.json"
+  export RELEASE_TARGET_MANIFEST
+fi
+go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the trusted canonical target builder with compatibility for pre-manifest tags")
 
 	attest := namedStep(releaseJob, "Attest release binaries")
 	require(attest.If == "steps.check.outputs.skip == 'false'", "provenance must bind only the initial release workflow source identity")
@@ -445,7 +449,8 @@ func validateTrustedReleaseHelper(job workflowJob) {
 	require(trustedHelper.Env["TRUSTED_HELPER_SHA"] == "${{ github.workflow_sha }}", "release helpers must bind to the trusted workflow revision")
 	require(strings.TrimSpace(trustedHelper.Run) == `git fetch --no-tags origin "$TRUSTED_HELPER_SHA"
 git show "$TRUSTED_HELPER_SHA:.github/scripts/release-plan/main.go" > "$RUNNER_TEMP/release-plan.go"
-git show "$TRUSTED_HELPER_SHA:.github/scripts/release-targets/main.go" > "$RUNNER_TEMP/release-targets.go"`, "release helpers must load from the trusted workflow revision outside the target checkout")
+git show "$TRUSTED_HELPER_SHA:.github/scripts/release-targets/main.go" > "$RUNNER_TEMP/release-targets.go"
+git show "$TRUSTED_HELPER_SHA:.github/release-targets-legacy.json" > "$RUNNER_TEMP/release-targets-legacy.json"`, "release helpers and the legacy compatibility manifest must load from the trusted workflow revision outside the target checkout")
 }
 
 func namedStep(job workflowJob, name string) workflowStep {

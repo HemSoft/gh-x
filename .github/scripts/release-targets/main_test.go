@@ -25,6 +25,21 @@ var repositoryTargets = []string{
 	"windows/arm64=windows-arm64.exe",
 }
 
+var legacyTargets = []string{
+	"darwin/amd64=darwin-amd64",
+	"darwin/arm64=darwin-arm64",
+	"freebsd/386=freebsd-386",
+	"freebsd/amd64=freebsd-amd64",
+	"freebsd/arm64=freebsd-arm64",
+	"linux/386=linux-386",
+	"linux/amd64=linux-amd64",
+	"linux/arm=linux-arm",
+	"linux/arm64=linux-arm64",
+	"windows/386=windows-386.exe",
+	"windows/amd64=windows-amd64.exe",
+	"windows/arm64=windows-arm64.exe",
+}
+
 func TestRepositoryManifestDefinesExpectedTargets(t *testing.T) {
 	supported, err := loadSupportedTargets()
 	if err != nil {
@@ -35,12 +50,50 @@ func TestRepositoryManifestDefinesExpectedTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	actual := make([]string, 0, len(targets))
-	for _, target := range targets {
-		actual = append(actual, target.id()+"="+target.asset())
-	}
+	actual := describeTargets(targets)
 	if !reflect.DeepEqual(actual, repositoryTargets) {
 		t.Fatalf("release targets = %v, want %v", actual, repositoryTargets)
+	}
+}
+
+func TestLegacyManifestRemainsCompatible(t *testing.T) {
+	supported, err := loadSupportedTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, err := loadTargets("../../release-targets-legacy.json", supported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual := describeTargets(targets); !reflect.DeepEqual(actual, legacyTargets) {
+		t.Fatalf("legacy release targets = %v, want %v", actual, legacyTargets)
+	}
+}
+
+func describeTargets(targets []releaseTarget) []string {
+	result := make([]string, 0, len(targets))
+	for _, target := range targets {
+		result = append(result, target.id()+"="+target.asset())
+	}
+	return result
+}
+
+func TestManifestPath(t *testing.T) {
+	t.Setenv(manifestEnv, "")
+	if got, err := manifestPath(); err != nil || got != defaultManifest {
+		t.Fatalf("manifestPath() = %q, %v", got, err)
+	}
+
+	t.Setenv(manifestEnv, "compatibility.json")
+	if got, err := manifestPath(); err != nil || got != "compatibility.json" {
+		t.Fatalf("manifestPath() = %q, %v", got, err)
+	}
+
+	for _, invalid := range []string{" ", "bad\npath"} {
+		t.Setenv(manifestEnv, invalid)
+		if _, err := manifestPath(); err == nil {
+			t.Fatalf("manifestPath() accepted %q", invalid)
+		}
 	}
 }
 
@@ -83,18 +136,7 @@ func TestBuildArgumentsBindDeterministicMetadata(t *testing.T) {
 }
 
 func TestBuildTargetsEmbedsConfiguredMetadata(t *testing.T) {
-	originalDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir("../../.."); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(originalDirectory); err != nil {
-			t.Errorf("restore working directory: %v", err)
-		}
-	})
+	t.Chdir("../../..")
 
 	config := buildConfig{
 		version:   "v99.88.77-release-target-test",

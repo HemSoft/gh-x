@@ -645,7 +645,9 @@ failed compilation names that target and stops the quality gate. To change the
 matrix, edit only `.github/release-targets.json`, update the expected list in
 `.github/scripts/release-targets/main_test.go`, and run that package's tests.
 Validation rejects empty, duplicate, malformed, unknown-field, and
-Go-toolchain-unsupported entries.
+Go-toolchain-unsupported entries. A tagged retry for a commit that predates the
+canonical manifest uses the frozen `.github/release-targets-legacy.json`
+snapshot; current CI and releases never use that compatibility file.
 
 Every published binary carries GitHub build provenance created from the same
 trusted release job before asset publication. The attestation binds its SHA-256

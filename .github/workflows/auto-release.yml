@@ -39,6 +39,7 @@ jobs:
           git fetch --no-tags origin "$TRUSTED_HELPER_SHA"
           git show "$TRUSTED_HELPER_SHA:.github/scripts/release-plan/main.go" > "$RUNNER_TEMP/release-plan.go"
           git show "$TRUSTED_HELPER_SHA:.github/scripts/release-targets/main.go" > "$RUNNER_TEMP/release-targets.go"
+          git show "$TRUSTED_HELPER_SHA:.github/release-targets-legacy.json" > "$RUNNER_TEMP/release-targets-legacy.json"
 
       - name: Check whether release is needed
         id: check
@@ -87,6 +88,10 @@ jobs:
         run: |
           RELEASE_BUILD_DATE="$(git show -s --format=%cs "$RELEASE_SHA")"
           export RELEASE_BUILD_DATE
+          if [[ ! -f .github/release-targets.json ]]; then
+            RELEASE_TARGET_MANIFEST="$RUNNER_TEMP/release-targets-legacy.json"
+            export RELEASE_TARGET_MANIFEST
+          fi
           go run "$RUNNER_TEMP/release-targets.go" build
 
       - name: Attest release binaries
