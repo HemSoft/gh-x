@@ -361,10 +361,14 @@ The CI workflow (`.github/workflows/ci.yml`) is the single source of truth for e
 
 ### AI code review
 
-Connected Codex is the required AI reviewer for HemSoft pull requests. It
-reviews newly opened pull requests; request a fresh review with `@codex review`
-after pushing fixes. Require a clean signal for the current head and resolve
-all addressed review conversations before declaring the pull request ready.
+Connected Codex is the required AI reviewer for every pull request to `main`,
+including Dependabot updates. The required `Quality Gate` waits for a clean,
+current-head Codex receipt or full-SHA review and fails closed on missing,
+stale, ambiguous, refused, or unresolved evidence. Codex reviews newly opened
+pull requests; after pushing fixes, request one fresh review for the new head
+with `@codex review`. Verification is read-only and never exposes or requires
+a reviewer credential. Resolve all addressed review conversations before
+merging.
 
 Cubic reviews pull requests automatically when available. Its green check on a
 merge-only commit can mean that review was skipped; inspect the check output

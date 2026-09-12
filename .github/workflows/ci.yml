@@ -15,7 +15,7 @@ on:
         type: string
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [main]
   workflow_call:
@@ -397,15 +397,15 @@ jobs:
             exit 1
           fi
 
-  # Read-only review verification uses the default-branch helper.
-  # Reviewer requests belong to the trusted Auto Release workflow.
-  changelog-review:
-    name: Changelog AI Review
-    if: startsWith(github.head_ref || github.ref_name, 'chore/changelog-') || inputs.changelog_branch != '' || inputs.changelog_head != ''
+  # Read-only review verification uses the default-branch helper for every PR.
+  # Auto Release remains the sole automated requester for generated changelogs.
+  codex-review:
+    name: Current-head Codex Review
+    if: github.event_name == 'pull_request' || startsWith(github.head_ref || github.ref_name, 'chore/changelog-') || inputs.changelog_branch != '' || inputs.changelog_head != ''
     runs-on: ubuntu-latest
     timeout-minutes: 24
     concurrency:
-      group: changelog-review-${{ inputs.changelog_branch || github.head_ref || github.ref_name }}-${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}
+      group: codex-review-${{ github.event.pull_request.number || inputs.changelog_branch || github.ref_name }}-${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}
       cancel-in-progress: true
     permissions:
       contents: read
@@ -419,12 +419,16 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
-      - name: Require eligible changelog and current-head reviews
+      - name: Require a clean current-head Codex review
         env:
           INPUT_BRANCH: ${{ inputs.changelog_branch }}
           INPUT_HEAD: ${{ inputs.changelog_head }}
           WORKFLOW_REF: ${{ github.ref_name }}
           WORKFLOW_HEAD: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_SETUP_AT: ${{ github.event.pull_request.updated_at }}
           GH_TOKEN: ${{ github.token }}
           CHANGELOG_BRANCH: ${{ inputs.changelog_branch || github.head_ref || github.ref_name }}
           EXPECTED_HEAD: ${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}
@@ -438,7 +442,11 @@ jobs:
             echo "::error::Changelog verification inputs cannot override this branch or head."
             exit 1
           fi
-          go run ./.github/scripts/changelog-merge review
+          review_scope=ordinary
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]] || { [[ "$PR_AUTHOR" == "github-actions[bot]" ]] && [[ "$CHANGELOG_BRANCH" == chore/changelog-* ]]; }; then
+            review_scope=changelog
+          fi
+          REVIEW_SCOPE="$review_scope" go run ./.github/scripts/changelog-merge review
 
   performance:
     name: Performance Budgets
@@ -478,9 +486,14 @@ jobs:
     name: Quality Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [build-and-test, lint, quality, mutation, security-analysis, dependency-review, changelog-review, performance]
+    needs: [build-and-test, lint, quality, mutation, security-analysis, dependency-review, codex-review, performance]
     steps:
       - name: Evaluate all gates
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           echo "Build & Test: ${{ needs.build-and-test.result }}"
           echo "Lint:         ${{ needs.lint.result }}"
@@ -488,7 +501,7 @@ jobs:
           echo "Mutation:     ${{ needs.mutation.result }}"
           echo "CodeQL:       ${{ needs.security-analysis.result }}"
           echo "Dependencies: ${{ needs.dependency-review.result }}"
-          echo "Changelog AI: ${{ needs.changelog-review.result }}"
+          echo "Codex review: ${{ needs.codex-review.result }}"
           echo "Performance:  ${{ needs.performance.result }}"
 
           if [[ "${{ needs.build-and-test.result }}" != "success" || \
@@ -501,8 +514,18 @@ jobs:
             echo "::error::One or more quality gates failed"
             exit 1
           fi
-          if [[ "${{ needs.changelog-review.result }}" != "success" && "${{ needs.changelog-review.result }}" != "skipped" ]]; then
-            echo "::error::Changelog review gate did not pass"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && \
+                "$REF" != "refs/heads/$DEFAULT_BRANCH" && \
+                "$REF_NAME" != chore/changelog-* ]]; then
+            echo "::error::A non-changelog branch dispatch cannot publish the required Quality Gate"
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == "pull_request" && "${{ needs.codex-review.result }}" != "success" ]]; then
+            echo "::error::Every pull request requires a clean current-head Codex review"
+            exit 1
+          fi
+          if [[ "${{ needs.codex-review.result }}" != "success" && "${{ needs.codex-review.result }}" != "skipped" ]]; then
+            echo "::error::Current-head Codex review gate did not pass"
             exit 1
           fi
           echo "All quality gates passed ✅"
