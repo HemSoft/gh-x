@@ -26,8 +26,8 @@ fi
 if [[ "$actual_head" != "$expected_head" ]]; then
   fail "reported head $actual_head"
 fi
-if ! gate_conclusion=$(gh api --paginate --slurp "repos/${repo}/actions/runs/${run_id}/jobs?per_page=100" \
-  --jq '[.[].jobs[] | select(.name == "Quality Gate")] | if length == 1 then .[0].conclusion else "ambiguous" end'); then
+if ! gate_conclusion=$(gh api --paginate "repos/${repo}/actions/runs/${run_id}/jobs?per_page=100" |
+  jq -s '[.[].jobs[] | select(.name == "Quality Gate")] | if length == 1 then .[0].conclusion else "ambiguous" end'); then
   fail "could not inspect Quality Gate jobs"
 fi
 if [[ "$gate_conclusion" != "success" ]]; then
