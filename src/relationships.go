@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -125,13 +126,34 @@ func repositoryTargetHost(repo string) string {
 	return targetHost(args)
 }
 
+var ghExecContextFunc = execGHContext
+
+func execGHInContext(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	if ctx == nil {
+		return ghExecFunc(args...)
+	}
+	return ghExecContextFunc(ctx, args...)
+}
+
+type ghExecutor func(args ...string) (bytes.Buffer, bytes.Buffer, error)
+
 func fetchGraphQL(host, query string) ([]byte, error) {
+	return fetchGraphQLWithExecutor(host, query, ghExecFunc)
+}
+
+func fetchGraphQLContext(ctx context.Context, host, query string) ([]byte, error) {
+	return fetchGraphQLWithExecutor(host, query, func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		return ghExecContextFunc(ctx, args...)
+	})
+}
+
+func fetchGraphQLWithExecutor(host, query string, executor ghExecutor) ([]byte, error) {
 	args := []string{"api"}
 	if host != "" {
 		args = append(args, "--hostname", host)
 	}
 	args = append(args, "graphql", "-f", fmt.Sprintf("query=%s", query))
-	stdout, stderr, err := ghExecFunc(args...)
+	stdout, stderr, err := executor(args...)
 	if err == nil {
 		return stdout.Bytes(), nil
 	}
@@ -181,10 +203,14 @@ func hasGraphQLDataEnvelope(raw []byte) bool {
 	return len(envelope.Data) > 0 && !bytes.Equal(bytes.TrimSpace(envelope.Data), []byte("null"))
 }
 
-var fetchIssueRelationshipsBatchFunc = fetchIssueRelationshipsBatch
-var fetchIssueRelationshipsFunc = fetchIssueRelationships
+var fetchIssueRelationshipsBatchFunc = fetchIssueRelationshipsBatchContext
+var fetchIssueRelationshipsFunc = fetchIssueRelationshipsContext
 
 func fetchIssueRelationships(owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {
+	return fetchIssueRelationshipsContext(context.Background(), owner, name, host, issueNumbers)
+}
+
+func fetchIssueRelationshipsContext(ctx context.Context, owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {
 	if len(issueNumbers) == 0 {
 		return nil, nil, nil
 	}
@@ -194,7 +220,7 @@ func fetchIssueRelationships(owner, name, host string, issueNumbers []int) (map[
 	var firstErr error
 	for start := 0; start < len(issueNumbers); start += relationshipBatchSize {
 		end := min(start+relationshipBatchSize, len(issueNumbers))
-		batch, batchUnavailable, err := fetchIssueRelationshipsBatchFunc(owner, name, host, issueNumbers[start:end])
+		batch, batchUnavailable, err := fetchIssueRelationshipsBatchFunc(ctx, owner, name, host, issueNumbers[start:end])
 		for number, refs := range batch {
 			result[number] = refs
 		}
@@ -209,6 +235,16 @@ func fetchIssueRelationships(owner, name, host string, issueNumbers []int) (map[
 }
 
 func fetchIssueRelationshipsBatch(owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {
+	return fetchIssueRelationshipsBatchWithGraphQL(owner, name, host, issueNumbers, fetchGraphQL)
+}
+
+func fetchIssueRelationshipsBatchContext(ctx context.Context, owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {
+	return fetchIssueRelationshipsBatchWithGraphQL(owner, name, host, issueNumbers, func(host, query string) ([]byte, error) {
+		return fetchGraphQLContext(ctx, host, query)
+	})
+}
+
+func fetchIssueRelationshipsBatchWithGraphQL(owner, name, host string, issueNumbers []int, fetch func(string, string) ([]byte, error)) (map[int][]linkedReference, map[int]bool, error) {
 	queryParts := make([]string, 0, len(issueNumbers))
 	for _, number := range issueNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
@@ -220,7 +256,7 @@ func fetchIssueRelationshipsBatch(owner, name, host string, issueNumbers []int) 
 		`query { repository(owner: %q, name: %q) { %s } }`,
 		owner, name, strings.Join(queryParts, " "),
 	)
-	data, err := fetchGraphQL(host, query)
+	data, err := fetch(host, query)
 	unavailable := unavailableIssueNumbers(issueNumbers, nil)
 	if data == nil {
 		return nil, unavailable, err

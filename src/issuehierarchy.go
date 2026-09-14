@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -29,10 +30,14 @@ type issueHierarchyUnavailable struct {
 	SubIssues bool
 }
 
-var fetchIssueHierarchiesBatchFunc = fetchIssueHierarchiesBatch
-var fetchIssueHierarchiesFunc = fetchIssueHierarchies
+var fetchIssueHierarchiesBatchFunc = fetchIssueHierarchiesBatchContext
+var fetchIssueHierarchiesFunc = fetchIssueHierarchiesContext
 
 func fetchIssueHierarchies(owner, name, host string, issueNumbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+	return fetchIssueHierarchiesContext(context.Background(), owner, name, host, issueNumbers)
+}
+
+func fetchIssueHierarchiesContext(ctx context.Context, owner, name, host string, issueNumbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
 	if len(issueNumbers) == 0 {
 		return nil, nil, nil
 	}
@@ -42,7 +47,7 @@ func fetchIssueHierarchies(owner, name, host string, issueNumbers []int) (map[in
 	var firstErr error
 	for start := 0; start < len(issueNumbers); start += relationshipBatchSize {
 		end := min(start+relationshipBatchSize, len(issueNumbers))
-		batch, batchUnavailable, err := fetchIssueHierarchiesBatchFunc(owner, name, host, issueNumbers[start:end])
+		batch, batchUnavailable, err := fetchIssueHierarchiesBatchFunc(ctx, owner, name, host, issueNumbers[start:end])
 		for number, hierarchy := range batch {
 			result[number] = hierarchy
 		}
@@ -67,6 +72,16 @@ func hierarchyUnavailableCount(unavailable map[int]issueHierarchyUnavailable) ma
 }
 
 func fetchIssueHierarchiesBatch(owner, name, host string, issueNumbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+	return fetchIssueHierarchiesBatchWithGraphQL(owner, name, host, issueNumbers, fetchGraphQL)
+}
+
+func fetchIssueHierarchiesBatchContext(ctx context.Context, owner, name, host string, issueNumbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+	return fetchIssueHierarchiesBatchWithGraphQL(owner, name, host, issueNumbers, func(host, query string) ([]byte, error) {
+		return fetchGraphQLContext(ctx, host, query)
+	})
+}
+
+func fetchIssueHierarchiesBatchWithGraphQL(owner, name, host string, issueNumbers []int, fetch func(string, string) ([]byte, error)) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
 	queryParts := make([]string, 0, len(issueNumbers))
 	for _, number := range issueNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
@@ -78,7 +93,7 @@ func fetchIssueHierarchiesBatch(owner, name, host string, issueNumbers []int) (m
 		`query { repository(owner: %q, name: %q) { %s } }`,
 		owner, name, strings.Join(queryParts, " "),
 	)
-	data, err := fetchGraphQL(host, query)
+	data, err := fetch(host, query)
 	if data == nil {
 		return nil, allHierarchyUnavailable(issueNumbers), err
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,7 +125,7 @@ func TestFetchIssueRelationshipsBatchesAndPreservesHost(t *testing.T) {
 	defer func() { fetchIssueRelationshipsBatchFunc = saved }()
 
 	calls := 0
-	fetchIssueRelationshipsBatchFunc = func(owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsBatchFunc = func(_ context.Context, owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
 		calls++
 		if owner != "owner" || name != "repo" || host != "ghe.example.com" {
 			t.Fatalf("unexpected target: %s/%s on %s", owner, name, host)
@@ -153,7 +154,7 @@ func TestFetchIssueRelationshipsReturnsBatchError(t *testing.T) {
 	saved := fetchIssueRelationshipsBatchFunc
 	defer func() { fetchIssueRelationshipsBatchFunc = saved }()
 
-	fetchIssueRelationshipsBatchFunc = func(_, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsBatchFunc = func(_ context.Context, _, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
 		return nil, map[int]bool{1: true}, fmt.Errorf("graphql unavailable")
 	}
 	result, unavailable, err := fetchIssueRelationships("owner", "repo", "github.com", []int{1})
@@ -397,7 +398,7 @@ func TestFetchDisplayIssuesMarksOnlyUnavailableIssueUnknown(t *testing.T) {
 	fetchIssuesFunc = func(_ issueListOptions) ([]issueEntry, error) {
 		return []issueEntry{{Number: 332}, {Number: 998}}, nil
 	}
-	fetchIssueRelationshipsFunc = func(_, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsFunc = func(_ context.Context, _, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
 		return map[int][]linkedReference{
 			332: {{Number: 333, URL: "https://github.com/HemSoft/codexbar-ios/pull/333"}},
 		}, map[int]bool{998: true}, fmt.Errorf("gh api graphql: Could not resolve to a Issue with the number of 998.")

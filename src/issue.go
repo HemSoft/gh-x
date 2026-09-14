@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,6 +16,7 @@ import (
 )
 
 type issueListOptions struct {
+	ctx       context.Context
 	repo      string
 	limit     int
 	state     string
@@ -155,7 +157,7 @@ func buildIssueListArgs(options issueListOptions) []string {
 
 func fetchIssues(options issueListOptions) ([]issueEntry, error) {
 	ghArgs := buildIssueListArgs(options)
-	stdoutBuf, stderrBuf, err := ghExecFunc(ghArgs...)
+	stdoutBuf, stderrBuf, err := execGHInContext(options.ctx, ghArgs...)
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("gh issue list: %w", err), stderrBuf.String())
 	}
@@ -222,13 +224,20 @@ type issueListResult struct {
 }
 
 func fetchDisplayIssues(options issueListOptions, now time.Time) (issueListResult, error) {
+	ctx, cancel, err := issueListOperationContext(options.ctx)
+	if err != nil {
+		return issueListResult{}, err
+	}
+	defer cancel()
+	options.ctx = ctx
+
 	issues, err := fetchIssuesFunc(options)
 	if err != nil {
 		return issueListResult{}, err
 	}
 
-	relationships, unavailable, relErr := fetchIssueRelationshipData(options.repo, issues)
-	repository, hierarchies, hierarchyUnavailable, hierarchyErr := fetchIssueHierarchyData(options.repo, issues)
+	relationships, unavailable, relErr := fetchIssueRelationshipData(ctx, options.repo, issues)
+	repository, hierarchies, hierarchyUnavailable, hierarchyErr := fetchIssueHierarchyData(ctx, options.repo, issues)
 
 	displayIssues := make([]displayIssue, len(issues))
 	for i, entry := range issues {
@@ -249,7 +258,19 @@ func fetchDisplayIssues(options issueListOptions, now time.Time) (issueListResul
 	return issueListResult{Display: displayIssues, RelErr: relErr, HierarchyErr: hierarchyErr}, nil
 }
 
-func fetchIssueHierarchyData(repo string, issues []issueEntry) (string, map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+func issueListOperationContext(parent context.Context) (context.Context, context.CancelFunc, error) {
+	if parent != nil {
+		return parent, func() {}, nil
+	}
+	timeout, err := configuredTimeout(githubCommandTimeoutEnv, defaultGitHubCommandTimeout)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return ctx, cancel, nil
+}
+
+func fetchIssueHierarchyData(ctx context.Context, repo string, issues []issueEntry) (string, map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
 	if len(issues) == 0 {
 		return "", nil, nil, nil
 	}
@@ -259,7 +280,7 @@ func fetchIssueHierarchyData(repo string, issues []issueEntry) (string, map[int]
 		return "", nil, unavailable, err
 	}
 	numbers := issueNumbers(issues)
-	hierarchies, unavailable, hierarchyErr := fetchIssueHierarchiesFunc(owner, name, repositoryTargetHost(repo), numbers)
+	hierarchies, unavailable, hierarchyErr := fetchIssueHierarchiesFunc(ctx, owner, name, repositoryTargetHost(repo), numbers)
 	return owner + "/" + name, hierarchies, unavailable, hierarchyErr
 }
 
@@ -271,7 +292,7 @@ func issueNumbers(issues []issueEntry) []int {
 	return numbers
 }
 
-func fetchIssueRelationshipData(repo string, issues []issueEntry) (map[int][]linkedReference, map[int]bool, error) {
+func fetchIssueRelationshipData(ctx context.Context, repo string, issues []issueEntry) (map[int][]linkedReference, map[int]bool, error) {
 	if len(issues) == 0 {
 		return nil, nil, nil
 	}
@@ -284,7 +305,7 @@ func fetchIssueRelationshipData(repo string, issues []issueEntry) (map[int][]lin
 		return nil, unavailable, err
 	}
 	numbers := issueNumbers(issues)
-	relationships, unavailable, relErr := fetchIssueRelationshipsFunc(owner, name, repositoryTargetHost(repo), numbers)
+	relationships, unavailable, relErr := fetchIssueRelationshipsFunc(ctx, owner, name, repositoryTargetHost(repo), numbers)
 	return relationships, unavailable, relErr
 }
 

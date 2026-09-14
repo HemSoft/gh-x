@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -132,7 +133,7 @@ func TestFetchIssueHierarchiesBatchesAndPreservesHost(t *testing.T) {
 	t.Cleanup(func() { fetchIssueHierarchiesBatchFunc = saved })
 
 	calls := 0
-	fetchIssueHierarchiesBatchFunc = func(owner, name, host string, numbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+	fetchIssueHierarchiesBatchFunc = func(_ context.Context, owner, name, host string, numbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
 		calls++
 		if owner != "owner" || name != "repo" || host != "ghe.example.com" {
 			t.Fatalf("unexpected target: %s/%s on %s", owner, name, host)
@@ -209,14 +210,14 @@ func TestFetchDisplayIssuesAddsHierarchy(t *testing.T) {
 	fetchIssuesFunc = func(issueListOptions) ([]issueEntry, error) {
 		return []issueEntry{{Number: 7}, {Number: 9}, {Number: 11}, {Number: 13}}, nil
 	}
-	fetchIssueRelationshipsFunc = func(_, _, _ string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsFunc = func(_ context.Context, _, _, _ string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
 		result := make(map[int][]linkedReference, len(numbers))
 		for _, number := range numbers {
 			result[number] = nil
 		}
 		return result, nil, nil
 	}
-	fetchIssueHierarchiesFunc = func(owner, name, host string, numbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+	fetchIssueHierarchiesFunc = func(_ context.Context, owner, name, host string, numbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
 		if owner != "owner" || name != "repo" || host != "ghe.example.com" || !reflect.DeepEqual(numbers, []int{7, 9, 11, 13}) {
 			t.Fatalf("unexpected hierarchy request: %s/%s on %s for %v", owner, name, host, numbers)
 		}
@@ -256,10 +257,10 @@ func TestExecuteIssueListReportsHierarchyFailureWithoutDroppingRows(t *testing.T
 	fetchIssuesFunc = func(issueListOptions) ([]issueEntry, error) {
 		return []issueEntry{{Number: 7, Title: "Visible issue", State: "OPEN"}}, nil
 	}
-	fetchIssueRelationshipsFunc = func(_, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsFunc = func(_ context.Context, _, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
 		return map[int][]linkedReference{7: nil}, nil, nil
 	}
-	fetchIssueHierarchiesFunc = func(_, _, _ string, _ []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+	fetchIssueHierarchiesFunc = func(_ context.Context, _, _, _ string, _ []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
 		return nil, allHierarchyUnavailable([]int{7}), fmt.Errorf("fields unsupported")
 	}
 
