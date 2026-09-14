@@ -10,8 +10,6 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
-- feat: show parent issues and direct sub-issue progress in issue views (#120)
-
 See the comparison link below for changes since the latest published release.
 
 ## [0.13.4] - 2026-09-14
