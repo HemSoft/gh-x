@@ -548,6 +548,21 @@ func TestRenderIssueTableHeaders(t *testing.T) {
 	}
 }
 
+func TestFitIssueColumnsPreservesHeadersAtEightyColumns(t *testing.T) {
+	headers := []string{"#", "PRs", "Parent", "Sub", "Title", "Author", "State", "Labels", "Assignees", "Updated"}
+	widths := []int{4, 20, 24, 7, 40, 18, 6, 16, 18, 10}
+
+	fitted, _ := fitIssueColumns(widths, 80)
+	if got := tableWidth(fitted); got > 80 {
+		t.Fatalf("fitted issue table width = %d, want at most 80 (columns %v)", got, fitted)
+	}
+	for index, header := range headers {
+		if fitted[index] < len(header) {
+			t.Fatalf("column %d width = %d, narrower than header %q", index, fitted[index], header)
+		}
+	}
+}
+
 func TestExecuteIssueListHappyPath(t *testing.T) {
 	stubEmptyIssueHierarchies(t)
 	origFetch := fetchIssuesFunc

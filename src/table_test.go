@@ -152,7 +152,7 @@ func TestFitColumnsToTerminal(t *testing.T) {
 func TestFitColumnsToTerminalUsesPerColumnFloors(t *testing.T) {
 	widths := []int{4, 20, 24, 7, 40, 18, 6, 16, 18, 10}
 	flexible := []int{1, 2, 3, 4, 5, 7, 8}
-	floors := map[int]int{1: 4, 2: 4, 3: 5, 4: 8, 5: 6, 7: 4, 8: 6}
+	floors := map[int]int{1: 4, 2: 6, 3: 5, 4: 8, 5: 6, 7: 6, 8: 9}
 
 	result := fitColumnsToTerminalWithFloors(widths, flexible, floors, 80)
 	if got := tableWidth(result); got > 80 {

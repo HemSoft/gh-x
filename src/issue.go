@@ -439,11 +439,7 @@ func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool)
 
 	colWidths := computeColumnWidths(headers, rows)
 
-	// Dense hierarchy columns can shrink below the general table floor so the
-	// issue view still fits an 80-column terminal.
-	flexibleCols := []int{1, 2, 3, 4, 5, 7, 8}
-	floors := map[int]int{1: 4, 2: 4, 3: 5, 4: 8, 5: 6, 7: 4, 8: 6}
-	colWidths = fitColumnsToTerminalWithFloors(colWidths, flexibleCols, floors, getTerminalWidth())
+	colWidths, flexibleCols := fitIssueColumns(colWidths, getTerminalWidth())
 	rows = truncateCells(rows, colWidths, flexibleCols)
 
 	writeTableHeader(stdout, styler, headers, colWidths)
@@ -452,6 +448,14 @@ func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool)
 	}
 
 	return nil
+}
+
+func fitIssueColumns(colWidths []int, termWidth int) ([]int, []int) {
+	// Dense hierarchy columns can shrink below the general table floor. Floors
+	// still cover every header so writeRow always receives nonnegative padding.
+	flexibleCols := []int{1, 2, 3, 4, 5, 7, 8}
+	floors := map[int]int{1: 4, 2: 6, 3: 5, 4: 8, 5: 6, 7: 6, 8: 9}
+	return fitColumnsToTerminalWithFloors(colWidths, flexibleCols, floors, termWidth), flexibleCols
 }
 
 func writeIssueListUsage(w io.Writer) {
