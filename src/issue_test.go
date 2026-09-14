@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cli/go-gh/v2/pkg/repository"
 )
 
 func TestParseIssueListOptionsDefaults(t *testing.T) {
@@ -763,7 +766,7 @@ func TestFetchDisplayIssuesRelationships(t *testing.T) {
 	}
 }
 
-func TestFetchIssueRelationshipDataUsesConfiguredSSHHost(t *testing.T) {
+func TestFetchIssueEnrichmentDataUsesConfiguredSSHHost(t *testing.T) {
 	t.Setenv("GH_REPO", "")
 	t.Setenv("GH_HOST", "")
 	withRemoteURLStub(t, "git@github.com-hemsoft:HemSoft/codexbar-ios.git")
@@ -775,7 +778,11 @@ func TestFetchIssueRelationshipDataUsesConfiguredSSHHost(t *testing.T) {
 		return defaultGitHubHost
 	})
 	savedRelationships := fetchIssueRelationshipsFunc
-	t.Cleanup(func() { fetchIssueRelationshipsFunc = savedRelationships })
+	savedHierarchies := fetchIssueHierarchiesFunc
+	t.Cleanup(func() {
+		fetchIssueRelationshipsFunc = savedRelationships
+		fetchIssueHierarchiesFunc = savedHierarchies
+	})
 	fetchIssueRelationshipsFunc = func(_ context.Context, owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
 		if owner != "HemSoft" || name != "codexbar-ios" || host != defaultGitHubHost {
 			t.Fatalf("relationship target = %s/%s on %s, want HemSoft/codexbar-ios on github.com", owner, name, host)
@@ -785,13 +792,44 @@ func TestFetchIssueRelationshipDataUsesConfiguredSSHHost(t *testing.T) {
 		}
 		return map[int][]linkedReference{305: {{Number: 335}}}, nil, nil
 	}
-
-	relationships, unavailable, err := fetchIssueRelationshipData(context.Background(), "HemSoft/codexbar-ios", []issueEntry{{Number: 305}})
-	if err != nil {
-		t.Fatalf("fetchIssueRelationshipData returned error: %v", err)
+	fetchIssueHierarchiesFunc = func(_ context.Context, _, _, _ string, _ []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+		return map[int]issueHierarchy{305: {}}, nil, nil
 	}
-	if len(relationships[305]) != 1 || relationships[305][0].Number != 335 || len(unavailable) != 0 {
-		t.Fatalf("relationships = %v, unavailable = %v; want issue #305 linked to PR #335", relationships, unavailable)
+
+	enrichment := fetchIssueEnrichmentData(context.Background(), "HemSoft/codexbar-ios", []issueEntry{{Number: 305}})
+	if enrichment.RelErr != nil {
+		t.Fatalf("fetchIssueEnrichmentData returned error: %v", enrichment.RelErr)
+	}
+	if len(enrichment.Relationships[305]) != 1 || enrichment.Relationships[305][0].Number != 335 || len(enrichment.RelationshipsMissing) != 0 {
+		t.Fatalf("relationships = %v, unavailable = %v; want issue #305 linked to PR #335", enrichment.Relationships, enrichment.RelationshipsMissing)
+	}
+}
+
+func TestFetchIssueEnrichmentDataMarksAllFieldsUnavailableWhenRepoResolutionFails(t *testing.T) {
+	t.Setenv("GH_REPO", "")
+	savedCurrent := repositoryCurrentFunc
+	savedExec := ghExecContextFunc
+	t.Cleanup(func() {
+		repositoryCurrentFunc = savedCurrent
+		ghExecContextFunc = savedExec
+	})
+	repositoryCurrentFunc = func() (repository.Repository, error) {
+		return repository.Repository{}, errors.New("no repository")
+	}
+	ghExecContextFunc = func(context.Context, ...string) (bytes.Buffer, bytes.Buffer, error) {
+		return bytes.Buffer{}, bytes.Buffer{}, errors.New("fallback unavailable")
+	}
+
+	enrichment := fetchIssueEnrichmentData(context.Background(), "", []issueEntry{{Number: 7}})
+	if enrichment.RelErr == nil || enrichment.HierarchyErr == nil {
+		t.Fatalf("resolution errors = %v, %v", enrichment.RelErr, enrichment.HierarchyErr)
+	}
+	if !enrichment.RelationshipsMissing[7] {
+		t.Fatalf("relationship availability = %v", enrichment.RelationshipsMissing)
+	}
+	missing := enrichment.HierarchyMissing[7]
+	if !missing.Parent || !missing.SubIssues {
+		t.Fatalf("hierarchy availability = %#v", missing)
 	}
 }
 

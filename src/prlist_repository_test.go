@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/cli/go-gh/v2/pkg/repository"
 )
 
 func TestResolveRepoOverride(t *testing.T) {
@@ -35,6 +40,35 @@ func TestResolveRepoOverride(t *testing.T) {
 				t.Fatalf("got %s/%s, want %s/%s", owner, name, tc.wantOwner, tc.wantName)
 			}
 		})
+	}
+}
+
+func TestResolveRepoContextBoundsFallback(t *testing.T) {
+	savedCurrent := repositoryCurrentFunc
+	savedExec := ghExecContextFunc
+	t.Cleanup(func() {
+		repositoryCurrentFunc = savedCurrent
+		ghExecContextFunc = savedExec
+	})
+	repositoryCurrentFunc = func() (repository.Repository, error) {
+		return repository.Repository{}, errors.New("no repository")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ghExecContextFunc = func(got context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		if got != ctx {
+			t.Fatal("repository fallback did not receive the operation context")
+		}
+		wantArgs := []string{"repo", "view", "--json", "owner,name"}
+		if !reflect.DeepEqual(args, wantArgs) {
+			t.Fatalf("repository fallback args = %v, want %v", args, wantArgs)
+		}
+		return *bytes.NewBufferString(`{"owner":{"login":"owner"},"name":"repo"}`), bytes.Buffer{}, nil
+	}
+
+	owner, name, err := resolveRepoContext(ctx, "")
+	if err != nil || owner != "owner" || name != "repo" {
+		t.Fatalf("resolveRepoContext = %s/%s, %v", owner, name, err)
 	}
 }
 

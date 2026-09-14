@@ -42,6 +42,10 @@ func fetchIssueHierarchiesContext(ctx context.Context, owner, name, host string,
 	unavailable := make(map[int]issueHierarchyUnavailable)
 	var firstErr error
 	for start := 0; start < len(issueNumbers); start += relationshipBatchSize {
+		if contextErr := markCanceledHierarchies(ctx, issueNumbers[start:], unavailable); contextErr != nil {
+			firstErr = retainFirstError(firstErr, contextErr)
+			break
+		}
 		end := min(start+relationshipBatchSize, len(issueNumbers))
 		batch, batchUnavailable, err := fetchIssueHierarchiesBatchFunc(ctx, owner, name, host, issueNumbers[start:end])
 		for number, hierarchy := range batch {
@@ -50,11 +54,20 @@ func fetchIssueHierarchiesContext(ctx context.Context, owner, name, host string,
 		for number, fields := range batchUnavailable {
 			unavailable[number] = fields
 		}
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
+		firstErr = retainFirstError(firstErr, err)
 	}
 	return result, unavailable, firstPartialFetchError(firstErr, hierarchyUnavailableCount(unavailable), len(issueNumbers), "issues")
+}
+
+func markCanceledHierarchies(ctx context.Context, remaining []int, unavailable map[int]issueHierarchyUnavailable) error {
+	contextErr := githubContextError(ctx.Err())
+	if contextErr == nil {
+		return nil
+	}
+	for _, number := range remaining {
+		unavailable[number] = issueHierarchyUnavailable{Parent: true, SubIssues: true}
+	}
+	return contextErr
 }
 
 func hierarchyUnavailableCount(unavailable map[int]issueHierarchyUnavailable) map[int]bool {

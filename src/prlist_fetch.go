@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -147,7 +149,20 @@ func fetchRequiredChecks(owner, name string, prs []pullRequest) (map[string]map[
 	return result, failed
 }
 
+var repositoryCurrentFunc = repository.Current
+
 func resolveRepo(repoOverride string) (string, string, error) {
+	return resolveRepoWithExecutor(repoOverride, ghExecFunc)
+}
+
+func resolveRepoContext(ctx context.Context, repoOverride string) (string, string, error) {
+	executor := func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		return ghExecContextFunc(ctx, args...)
+	}
+	return resolveRepoWithExecutor(repoOverride, executor)
+}
+
+func resolveRepoWithExecutor(repoOverride string, executor ghExecutor) (string, string, error) {
 	if repoOverride == "" {
 		repoOverride = strings.TrimSpace(os.Getenv("GH_REPO"))
 	}
@@ -159,13 +174,13 @@ func resolveRepo(repoOverride string) (string, string, error) {
 		return parts[len(parts)-2], parts[len(parts)-1], nil
 	}
 
-	repo, err := repository.Current()
+	repo, err := repositoryCurrentFunc()
 	if err == nil {
 		return repo.Owner, repo.Name, nil
 	}
 
 	// Fall back to gh repo view for SSH aliases and non-standard remotes
-	stdout, _, execErr := ghExecFunc("repo", "view", "--json", "owner,name")
+	stdout, _, execErr := executor("repo", "view", "--json", "owner,name")
 	if execErr != nil {
 		return "", "", fmt.Errorf("repo resolution failed: %w; fallback: %v", err, execErr)
 	}

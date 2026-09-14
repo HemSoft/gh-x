@@ -150,6 +150,43 @@ func TestFetchIssueRelationshipsBatchesAndPreservesHost(t *testing.T) {
 	}
 }
 
+func TestFetchIssueRelationshipsStopsAfterContextCancellation(t *testing.T) {
+	saved := fetchIssueRelationshipsBatchFunc
+	t.Cleanup(func() { fetchIssueRelationshipsBatchFunc = saved })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	fetchIssueRelationshipsBatchFunc = func(_ context.Context, _, _, _ string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+		calls++
+		result := make(map[int][]linkedReference, len(numbers))
+		for _, number := range numbers {
+			result[number] = nil
+		}
+		cancel()
+		return result, nil, nil
+	}
+	numbers := make([]int, 35)
+	for index := range numbers {
+		numbers[index] = index + 1
+	}
+
+	result, unavailable, err := fetchIssueRelationshipsContext(ctx, "owner", "repo", "github.com", numbers)
+	if calls != 1 {
+		t.Fatalf("batch calls = %d, want 1", calls)
+	}
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled relationship fetch error = %v", err)
+	}
+	if len(result) != relationshipBatchSize {
+		t.Fatalf("completed relationship entries = %d, want %d", len(result), relationshipBatchSize)
+	}
+	for _, number := range numbers[relationshipBatchSize:] {
+		if !unavailable[number] {
+			t.Fatalf("remaining issue %d was not marked unavailable: %v", number, unavailable)
+		}
+	}
+}
+
 func TestFetchIssueRelationshipsReturnsBatchError(t *testing.T) {
 	saved := fetchIssueRelationshipsBatchFunc
 	defer func() { fetchIssueRelationshipsBatchFunc = saved }()

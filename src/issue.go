@@ -223,6 +223,16 @@ type issueListResult struct {
 	HierarchyErr error
 }
 
+type issueEnrichmentData struct {
+	Repository           string
+	Relationships        map[int][]linkedReference
+	RelationshipsMissing map[int]bool
+	Hierarchies          map[int]issueHierarchy
+	HierarchyMissing     map[int]issueHierarchyUnavailable
+	RelErr               error
+	HierarchyErr         error
+}
+
 func fetchDisplayIssues(options issueListOptions, now time.Time) (issueListResult, error) {
 	ctx, cancel, err := issueListOperationContext(options.ctx)
 	if err != nil {
@@ -236,26 +246,24 @@ func fetchDisplayIssues(options issueListOptions, now time.Time) (issueListResul
 		return issueListResult{}, err
 	}
 
-	relationships, unavailable, relErr := fetchIssueRelationshipData(ctx, options.repo, issues)
-	repository, hierarchies, hierarchyUnavailable, hierarchyErr := fetchIssueHierarchyData(ctx, options.repo, issues)
-
+	enrichment := fetchIssueEnrichmentData(ctx, options.repo, issues)
 	displayIssues := make([]displayIssue, len(issues))
 	for i, entry := range issues {
 		displayIssues[i] = buildDisplayIssue(entry, now)
-		refs, found := relationships[entry.Number]
+		refs, found := enrichment.Relationships[entry.Number]
 		displayIssues[i].PullRequests, displayIssues[i].pullRequestRefs = relationshipDisplay(
 			refs,
-			unavailable[entry.Number] || !found,
+			enrichment.RelationshipsMissing[entry.Number] || !found,
 		)
-		hierarchy, hierarchyFound := hierarchies[entry.Number]
-		missing := hierarchyUnavailable[entry.Number]
+		hierarchy, hierarchyFound := enrichment.Hierarchies[entry.Number]
+		missing := enrichment.HierarchyMissing[entry.Number]
 		if !hierarchyFound {
 			missing = issueHierarchyUnavailable{Parent: true, SubIssues: true}
 		}
-		displayIssues[i].Parent, displayIssues[i].parentRefs = issueParentDisplay(hierarchy.Parent, repository, missing.Parent)
+		displayIssues[i].Parent, displayIssues[i].parentRefs = issueParentDisplay(hierarchy.Parent, enrichment.Repository, missing.Parent)
 		displayIssues[i].SubIssues = subIssueProgressDisplay(hierarchy.SubIssues, missing.SubIssues)
 	}
-	return issueListResult{Display: displayIssues, RelErr: relErr, HierarchyErr: hierarchyErr}, nil
+	return issueListResult{Display: displayIssues, RelErr: enrichment.RelErr, HierarchyErr: enrichment.HierarchyErr}, nil
 }
 
 func issueListOperationContext(parent context.Context) (context.Context, context.CancelFunc, error) {
@@ -270,18 +278,32 @@ func issueListOperationContext(parent context.Context) (context.Context, context
 	return ctx, cancel, nil
 }
 
-func fetchIssueHierarchyData(ctx context.Context, repo string, issues []issueEntry) (string, map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+func fetchIssueEnrichmentData(ctx context.Context, repo string, issues []issueEntry) issueEnrichmentData {
 	if len(issues) == 0 {
-		return "", nil, nil, nil
-	}
-	owner, name, err := resolveRepo(repo)
-	if err != nil {
-		unavailable := allHierarchyUnavailable(issueNumbers(issues))
-		return "", nil, unavailable, err
+		return issueEnrichmentData{}
 	}
 	numbers := issueNumbers(issues)
-	hierarchies, unavailable, hierarchyErr := fetchIssueHierarchiesFunc(ctx, owner, name, repositoryTargetHost(repo), numbers)
-	return owner + "/" + name, hierarchies, unavailable, hierarchyErr
+	owner, name, err := resolveRepoContext(ctx, repo)
+	if err != nil {
+		return issueEnrichmentData{
+			RelationshipsMissing: unavailableIssueNumbers(numbers, nil),
+			HierarchyMissing:     allHierarchyUnavailable(numbers),
+			RelErr:               err,
+			HierarchyErr:         err,
+		}
+	}
+	host := repositoryTargetHost(repo)
+	relationships, relationshipsMissing, relErr := fetchIssueRelationshipsFunc(ctx, owner, name, host, numbers)
+	hierarchies, hierarchyMissing, hierarchyErr := fetchIssueHierarchiesFunc(ctx, owner, name, host, numbers)
+	return issueEnrichmentData{
+		Repository:           owner + "/" + name,
+		Relationships:        relationships,
+		RelationshipsMissing: relationshipsMissing,
+		Hierarchies:          hierarchies,
+		HierarchyMissing:     hierarchyMissing,
+		RelErr:               relErr,
+		HierarchyErr:         hierarchyErr,
+	}
 }
 
 func issueNumbers(issues []issueEntry) []int {
@@ -290,23 +312,6 @@ func issueNumbers(issues []issueEntry) []int {
 		numbers[i] = issue.Number
 	}
 	return numbers
-}
-
-func fetchIssueRelationshipData(ctx context.Context, repo string, issues []issueEntry) (map[int][]linkedReference, map[int]bool, error) {
-	if len(issues) == 0 {
-		return nil, nil, nil
-	}
-	owner, name, err := resolveRepo(repo)
-	if err != nil {
-		unavailable := make(map[int]bool, len(issues))
-		for _, issue := range issues {
-			unavailable[issue.Number] = true
-		}
-		return nil, unavailable, err
-	}
-	numbers := issueNumbers(issues)
-	relationships, unavailable, relErr := fetchIssueRelationshipsFunc(ctx, owner, name, repositoryTargetHost(repo), numbers)
-	return relationships, unavailable, relErr
 }
 
 func buildDisplayIssue(entry issueEntry, now time.Time) displayIssue {
@@ -434,9 +439,11 @@ func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool)
 
 	colWidths := computeColumnWidths(headers, rows)
 
-	// Fit to terminal: relationship, title, author, label, and assignee columns are flexible.
-	flexibleCols := []int{1, 2, 4, 5, 7, 8}
-	colWidths = fitColumnsToTerminal(colWidths, flexibleCols, getTerminalWidth())
+	// Dense hierarchy columns can shrink below the general table floor so the
+	// issue view still fits an 80-column terminal.
+	flexibleCols := []int{1, 2, 3, 4, 5, 7, 8}
+	floors := map[int]int{1: 4, 2: 4, 3: 5, 4: 8, 5: 6, 7: 4, 8: 6}
+	colWidths = fitColumnsToTerminalWithFloors(colWidths, flexibleCols, floors, getTerminalWidth())
 	rows = truncateCells(rows, colWidths, flexibleCols)
 
 	writeTableHeader(stdout, styler, headers, colWidths)

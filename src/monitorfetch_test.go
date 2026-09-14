@@ -347,6 +347,25 @@ func TestParseMonitorResponseMarksOnlyErroredHierarchyFieldUnavailable(t *testin
 	}
 }
 
+func TestParseMonitorResponsePreservesHierarchyErrorNodeIndex(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/repo")
+	body := `{"data":{"is0":{"issueCount":2,"nodes":[null,{"number":7,"title":"First","state":"OPEN","repository":{"nameWithOwner":"owner/repo"},"parent":null,"subIssuesSummary":{"completed":1,"total":2}},{"number":8,"title":"Second","state":"OPEN","repository":{"nameWithOwner":"owner/repo"},"parent":null,"subIssuesSummary":{"completed":0,"total":0}}]}} ,"errors":[{"path":["is0","nodes",1,"parent"],"message":"parent hidden"}]}`
+	result, err := parseSingleMonitorResponse(t, []byte(body), cfg, time.Time{})
+	if err != nil {
+		t.Fatalf("parseMonitorHostResponse returned error: %v", err)
+	}
+	rows := result.IssueSections[0].Rows
+	if len(rows) != 2 {
+		t.Fatalf("issue rows = %d, want 2", len(rows))
+	}
+	if rows[0].Number != 7 || rows[0].Parent != "?" {
+		t.Fatalf("first issue hierarchy = #%d %q, want #7 ?", rows[0].Number, rows[0].Parent)
+	}
+	if rows[1].Number != 8 || rows[1].Parent != "-" {
+		t.Fatalf("second issue hierarchy = #%d %q, want #8 -", rows[1].Number, rows[1].Parent)
+	}
+}
+
 func TestParseMonitorResponseRejectsMalformedHierarchyFields(t *testing.T) {
 	cfg := defaultMonitorConfig("owner/repo")
 	body := `{"data":{"is0":{"issueCount":1,"nodes":[{"number":7,"title":"Issue","state":"OPEN","repository":{"nameWithOwner":"owner/repo"},"parent":{"number":0,"url":"","repository":{"nameWithOwner":""}},"subIssuesSummary":{"total":2}}]}}}`

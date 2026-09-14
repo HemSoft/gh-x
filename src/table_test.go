@@ -149,6 +149,22 @@ func TestFitColumnsToTerminal(t *testing.T) {
 	}
 }
 
+func TestFitColumnsToTerminalUsesPerColumnFloors(t *testing.T) {
+	widths := []int{4, 20, 24, 7, 40, 18, 6, 16, 18, 10}
+	flexible := []int{1, 2, 3, 4, 5, 7, 8}
+	floors := map[int]int{1: 4, 2: 4, 3: 5, 4: 8, 5: 6, 7: 4, 8: 6}
+
+	result := fitColumnsToTerminalWithFloors(widths, flexible, floors, 80)
+	if got := tableWidth(result); got > 80 {
+		t.Fatalf("fitted table width = %d, want at most 80 (columns %v)", got, result)
+	}
+	for column, floor := range floors {
+		if result[column] < floor {
+			t.Fatalf("column %d width = %d, below floor %d", column, result[column], floor)
+		}
+	}
+}
+
 func TestTruncateCells(t *testing.T) {
 	rows := [][]tableCell{
 		{

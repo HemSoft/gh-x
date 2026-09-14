@@ -215,6 +215,10 @@ func fetchIssueRelationshipsContext(ctx context.Context, owner, name, host strin
 	unavailable := make(map[int]bool)
 	var firstErr error
 	for start := 0; start < len(issueNumbers); start += relationshipBatchSize {
+		if contextErr := markCanceledRelationships(ctx, issueNumbers[start:], unavailable); contextErr != nil {
+			firstErr = retainFirstError(firstErr, contextErr)
+			break
+		}
 		end := min(start+relationshipBatchSize, len(issueNumbers))
 		batch, batchUnavailable, err := fetchIssueRelationshipsBatchFunc(ctx, owner, name, host, issueNumbers[start:end])
 		for number, refs := range batch {
@@ -223,11 +227,27 @@ func fetchIssueRelationshipsContext(ctx context.Context, owner, name, host strin
 		for number := range batchUnavailable {
 			unavailable[number] = true
 		}
-		if err != nil && firstErr == nil {
-			firstErr = err
-		}
+		firstErr = retainFirstError(firstErr, err)
 	}
 	return result, unavailable, firstPartialFetchError(firstErr, unavailable, len(issueNumbers), "issues")
+}
+
+func markCanceledRelationships(ctx context.Context, remaining []int, unavailable map[int]bool) error {
+	contextErr := githubContextError(ctx.Err())
+	if contextErr == nil {
+		return nil
+	}
+	for _, number := range remaining {
+		unavailable[number] = true
+	}
+	return contextErr
+}
+
+func retainFirstError(first, candidate error) error {
+	if first != nil {
+		return first
+	}
+	return candidate
 }
 
 func fetchIssueRelationshipsBatchContext(ctx context.Context, owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {

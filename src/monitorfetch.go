@@ -14,9 +14,10 @@ import (
 
 // monitorSectionData is one section's fetch outcome.
 type monitorSectionData struct {
-	Kind  monitorRowKind
-	Total int
-	Rows  []monitorRow
+	Kind          monitorRowKind
+	Total         int
+	Rows          []monitorRow
+	sourceIndexes []int
 }
 
 // monitorFetchResult is the complete payload for one refresh cycle.
@@ -489,10 +490,13 @@ func monitorHierarchyErrorRow(result *monitorFetchResult, path []any) (*monitorR
 	if !ok || sectionIndex < 0 || sectionIndex >= len(result.IssueSections) {
 		return nil, "", false
 	}
-	if rowIndex < 0 || rowIndex >= len(result.IssueSections[sectionIndex].Rows) {
-		return nil, "", false
+	section := &result.IssueSections[sectionIndex]
+	for index, sourceIndex := range section.sourceIndexes {
+		if sourceIndex == rowIndex {
+			return &section.Rows[index], field, true
+		}
 	}
-	return &result.IssueSections[sectionIndex].Rows[rowIndex], field, true
+	return nil, "", false
 }
 
 func parseMonitorHierarchyErrorPath(path []any) (int, int, string, bool) {
@@ -572,9 +576,10 @@ func decodeMonitorIssueSection(raw json.RawMessage, now time.Time) monitorSectio
 		return monitorSectionData{Kind: monitorKindIssue}
 	}
 	rows := make([]monitorRow, 0, len(nodes))
-	for _, node := range nodes {
+	sourceIndexes := make([]int, 0, len(nodes))
+	for index, node := range nodes {
 		var issueNode monitorIssueNode
-		if json.Unmarshal(node, &issueNode) != nil {
+		if json.Unmarshal(node, &issueNode) != nil || issueNode.Number <= 0 {
 			continue
 		}
 		var fields map[string]json.RawMessage
@@ -582,8 +587,9 @@ func decodeMonitorIssueSection(raw json.RawMessage, now time.Time) monitorSectio
 			decodeMonitorIssueHierarchy(fields, &issueNode)
 		}
 		rows = append(rows, mapMonitorIssueNode(issueNode, now))
+		sourceIndexes = append(sourceIndexes, index)
 	}
-	return monitorSectionData{Kind: monitorKindIssue, Total: entry.IssueCount, Rows: rows}
+	return monitorSectionData{Kind: monitorKindIssue, Total: entry.IssueCount, Rows: rows, sourceIndexes: sourceIndexes}
 }
 
 func decodeMonitorSearchEntry(raw json.RawMessage) (monitorSearchEntry, []json.RawMessage, bool) {

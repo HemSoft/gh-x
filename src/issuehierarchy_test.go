@@ -155,6 +155,44 @@ func TestFetchIssueHierarchiesBatchesAndPreservesHost(t *testing.T) {
 	}
 }
 
+func TestFetchIssueHierarchiesStopsAfterContextCancellation(t *testing.T) {
+	saved := fetchIssueHierarchiesBatchFunc
+	t.Cleanup(func() { fetchIssueHierarchiesBatchFunc = saved })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	fetchIssueHierarchiesBatchFunc = func(_ context.Context, _, _, _ string, numbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+		calls++
+		result := make(map[int]issueHierarchy, len(numbers))
+		for _, number := range numbers {
+			result[number] = issueHierarchy{}
+		}
+		cancel()
+		return result, nil, nil
+	}
+	numbers := make([]int, 35)
+	for index := range numbers {
+		numbers[index] = index + 1
+	}
+
+	result, unavailable, err := fetchIssueHierarchiesContext(ctx, "owner", "repo", "github.com", numbers)
+	if calls != 1 {
+		t.Fatalf("batch calls = %d, want 1", calls)
+	}
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled hierarchy fetch error = %v", err)
+	}
+	if len(result) != relationshipBatchSize {
+		t.Fatalf("completed hierarchy entries = %d, want %d", len(result), relationshipBatchSize)
+	}
+	for _, number := range numbers[relationshipBatchSize:] {
+		missing := unavailable[number]
+		if !missing.Parent || !missing.SubIssues {
+			t.Fatalf("remaining issue %d availability = %#v", number, missing)
+		}
+	}
+}
+
 func TestFetchIssueHierarchiesBatchUsesOneGraphQLRequest(t *testing.T) {
 	saved := ghExecFunc
 	t.Cleanup(func() { ghExecFunc = saved })
