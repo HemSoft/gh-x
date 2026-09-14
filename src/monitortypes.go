@@ -36,6 +36,8 @@ type monitorRow struct {
 	AIClean   *bool
 	Branch    string
 	Assignees string
+	Parent    string
+	SubIssues string
 	Labels    []string
 	Milestone string
 	Body      string

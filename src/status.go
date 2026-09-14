@@ -79,6 +79,7 @@ type statusDashboard struct {
 	Issues              []displayIssue
 	IssuesErr           error
 	IssuesRelErr        error
+	IssuesHierarchyErr  error
 	PullRequests        []displayPullRequest
 	PullRequestsErr     error
 	PullRequestsSuppErr error
@@ -190,6 +191,7 @@ func fetchStatusDashboard(colorEnabled bool) (statusDashboard, error) {
 	if issueErr == nil {
 		dashboard.Issues = issueResult.Display
 		dashboard.IssuesRelErr = issueResult.RelErr
+		dashboard.IssuesHierarchyErr = issueResult.HierarchyErr
 	}
 
 	prOptions := defaultListOptions()
@@ -863,6 +865,9 @@ func renderStatusIssueSection(stdout io.Writer, styler tableStyler, dashboard st
 	}
 	if dashboard.IssuesRelErr != nil {
 		fmt.Fprintln(stdout, styler.dim("Pull request relationships unavailable: "+conciseStatusError(dashboard.IssuesRelErr)).styled)
+	}
+	if dashboard.IssuesHierarchyErr != nil {
+		fmt.Fprintln(stdout, styler.dim("Issue hierarchy unavailable: "+conciseStatusError(dashboard.IssuesHierarchyErr)).styled)
 	}
 	if len(dashboard.Issues) >= statusListLimit {
 		fmt.Fprintf(stdout, "\nShowing %d issues (limit reached). Use gh x issue list --limit to show more.\n", statusListLimit)

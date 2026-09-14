@@ -45,6 +45,8 @@ func monitorPRColumns() []monitorColumn {
 func monitorIssueColumns() []monitorColumn {
 	return []monitorColumn{
 		{Title: "#", Width: 6},
+		{Title: "Parent", Width: 14, Flex: true, Min: 6},
+		{Title: "Sub", Width: 5},
 		{Title: "Title", Width: monitorTitleMinWidth, Flex: true, Primary: true, Min: monitorTitleMinWidth},
 		{Title: "Repo", Width: 12, Flex: true, Min: 8},
 		{Title: "Author", Width: 12, Flex: true, Min: 8},
@@ -65,7 +67,7 @@ func monitorColumnsForKind(kind monitorRowKind) []monitorColumn {
 func monitorRowCells(kind monitorRowKind, row monitorRow) []string {
 	if kind == monitorKindIssue {
 		return []string{
-			strconv.Itoa(row.Number), row.Title, row.Repo, row.Author,
+			strconv.Itoa(row.Number), row.Parent, row.SubIssues, row.Title, row.Repo, row.Author,
 			row.State, strings.Join(row.Labels, ","), row.Assignees, row.Updated,
 		}
 	}

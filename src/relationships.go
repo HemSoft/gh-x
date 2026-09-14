@@ -13,6 +13,14 @@ const relationshipBatchSize = 30
 type linkedReference struct {
 	Number int    `json:"number"`
 	URL    string `json:"url"`
+	Text   string `json:"-"`
+}
+
+func (r linkedReference) displayText() string {
+	if r.Text != "" {
+		return r.Text
+	}
+	return fmt.Sprintf("#%d", r.Number)
 }
 
 type linkedReferenceConnection struct {
@@ -96,7 +104,7 @@ func (s tableStyler) styleRelationshipText(text string, refs []linkedReference) 
 	var styled strings.Builder
 	remaining := text
 	for _, ref := range refs {
-		token := fmt.Sprintf("#%d", ref.Number)
+		token := ref.displayText()
 		index := strings.Index(remaining, token)
 		if index < 0 {
 			break

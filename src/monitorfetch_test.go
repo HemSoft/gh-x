@@ -260,10 +260,62 @@ func TestBuildMonitorGraphQLQueryShape(t *testing.T) {
 		`is0: search(query: "is:issue is:open assignee:@me repo:o/r1 repo:o/r2"`,
 		"... on PullRequest",
 		"... on Issue",
+		"parent { number url repository { nameWithOwner } }",
+		"subIssuesSummary { completed total }",
 	} {
 		if !strings.Contains(query, want) {
 			t.Fatalf("query missing %q\n%s", want, query)
 		}
+	}
+}
+
+func TestMonitorHierarchyFallbackPreservesIssueRows(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+
+	calls := 0
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		calls++
+		query := strings.Join(args, " ")
+		if strings.Contains(query, "subIssuesSummary") {
+			body := `{"data":null,"errors":[{"message":"Cannot query field \"subIssuesSummary\" on type \"Issue\"."}]}`
+			return *bytes.NewBufferString(body), *bytes.NewBufferString("GraphQL: Cannot query field"), errors.New("exit status 1")
+		}
+		body := `{"data":{"is0":{"issueCount":1,"nodes":[{"number":7,"title":"Legacy issue","state":"OPEN","repository":{"nameWithOwner":"owner/repo"}}]}}}`
+		return *bytes.NewBufferString(body), bytes.Buffer{}, nil
+	}
+
+	cfg := defaultMonitorConfig("owner/repo")
+	queries, err := buildMonitorHostQueries(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fetchMonitorHost(context.Background(), queries[0], cfg, time.Time{})
+	if err != nil {
+		t.Fatalf("fallback fetch failed: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("GraphQL calls = %d, want hierarchy query plus one fallback", calls)
+	}
+	row := result.IssueSections[0].Rows[0]
+	if row.Parent != "?" || row.SubIssues != "?" {
+		t.Fatalf("fallback hierarchy = %q %q, want ? ?", row.Parent, row.SubIssues)
+	}
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "Issue hierarchy is unavailable") {
+		t.Fatalf("fallback warning = %v", result.Warnings)
+	}
+}
+
+func TestParseMonitorResponseMarksOnlyErroredHierarchyFieldUnavailable(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/repo")
+	body := `{"data":{"is0":{"issueCount":1,"nodes":[{"number":7,"title":"Issue","state":"OPEN","repository":{"nameWithOwner":"owner/repo"},"parent":null,"subIssuesSummary":{"completed":1,"total":2}}]}},"errors":[{"path":["is0","nodes",0,"parent"],"message":"parent hidden"}]}`
+	result, err := parseSingleMonitorResponse(t, []byte(body), cfg, time.Time{})
+	if err != nil {
+		t.Fatalf("parseMonitorHostResponse returned error: %v", err)
+	}
+	row := result.IssueSections[0].Rows[0]
+	if row.Parent != "?" || row.SubIssues != "1/2" {
+		t.Fatalf("partial hierarchy = %q %q, want ? and 1/2", row.Parent, row.SubIssues)
 	}
 }
 
@@ -305,7 +357,12 @@ func TestParseMonitorResponseMapsPRAndIssueSections(t *testing.T) {
 					"repository": map[string]any{"nameWithOwner": "owner/repo"},
 					"assignees":  map[string]any{"nodes": []map[string]any{{"login": "bclark"}}},
 					"labels":     map[string]any{"nodes": []map[string]any{{"name": "urgent"}}},
-					"body":       "Steps to reproduce…",
+					"parent": map[string]any{
+						"number": 3, "url": "https://github.com/other/tasks/issues/3",
+						"repository": map[string]any{"nameWithOwner": "other/tasks"},
+					},
+					"subIssuesSummary": map[string]any{"completed": 2, "total": 4},
+					"body":             "Steps to reproduce…",
 				}},
 			},
 		},
@@ -342,6 +399,9 @@ func TestParseMonitorResponseMapsPRAndIssueSections(t *testing.T) {
 	issue := result.IssueSections[0].Rows[0]
 	if issue.Kind != monitorKindIssue || issue.Number != 7 || issue.Assignees != "bclark" {
 		t.Fatalf("issue row mismatched: %+v", issue)
+	}
+	if issue.Parent != "other/tasks#3" || issue.SubIssues != "2/4" {
+		t.Fatalf("issue hierarchy mismatched: %+v", issue)
 	}
 	if issue.Updated == "" {
 		t.Fatal("relative updated time not rendered")

@@ -326,6 +326,9 @@ func TestBuildDisplayIssue(t *testing.T) {
 			if got.URL != tt.expect.URL {
 				t.Errorf("URL: got %q, want %q", got.URL, tt.expect.URL)
 			}
+			if got.Parent != "-" || got.SubIssues != "-" {
+				t.Errorf("hierarchy defaults: got parent %q and sub-issues %q, want - and -", got.Parent, got.SubIssues)
+			}
 		})
 	}
 }
@@ -534,7 +537,7 @@ func TestRenderIssueTableHeaders(t *testing.T) {
 	if lines[0] != lines[2] || strings.Trim(lines[0], "─") != "" {
 		t.Fatalf("expected matching horizontal rules around header, got %q and %q", lines[0], lines[2])
 	}
-	for _, h := range []string{"#", "PRs", "Title", "Author", "State", "Labels", "Assignees", "Updated"} {
+	for _, h := range []string{"#", "PRs", "Parent", "Sub", "Title", "Author", "State", "Labels", "Assignees", "Updated"} {
 		if !strings.Contains(lines[1], h) {
 			t.Fatalf("expected header %q in output: %q", h, output)
 		}
@@ -542,6 +545,7 @@ func TestRenderIssueTableHeaders(t *testing.T) {
 }
 
 func TestExecuteIssueListHappyPath(t *testing.T) {
+	stubEmptyIssueHierarchies(t)
 	origFetch := fetchIssuesFunc
 	defer func() { fetchIssuesFunc = origFetch }()
 	origRelationships := fetchIssueRelationshipsFunc
@@ -681,6 +685,7 @@ func TestIssueRouting(t *testing.T) {
 }
 
 func TestExecuteIssueListAuthorResolution(t *testing.T) {
+	stubEmptyIssueHierarchies(t)
 	origFetch := fetchIssuesFunc
 	defer func() { fetchIssuesFunc = origFetch }()
 	origRelationships := fetchIssueRelationshipsFunc
@@ -723,6 +728,7 @@ func TestExecuteIssueListAuthorResolution(t *testing.T) {
 }
 
 func TestFetchDisplayIssuesRelationships(t *testing.T) {
+	stubEmptyIssueHierarchies(t)
 	savedIssues := fetchIssuesFunc
 	savedRelationships := fetchIssueRelationshipsFunc
 	defer func() {
@@ -789,6 +795,7 @@ func TestFetchIssueRelationshipDataUsesConfiguredSSHHost(t *testing.T) {
 }
 
 func TestFetchDisplayIssuesRelationshipFailure(t *testing.T) {
+	stubEmptyIssueHierarchies(t)
 	savedIssues := fetchIssuesFunc
 	savedRelationships := fetchIssueRelationshipsFunc
 	defer func() {
@@ -812,6 +819,19 @@ func TestFetchDisplayIssuesRelationshipFailure(t *testing.T) {
 	}
 	if result.RelErr == nil {
 		t.Fatal("expected relationship failure to be carried for display")
+	}
+}
+
+func stubEmptyIssueHierarchies(t *testing.T) {
+	t.Helper()
+	saved := fetchIssueHierarchiesFunc
+	t.Cleanup(func() { fetchIssueHierarchiesFunc = saved })
+	fetchIssueHierarchiesFunc = func(_, _, _ string, numbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+		result := make(map[int]issueHierarchy, len(numbers))
+		for _, number := range numbers {
+			result[number] = issueHierarchy{}
+		}
+		return result, nil, nil
 	}
 }
 

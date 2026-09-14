@@ -333,6 +333,7 @@ func TestParsePRSupplementalNodeTreatsIncompleteRelationshipsAsUnavailable(t *te
 
 func TestRelationshipColumnsRenderInStatus(t *testing.T) {
 	issueRefs := []linkedReference{{Number: 25, URL: "https://github.com/owner/repo/pull/25"}}
+	parentRefs := []linkedReference{{Number: 3, URL: "https://github.com/owner/repo/issues/3", Text: "#3"}}
 	prRefs := []linkedReference{{Number: 18, URL: "https://github.com/owner/repo/issues/18"}}
 	dashboard := statusDashboard{
 		Repository:        "owner/repo",
@@ -341,7 +342,7 @@ func TestRelationshipColumnsRenderInStatus(t *testing.T) {
 		DefaultCheckedOut: true,
 		CurrentStatus:     statusSummary{Branch: "main", Upstream: "origin/main"},
 		Issues: []displayIssue{{
-			Number: 7, PullRequests: "#25", pullRequestRefs: issueRefs, Title: "Issue", State: "open",
+			Number: 7, PullRequests: "#25", pullRequestRefs: issueRefs, Parent: "#3", parentRefs: parentRefs, SubIssues: "1/2", Title: "Issue", State: "open",
 		}},
 		PullRequests: []displayPullRequest{{
 			Number: 25, Issues: "#18", issueRefs: prRefs, Title: "PR", State: "open",
@@ -353,7 +354,7 @@ func TestRelationshipColumnsRenderInStatus(t *testing.T) {
 		t.Fatalf("renderStatus returned error: %v", err)
 	}
 	text := output.String()
-	for _, want := range []string{"PRs", "Issues", "#25", "#18"} {
+	for _, want := range []string{"PRs", "Parent", "Sub", "Issues", "#25", "#3", "1/2", "#18"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status output missing %q: %s", want, text)
 		}
@@ -385,6 +386,7 @@ func TestFetchIssueRelationshipsBatchRecoversHealthyAliasesFromPartialError(t *t
 }
 
 func TestFetchDisplayIssuesMarksOnlyUnavailableIssueUnknown(t *testing.T) {
+	stubEmptyIssueHierarchies(t)
 	savedIssues := fetchIssuesFunc
 	savedRelationships := fetchIssueRelationshipsFunc
 	defer func() {

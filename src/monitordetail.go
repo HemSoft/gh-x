@@ -30,6 +30,8 @@ func monitorDetailMetadata(row monitorRow) []monitorDetailLine {
 	} else {
 		lines = append(lines,
 			monitorDetailLine{label: "State", value: row.State},
+			monitorDetailLine{label: "Parent", value: row.Parent},
+			monitorDetailLine{label: "Sub-issues", value: row.SubIssues},
 			monitorDetailLine{label: "Assignees", value: row.Assignees},
 		)
 	}

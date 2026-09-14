@@ -774,7 +774,8 @@ func TestRenderStatusShowsSupplementalDiagnostics(t *testing.T) {
 			{Number: 332, Title: "Linked issue", State: "open", PullRequests: "?"},
 			{Number: 300, Title: "Healthy issue", State: "open", PullRequests: "#333"},
 		},
-		IssuesRelErr: fmt.Errorf("gh api graphql: Could not resolve to a Issue with the number of 998."),
+		IssuesRelErr:       fmt.Errorf("gh api graphql: Could not resolve to a Issue with the number of 998."),
+		IssuesHierarchyErr: errors.New("hierarchy fields unavailable"),
 		PullRequests: []displayPullRequest{
 			{Number: 333, Title: "Open PR", State: "open", AIReview: "?", Comments: "?", Checks: "pending", Branch: "feature", Updated: "2m"},
 		},
@@ -792,6 +793,9 @@ func TestRenderStatusShowsSupplementalDiagnostics(t *testing.T) {
 	if !strings.Contains(output, "Pull request relationships unavailable: gh api graphql: Could not resolve to a Issue with the number of 998.") {
 		t.Fatalf("issue section must explain unavailable relationships:\n%s", output)
 	}
+	if !strings.Contains(output, "Issue hierarchy unavailable: hierarchy fields unavailable") {
+		t.Fatalf("issue section must explain unavailable hierarchy data:\n%s", output)
+	}
 	// The healthy issue relationship still renders beside the diagnostic.
 	if !strings.Contains(output, "#300") {
 		t.Fatalf("healthy issue row must keep its relationship:\n%s", output)
@@ -803,8 +807,9 @@ func TestFetchStatusDashboardKeepsSupplementalDiagnostics(t *testing.T) {
 	statusRepoLabelFunc = func(string) string { return "owner/repo" }
 	statusIssueListFunc = func(issueListOptions, time.Time) (issueListResult, error) {
 		return issueListResult{
-			Display: []displayIssue{{Number: 7, State: "open", PullRequests: "?"}},
-			RelErr:  errors.New("relationships offline"),
+			Display:      []displayIssue{{Number: 7, State: "open", PullRequests: "?", Parent: "?", SubIssues: "?"}},
+			RelErr:       errors.New("relationships offline"),
+			HierarchyErr: errors.New("hierarchy offline"),
 		}, nil
 	}
 	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
@@ -826,6 +831,9 @@ func TestFetchStatusDashboardKeepsSupplementalDiagnostics(t *testing.T) {
 	}
 	if dashboard.IssuesRelErr == nil || dashboard.IssuesRelErr.Error() != "relationships offline" {
 		t.Fatalf("IssuesRelErr = %v, want relationships offline", dashboard.IssuesRelErr)
+	}
+	if dashboard.IssuesHierarchyErr == nil || dashboard.IssuesHierarchyErr.Error() != "hierarchy offline" {
+		t.Fatalf("IssuesHierarchyErr = %v, want hierarchy offline", dashboard.IssuesHierarchyErr)
 	}
 	if dashboard.PullRequestsSuppErr == nil || dashboard.PullRequestsSuppErr.Error() != "supplemental offline" {
 		t.Fatalf("PullRequestsSuppErr = %v, want supplemental offline", dashboard.PullRequestsSuppErr)

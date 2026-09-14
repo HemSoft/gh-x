@@ -379,9 +379,17 @@ func TestIssueColumnShape(t *testing.T) {
 	for i, col := range cols {
 		labels[i] = col.Title
 	}
-	want := "#,Title,Repo,Author,State,Labels,Assignees,Upd"
+	want := "#,Parent,Sub,Title,Repo,Author,State,Labels,Assignees,Upd"
 	if strings.Join(labels, ",") != want {
 		t.Fatalf("issue columns changed: %s", labels)
+	}
+}
+
+func TestIssueRowCellsIncludeHierarchy(t *testing.T) {
+	row := monitorRow{Number: 7, Parent: "other/tasks#3", SubIssues: "2/4", Title: "Nested work", Repo: "owner/repo", Author: "alice", State: "open", Updated: "1h"}
+	cells := monitorRowCells(monitorKindIssue, row)
+	if len(cells) != 10 || cells[1] != "other/tasks#3" || cells[2] != "2/4" || cells[3] != "Nested work" {
+		t.Fatalf("issue cells = %v", cells)
 	}
 }
 
