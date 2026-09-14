@@ -117,6 +117,8 @@ func monitorFieldChanges(before, after monitorRow) []string {
 	appendIfChanged("Approvals", strconv.Itoa(before.Approvals), strconv.Itoa(after.Approvals))
 	appendIfChanged("Checks", before.Checks, after.Checks)
 	appendIfChanged("Comments", before.Comments, after.Comments)
+	appendIfChanged("Parent", before.Parent, after.Parent)
+	appendIfChanged("Sub-issues", before.SubIssues, after.SubIssues)
 	return fields
 }
 

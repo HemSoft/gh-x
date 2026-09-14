@@ -102,6 +102,24 @@ func TestMonitorFieldChangesIgnoresEqualValues(t *testing.T) {
 	}
 }
 
+func TestMonitorFieldChangesTracksIssueHierarchy(t *testing.T) {
+	before := monitorRowForTest("o/r", 7, "open")
+	before.Parent = "-"
+	before.SubIssues = "1/2"
+	after := before
+	after.Parent = "#3"
+	after.SubIssues = "2/2"
+
+	fields := monitorFieldChanges(before, after)
+	if len(fields) != 2 || fields[0] != "Parent - -> #3" || fields[1] != "Sub-issues 1/2 -> 2/2" {
+		t.Fatalf("hierarchy changes = %v", fields)
+	}
+	change := diffMonitorRow(before, after)
+	if change == nil || !strings.Contains(change.Summary, "Parent") || !strings.Contains(change.Summary, "Sub-issues") {
+		t.Fatalf("hierarchy diff = %#v", change)
+	}
+}
+
 func TestDiffMonitorSectionsPairsByIndex(t *testing.T) {
 	previous := []monitorSectionData{
 		{Kind: monitorKindPR, Rows: []monitorRow{monitorRowForTest("o/r", 5, "open")}},
