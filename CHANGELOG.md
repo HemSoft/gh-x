@@ -14,6 +14,11 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+## [0.13.4] - 2026-09-14
+
+- Show parent and sub-issue progress across issue views (#121)
+- docs: record v0.13.3 release (#119)
+
 ## [0.13.3] - 2026-09-12
 
 - fix: bound and cancel GitHub subprocesses (#118)
@@ -177,7 +182,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.13.3...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.13.4...HEAD
+[0.13.4]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.4
 [0.13.3]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.3
 [0.13.2]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.2
 [0.13.1]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.1
