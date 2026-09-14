@@ -24,6 +24,7 @@ func TestIssueParentDisplay(t *testing.T) {
 		{name: "same repository", parent: sameRepo, want: "#7", wantRefs: 1},
 		{name: "same repository ignores case", parent: testIssueParent(8, "OWNER/REPO"), want: "#8", wantRefs: 1},
 		{name: "cross repository", parent: otherRepo, want: "other/tasks#9", wantRefs: 1},
+		{name: "malformed", parent: &issueParentReference{}, want: "?"},
 		{name: "unavailable", parent: sameRepo, unavailable: true, want: "?"},
 	}
 
@@ -105,6 +106,9 @@ func TestParseIssueHierarchiesRejectsMalformedData(t *testing.T) {
 		{name: "invalid json", input: `not json`},
 		{name: "negative progress", input: `{"data":{"repository":{"issue1":{"number":1,"parent":null,"subIssuesSummary":{"completed":-1,"total":2}}}}}`},
 		{name: "completed exceeds total", input: `{"data":{"repository":{"issue1":{"number":1,"parent":null,"subIssuesSummary":{"completed":3,"total":2}}}}}`},
+		{name: "missing completed", input: `{"data":{"repository":{"issue1":{"number":1,"parent":null,"subIssuesSummary":{"total":2}}}}}`},
+		{name: "missing total", input: `{"data":{"repository":{"issue1":{"number":1,"parent":null,"subIssuesSummary":{"completed":0}}}}}`},
+		{name: "null completed", input: `{"data":{"repository":{"issue1":{"number":1,"parent":null,"subIssuesSummary":{"completed":null,"total":2}}}}}`},
 	}
 
 	for _, test := range tests {

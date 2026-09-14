@@ -290,6 +290,11 @@ func TestIssueHierarchyUnsupportedRecognizesServerWording(t *testing.T) {
 			}
 		})
 	}
+
+	dataWithMatchingBody := []byte(`{"data":{"is0":{"nodes":[{"title":"Unknown field subIssuesSummary"}]}}}`)
+	if issueHierarchyUnsupported(dataWithMatchingBody, "") {
+		t.Fatal("ordinary response data must not trigger the unsupported-schema fallback")
+	}
 }
 
 func TestMonitorHierarchyFallbackPreservesIssueRows(t *testing.T) {
@@ -339,6 +344,19 @@ func TestParseMonitorResponseMarksOnlyErroredHierarchyFieldUnavailable(t *testin
 	row := result.IssueSections[0].Rows[0]
 	if row.Parent != "?" || row.SubIssues != "1/2" {
 		t.Fatalf("partial hierarchy = %q %q, want ? and 1/2", row.Parent, row.SubIssues)
+	}
+}
+
+func TestParseMonitorResponseRejectsMalformedHierarchyFields(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/repo")
+	body := `{"data":{"is0":{"issueCount":1,"nodes":[{"number":7,"title":"Issue","state":"OPEN","repository":{"nameWithOwner":"owner/repo"},"parent":{"number":0,"url":"","repository":{"nameWithOwner":""}},"subIssuesSummary":{"total":2}}]}}}`
+	result, err := parseSingleMonitorResponse(t, []byte(body), cfg, time.Time{})
+	if err != nil {
+		t.Fatalf("parseMonitorHostResponse returned error: %v", err)
+	}
+	row := result.IssueSections[0].Rows[0]
+	if row.Parent != "?" || row.SubIssues != "?" {
+		t.Fatalf("malformed hierarchy = %q %q, want ? ?", row.Parent, row.SubIssues)
 	}
 }
 

@@ -316,7 +316,22 @@ func fetchMonitorHostWithoutHierarchy(ctx context.Context, request monitorHostQu
 }
 
 func issueHierarchyUnsupported(stdout []byte, stderr string) bool {
-	message := strings.ToLower(string(stdout) + "\n" + stderr)
+	var envelope struct {
+		Errors []monitorGraphQLError `json:"errors"`
+	}
+	if json.Unmarshal(stdout, &envelope) == nil && len(envelope.Errors) > 0 {
+		for _, entry := range envelope.Errors {
+			if unsupportedHierarchyMessage(entry.Message) {
+				return true
+			}
+		}
+		return false
+	}
+	return unsupportedHierarchyMessage(stderr)
+}
+
+func unsupportedHierarchyMessage(message string) bool {
+	message = strings.ToLower(message)
 	mentionsField := strings.Contains(message, "subissuessummary") || strings.Contains(message, "parent")
 	unsupported := strings.Contains(message, "cannot query field") || strings.Contains(message, "doesn't exist") || strings.Contains(message, "unknown field")
 	return mentionsField && unsupported
@@ -564,9 +579,7 @@ func decodeMonitorIssueSection(raw json.RawMessage, now time.Time) monitorSectio
 		}
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(node, &fields) == nil {
-			_, issueNode.parentAvailable = fields["parent"]
-			_, issueNode.subIssuesAvailable = fields["subIssuesSummary"]
-			issueNode.subIssuesAvailable = issueNode.subIssuesAvailable && issueNode.SubIssuesSummary != nil && validSubIssuesSummary(*issueNode.SubIssuesSummary)
+			decodeMonitorIssueHierarchy(fields, &issueNode)
 		}
 		rows = append(rows, mapMonitorIssueNode(issueNode, now))
 	}
@@ -583,6 +596,17 @@ func decodeMonitorSearchEntry(raw json.RawMessage) (monitorSearchEntry, []json.R
 		return entry, nil, false
 	}
 	return entry, nodes, true
+}
+
+func decodeMonitorIssueHierarchy(fields map[string]json.RawMessage, node *monitorIssueNode) {
+	parentRaw, parentPresent := fields["parent"]
+	node.parentAvailable = parentPresent && (string(parentRaw) == "null" || node.Parent != nil && validIssueParent(*node.Parent))
+
+	summary, unavailable := parseSubIssuesSummary(fields)
+	node.subIssuesAvailable = !unavailable
+	if !unavailable {
+		node.SubIssuesSummary = &summary
+	}
 }
 
 func sortAllMonitorSections(result *monitorFetchResult) {

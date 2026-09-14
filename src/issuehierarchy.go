@@ -167,19 +167,35 @@ func parseIssueParent(fields map[string]json.RawMessage) (*issueParentReference,
 		return nil, false
 	}
 	var parent issueParentReference
-	if json.Unmarshal(parentRaw, &parent) != nil || parent.Number <= 0 || parent.URL == "" || parent.Repository.NameWithOwner == "" {
+	if json.Unmarshal(parentRaw, &parent) != nil || !validIssueParent(parent) {
 		return nil, true
 	}
 	return &parent, false
 }
 
+func validIssueParent(parent issueParentReference) bool {
+	return parent.Number > 0 && parent.URL != "" && parent.Repository.NameWithOwner != ""
+}
+
 func parseSubIssuesSummary(fields map[string]json.RawMessage) (issueSubIssuesSummary, bool) {
 	summaryRaw, present := fields["subIssuesSummary"]
+	if !present || string(summaryRaw) == "null" {
+		return issueSubIssuesSummary{}, true
+	}
+	var summaryFields map[string]json.RawMessage
+	if json.Unmarshal(summaryRaw, &summaryFields) != nil || !hasJSONValue(summaryFields, "completed") || !hasJSONValue(summaryFields, "total") {
+		return issueSubIssuesSummary{}, true
+	}
 	var summary issueSubIssuesSummary
-	if !present || string(summaryRaw) == "null" || json.Unmarshal(summaryRaw, &summary) != nil || !validSubIssuesSummary(summary) {
+	if json.Unmarshal(summaryRaw, &summary) != nil || !validSubIssuesSummary(summary) {
 		return issueSubIssuesSummary{}, true
 	}
 	return summary, false
+}
+
+func hasJSONValue(fields map[string]json.RawMessage, name string) bool {
+	value, ok := fields[name]
+	return ok && len(value) > 0 && string(value) != "null"
 }
 
 func validSubIssuesSummary(summary issueSubIssuesSummary) bool {
@@ -231,6 +247,9 @@ func issueParentDisplay(parent *issueParentReference, currentRepo string, unavai
 	}
 	if parent == nil {
 		return "-", nil
+	}
+	if !validIssueParent(*parent) {
+		return "?", nil
 	}
 	text := fmt.Sprintf("#%d", parent.Number)
 	if !strings.EqualFold(parent.Repository.NameWithOwner, currentRepo) {
