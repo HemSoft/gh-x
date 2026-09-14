@@ -204,6 +204,14 @@ func TestDetailMetadataPerKind(t *testing.T) {
 			t.Fatalf("issue metadata missing %s: %q", want, issueText)
 		}
 	}
+
+	standalone := monitorRow{Kind: monitorKindIssue, Number: 4, State: "open", Repo: "o/r", Parent: "-", SubIssues: "-"}
+	rendered := strings.Join(renderMonitorMetadataLines(monitorDetailMetadata(standalone), 80), "\n")
+	for _, want := range []string{"Parent:", "Sub-issues:"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("standalone issue detail omitted %s: %q", want, rendered)
+		}
+	}
 }
 
 func detailLinesText(lines []monitorDetailLine) string {

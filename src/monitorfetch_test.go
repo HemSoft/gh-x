@@ -269,6 +269,29 @@ func TestBuildMonitorGraphQLQueryShape(t *testing.T) {
 	}
 }
 
+func TestIssueHierarchyUnsupportedRecognizesServerWording(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{name: "cannot query parent", message: `Cannot query field "parent" on type "Issue".`, want: true},
+		{name: "parent does not exist", message: `Field 'parent' doesn't exist on type 'Issue'.`, want: true},
+		{name: "unknown parent", message: `Unknown field parent on Issue.`, want: true},
+		{name: "unknown sub-issues summary", message: `Unknown field subIssuesSummary on Issue.`, want: true},
+		{name: "unrelated field", message: `Unknown field project on Issue.`},
+		{name: "ordinary parent error", message: `Parent issue is inaccessible.`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := issueHierarchyUnsupported(nil, test.message); got != test.want {
+				t.Fatalf("issueHierarchyUnsupported() = %t, want %t for %q", got, test.want, test.message)
+			}
+		})
+	}
+}
+
 func TestMonitorHierarchyFallbackPreservesIssueRows(t *testing.T) {
 	saved := monitorGHExecFunc
 	t.Cleanup(func() { monitorGHExecFunc = saved })

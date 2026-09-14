@@ -317,7 +317,7 @@ func fetchMonitorHostWithoutHierarchy(ctx context.Context, request monitorHostQu
 
 func issueHierarchyUnsupported(stdout []byte, stderr string) bool {
 	message := strings.ToLower(string(stdout) + "\n" + stderr)
-	mentionsField := strings.Contains(message, "subissuessummary") || strings.Contains(message, "cannot query field \"parent\"")
+	mentionsField := strings.Contains(message, "subissuessummary") || strings.Contains(message, "parent")
 	unsupported := strings.Contains(message, "cannot query field") || strings.Contains(message, "doesn't exist") || strings.Contains(message, "unknown field")
 	return mentionsField && unsupported
 }
