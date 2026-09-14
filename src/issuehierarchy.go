@@ -33,10 +33,6 @@ type issueHierarchyUnavailable struct {
 var fetchIssueHierarchiesBatchFunc = fetchIssueHierarchiesBatchContext
 var fetchIssueHierarchiesFunc = fetchIssueHierarchiesContext
 
-func fetchIssueHierarchies(owner, name, host string, issueNumbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
-	return fetchIssueHierarchiesContext(context.Background(), owner, name, host, issueNumbers)
-}
-
 func fetchIssueHierarchiesContext(ctx context.Context, owner, name, host string, issueNumbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
 	if len(issueNumbers) == 0 {
 		return nil, nil, nil
@@ -69,10 +65,6 @@ func hierarchyUnavailableCount(unavailable map[int]issueHierarchyUnavailable) ma
 		}
 	}
 	return result
-}
-
-func fetchIssueHierarchiesBatch(owner, name, host string, issueNumbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
-	return fetchIssueHierarchiesBatchWithGraphQL(owner, name, host, issueNumbers, fetchGraphQL)
 }
 
 func fetchIssueHierarchiesBatchContext(ctx context.Context, owner, name, host string, issueNumbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {

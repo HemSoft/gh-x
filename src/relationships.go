@@ -206,10 +206,6 @@ func hasGraphQLDataEnvelope(raw []byte) bool {
 var fetchIssueRelationshipsBatchFunc = fetchIssueRelationshipsBatchContext
 var fetchIssueRelationshipsFunc = fetchIssueRelationshipsContext
 
-func fetchIssueRelationships(owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {
-	return fetchIssueRelationshipsContext(context.Background(), owner, name, host, issueNumbers)
-}
-
 func fetchIssueRelationshipsContext(ctx context.Context, owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {
 	if len(issueNumbers) == 0 {
 		return nil, nil, nil
@@ -232,10 +228,6 @@ func fetchIssueRelationshipsContext(ctx context.Context, owner, name, host strin
 		}
 	}
 	return result, unavailable, firstPartialFetchError(firstErr, unavailable, len(issueNumbers), "issues")
-}
-
-func fetchIssueRelationshipsBatch(owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {
-	return fetchIssueRelationshipsBatchWithGraphQL(owner, name, host, issueNumbers, fetchGraphQL)
 }
 
 func fetchIssueRelationshipsBatchContext(ctx context.Context, owner, name, host string, issueNumbers []int) (map[int][]linkedReference, map[int]bool, error) {

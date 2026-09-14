@@ -149,7 +149,7 @@ func TestFetchIssueHierarchiesBatchesAndPreservesHost(t *testing.T) {
 	for index := range numbers {
 		numbers[index] = index + 1
 	}
-	result, unavailable, err := fetchIssueHierarchies("owner", "repo", "ghe.example.com", numbers)
+	result, unavailable, err := fetchIssueHierarchiesContext(context.Background(), "owner", "repo", "ghe.example.com", numbers)
 	if err != nil || calls != 2 || len(result) != 35 || len(unavailable) != 0 {
 		t.Fatalf("batch result calls=%d entries=%d unavailable=%d error=%v", calls, len(result), len(unavailable), err)
 	}
@@ -168,7 +168,7 @@ func TestFetchIssueHierarchiesBatchUsesOneGraphQLRequest(t *testing.T) {
 		return *bytes.NewBufferString(response), bytes.Buffer{}, nil
 	}
 
-	result, unavailable, err := fetchIssueHierarchiesBatch("owner", "repo", "ghe.example.com", []int{7, 9})
+	result, unavailable, err := fetchIssueHierarchiesBatchWithGraphQL("owner", "repo", "ghe.example.com", []int{7, 9}, fetchGraphQL)
 	if err != nil || calls != 1 || len(result) != 2 || len(unavailable) != 0 {
 		t.Fatalf("fetch result calls=%d result=%#v unavailable=%#v error=%v", calls, result, unavailable, err)
 	}
@@ -188,7 +188,7 @@ func TestFetchIssueHierarchiesRecoversHealthyAliasesFromPartialError(t *testing.
 		return *bytes.NewBufferString(body), *bytes.NewBufferString("gh: hidden"), errors.New("exit status 1")
 	}
 
-	result, unavailable, err := fetchIssueHierarchiesBatch("owner", "repo", "github.com", []int{7, 9})
+	result, unavailable, err := fetchIssueHierarchiesBatchWithGraphQL("owner", "repo", "github.com", []int{7, 9}, fetchGraphQL)
 	if err == nil || result[7].SubIssues.Total != 2 || unavailable[7].Parent || unavailable[7].SubIssues {
 		t.Fatalf("healthy alias lost: result=%#v unavailable=%#v error=%v", result, unavailable, err)
 	}
