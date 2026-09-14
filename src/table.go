@@ -157,11 +157,15 @@ func getTerminalWidth() int {
 // truncated (e.g., Title, Repo, Author, Branch). Each flexible column
 // has a minimum width of 10.
 func fitColumnsToTerminal(colWidths []int, flexibleCols []int, termWidth int) []int {
+	return fitColumnsToTerminalWithFloors(colWidths, flexibleCols, nil, termWidth)
+}
+
+// fitColumnsToTerminalWithFloors lets dense tables assign smaller minimums to
+// compact columns while retaining the default floor for unspecified columns.
+func fitColumnsToTerminalWithFloors(colWidths []int, flexibleCols []int, floors map[int]int, termWidth int) []int {
 	if termWidth <= 0 {
 		return colWidths
 	}
-
-	const minFlexWidth = 10
 
 	overflow := tableWidth(colWidths) - termWidth
 	if overflow <= 0 {
@@ -177,7 +181,11 @@ func fitColumnsToTerminal(colWidths []int, flexibleCols []int, termWidth int) []
 		widestIdx := -1
 		widestWidth := 0
 		for _, idx := range flexibleCols {
-			if result[idx] > widestWidth && result[idx] > minFlexWidth {
+			minWidth := 10
+			if configured, ok := floors[idx]; ok {
+				minWidth = configured
+			}
+			if result[idx] > widestWidth && result[idx] > minWidth {
 				widestWidth = result[idx]
 				widestIdx = idx
 			}

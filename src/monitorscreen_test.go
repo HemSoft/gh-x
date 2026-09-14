@@ -137,20 +137,20 @@ func TestPlanMonitorColumnsFillsAvailableWidth(t *testing.T) {
 	columns := monitorIssueColumns()
 	cells := [][]string{monitorRowCells(monitorKindIssue, row)}
 
-	planned := planMonitorColumns(columns, cells, 90)
-	if got := monitorTableOverflow(planned, 90); got != 0 {
+	planned := planMonitorColumns(columns, cells, 110)
+	if got := monitorTableOverflow(planned, 110); got != 0 {
 		t.Fatalf("planned table should consume the full width exactly, overflow=%d", got)
 	}
-	if planned[1].Width <= monitorTitleMinWidth {
-		t.Fatalf("title column should grow past its minimum: %d", planned[1].Width)
+	if planned[3].Width <= monitorTitleMinWidth {
+		t.Fatalf("title column should grow past its minimum: %d", planned[3].Width)
 	}
 
-	tight := planMonitorColumns(columns, cells, 70)
-	if got := monitorTableOverflow(tight, 70); got > 0 {
+	tight := planMonitorColumns(columns, cells, 90)
+	if got := monitorTableOverflow(tight, 90); got > 0 {
 		t.Fatalf("tight layout must still fit, overflow=%d", got)
 	}
-	if tight[1].Width != monitorTitleMinWidth {
-		t.Fatalf("title should keep its minimum when space is scarce: %d", tight[1].Width)
+	if tight[3].Width != monitorTitleMinWidth {
+		t.Fatalf("title should keep its minimum when space is scarce: %d", tight[3].Width)
 	}
 }
 
@@ -196,10 +196,21 @@ func TestDetailMetadataPerKind(t *testing.T) {
 			t.Fatalf("PR metadata missing %s: %q", want, joined)
 		}
 	}
-	issue := monitorRow{Kind: monitorKindIssue, Number: 3, State: "open", Repo: "o/r"}
+	issue := monitorRow{Kind: monitorKindIssue, Number: 3, State: "open", Repo: "o/r", Parent: "#1", SubIssues: "1/2"}
 	issueLines := monitorDetailMetadata(issue)
-	if !strings.Contains(detailLinesText(issueLines), "Assignees") {
-		t.Fatal("issue metadata missing assignees")
+	issueText := detailLinesText(issueLines)
+	for _, want := range []string{"Parent=#1", "Sub-issues=1/2", "Assignees"} {
+		if !strings.Contains(issueText, want) {
+			t.Fatalf("issue metadata missing %s: %q", want, issueText)
+		}
+	}
+
+	standalone := monitorRow{Kind: monitorKindIssue, Number: 4, State: "open", Repo: "o/r", Parent: "-", SubIssues: "-"}
+	rendered := strings.Join(renderMonitorMetadataLines(monitorDetailMetadata(standalone), 80), "\n")
+	for _, want := range []string{"Parent:", "Sub-issues:"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("standalone issue detail omitted %s: %q", want, rendered)
+		}
 	}
 }
 

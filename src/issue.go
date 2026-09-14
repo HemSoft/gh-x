@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,6 +16,7 @@ import (
 )
 
 type issueListOptions struct {
+	ctx       context.Context
 	repo      string
 	limit     int
 	state     string
@@ -48,6 +50,8 @@ type issueEntry struct {
 type displayIssue struct {
 	Number       int
 	PullRequests string
+	Parent       string
+	SubIssues    string
 	Title        string
 	Author       string
 	State        string
@@ -57,6 +61,7 @@ type displayIssue struct {
 	URL          string
 
 	pullRequestRefs []linkedReference
+	parentRefs      []linkedReference
 }
 
 const issueJSONFields = "number,title,author,state,labels,assignees,updatedAt,url"
@@ -152,7 +157,7 @@ func buildIssueListArgs(options issueListOptions) []string {
 
 func fetchIssues(options issueListOptions) ([]issueEntry, error) {
 	ghArgs := buildIssueListArgs(options)
-	stdoutBuf, stderrBuf, err := ghExecFunc(ghArgs...)
+	stdoutBuf, stderrBuf, err := execGHInContext(options.ctx, ghArgs...)
 	if err != nil {
 		return nil, wrapExecError(fmt.Errorf("gh issue list: %w", err), stderrBuf.String())
 	}
@@ -200,59 +205,113 @@ func executeIssueList(options issueListOptions, stdout io.Writer, now time.Time)
 	if err := renderIssueTable(stdout, result.Display, options, colorEnabled); err != nil {
 		return err
 	}
+	styler := newTableStyler(stdout, colorEnabled)
 	if result.RelErr != nil {
-		styler := newTableStyler(stdout, colorEnabled)
 		fmt.Fprintln(stdout, styler.dim("Pull request relationships unavailable: "+conciseStatusError(result.RelErr)).styled)
+	}
+	if result.HierarchyErr != nil {
+		fmt.Fprintln(stdout, styler.dim("Issue hierarchy unavailable: "+conciseStatusError(result.HierarchyErr)).styled)
 	}
 	return nil
 }
 
-// issueListResult carries the rendered issue rows plus the relationship
-// enrichment failure so callers can surface an actionable diagnostic without
-// conflating it with a whole-list failure.
+// issueListResult carries rendered rows and enrichment failures so callers
+// can report partial data without conflating it with a whole-list failure.
 type issueListResult struct {
-	Display []displayIssue
-	RelErr  error
+	Display      []displayIssue
+	RelErr       error
+	HierarchyErr error
+}
+
+type issueEnrichmentData struct {
+	Repository           string
+	Relationships        map[int][]linkedReference
+	RelationshipsMissing map[int]bool
+	Hierarchies          map[int]issueHierarchy
+	HierarchyMissing     map[int]issueHierarchyUnavailable
+	RelErr               error
+	HierarchyErr         error
 }
 
 func fetchDisplayIssues(options issueListOptions, now time.Time) (issueListResult, error) {
+	ctx, cancel, err := issueListOperationContext(options.ctx)
+	if err != nil {
+		return issueListResult{}, err
+	}
+	defer cancel()
+	options.ctx = ctx
+
 	issues, err := fetchIssuesFunc(options)
 	if err != nil {
 		return issueListResult{}, err
 	}
 
-	relationships, unavailable, relErr := fetchIssueRelationshipData(options.repo, issues)
-
+	enrichment := fetchIssueEnrichmentData(ctx, options.repo, issues)
 	displayIssues := make([]displayIssue, len(issues))
 	for i, entry := range issues {
 		displayIssues[i] = buildDisplayIssue(entry, now)
-		refs, found := relationships[entry.Number]
+		refs, found := enrichment.Relationships[entry.Number]
 		displayIssues[i].PullRequests, displayIssues[i].pullRequestRefs = relationshipDisplay(
 			refs,
-			unavailable[entry.Number] || !found,
+			enrichment.RelationshipsMissing[entry.Number] || !found,
 		)
+		hierarchy, hierarchyFound := enrichment.Hierarchies[entry.Number]
+		missing := enrichment.HierarchyMissing[entry.Number]
+		if !hierarchyFound {
+			missing = issueHierarchyUnavailable{Parent: true, SubIssues: true}
+		}
+		displayIssues[i].Parent, displayIssues[i].parentRefs = issueParentDisplay(hierarchy.Parent, enrichment.Repository, missing.Parent)
+		displayIssues[i].SubIssues = subIssueProgressDisplay(hierarchy.SubIssues, missing.SubIssues)
 	}
-	return issueListResult{Display: displayIssues, RelErr: relErr}, nil
+	return issueListResult{Display: displayIssues, RelErr: enrichment.RelErr, HierarchyErr: enrichment.HierarchyErr}, nil
 }
 
-func fetchIssueRelationshipData(repo string, issues []issueEntry) (map[int][]linkedReference, map[int]bool, error) {
-	if len(issues) == 0 {
-		return nil, nil, nil
+func issueListOperationContext(parent context.Context) (context.Context, context.CancelFunc, error) {
+	if parent != nil {
+		return parent, func() {}, nil
 	}
-	owner, name, err := resolveRepo(repo)
+	timeout, err := configuredTimeout(githubCommandTimeoutEnv, defaultGitHubCommandTimeout)
 	if err != nil {
-		unavailable := make(map[int]bool, len(issues))
-		for _, issue := range issues {
-			unavailable[issue.Number] = true
-		}
-		return nil, unavailable, err
+		return nil, nil, err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return ctx, cancel, nil
+}
+
+func fetchIssueEnrichmentData(ctx context.Context, repo string, issues []issueEntry) issueEnrichmentData {
+	if len(issues) == 0 {
+		return issueEnrichmentData{}
+	}
+	numbers := issueNumbers(issues)
+	owner, name, err := resolveRepoContext(ctx, repo)
+	if err != nil {
+		return issueEnrichmentData{
+			RelationshipsMissing: unavailableIssueNumbers(numbers, nil),
+			HierarchyMissing:     allHierarchyUnavailable(numbers),
+			RelErr:               err,
+			HierarchyErr:         err,
+		}
+	}
+	host := repositoryTargetHost(repo)
+	relationships, relationshipsMissing, relErr := fetchIssueRelationshipsFunc(ctx, owner, name, host, numbers)
+	hierarchies, hierarchyMissing, hierarchyErr := fetchIssueHierarchiesFunc(ctx, owner, name, host, numbers)
+	return issueEnrichmentData{
+		Repository:           owner + "/" + name,
+		Relationships:        relationships,
+		RelationshipsMissing: relationshipsMissing,
+		Hierarchies:          hierarchies,
+		HierarchyMissing:     hierarchyMissing,
+		RelErr:               relErr,
+		HierarchyErr:         hierarchyErr,
+	}
+}
+
+func issueNumbers(issues []issueEntry) []int {
 	numbers := make([]int, len(issues))
 	for i, issue := range issues {
 		numbers[i] = issue.Number
 	}
-	relationships, unavailable, relErr := fetchIssueRelationshipsFunc(owner, name, repositoryTargetHost(repo), numbers)
-	return relationships, unavailable, relErr
+	return numbers
 }
 
 func buildDisplayIssue(entry issueEntry, now time.Time) displayIssue {
@@ -264,6 +323,8 @@ func buildDisplayIssue(entry issueEntry, now time.Time) displayIssue {
 	return displayIssue{
 		Number:       entry.Number,
 		PullRequests: "-",
+		Parent:       "-",
+		SubIssues:    "-",
 		Title:        trimTitle(entry.Title, 51),
 		Author:       authorName,
 		State:        normalizeIssueState(entry.State),
@@ -354,7 +415,7 @@ func renderIssueTable(stdout io.Writer, issues []displayIssue, options issueList
 func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool) error {
 	styler := newTableStyler(stdout, colorEnabled)
 
-	headerLabels := []string{"#", "PRs", "Title", "Author", "State", "Labels", "Assignees", "Updated"}
+	headerLabels := []string{"#", "PRs", "Parent", "Sub", "Title", "Author", "State", "Labels", "Assignees", "Updated"}
 	headers := make([]tableCell, len(headerLabels))
 	for i, label := range headerLabels {
 		headers[i] = styler.header(label)
@@ -365,6 +426,8 @@ func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool)
 		rows[i] = []tableCell{
 			styler.numberCell(issue.Number, issue.URL),
 			styler.relationshipCell(issue.PullRequests, issue.pullRequestRefs),
+			styler.relationshipCell(issue.Parent, issue.parentRefs),
+			styler.dim(issue.SubIssues),
 			styler.plain(issue.Title),
 			styler.plain(issue.Author),
 			styler.issueStateCell(issue.State),
@@ -376,9 +439,7 @@ func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool)
 
 	colWidths := computeColumnWidths(headers, rows)
 
-	// Fit to terminal: PRs(1), Title(2), Author(3), Labels(5), Assignees(6) are flexible
-	flexibleCols := []int{1, 2, 3, 5, 6}
-	colWidths = fitColumnsToTerminal(colWidths, flexibleCols, getTerminalWidth())
+	colWidths, flexibleCols := fitIssueColumns(colWidths, getTerminalWidth())
 	rows = truncateCells(rows, colWidths, flexibleCols)
 
 	writeTableHeader(stdout, styler, headers, colWidths)
@@ -387,6 +448,14 @@ func renderIssueRows(stdout io.Writer, issues []displayIssue, colorEnabled bool)
 	}
 
 	return nil
+}
+
+func fitIssueColumns(colWidths []int, termWidth int) ([]int, []int) {
+	// Dense hierarchy columns can shrink below the general table floor. Floors
+	// still cover every header so writeRow always receives nonnegative padding.
+	flexibleCols := []int{1, 2, 3, 4, 5, 7, 8}
+	floors := map[int]int{1: 4, 2: 6, 3: 5, 4: 8, 5: 6, 7: 6, 8: 9}
+	return fitColumnsToTerminalWithFloors(colWidths, flexibleCols, floors, termWidth), flexibleCols
 }
 
 func writeIssueListUsage(w io.Writer) {

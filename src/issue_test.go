@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cli/go-gh/v2/pkg/repository"
 )
 
 func TestParseIssueListOptionsDefaults(t *testing.T) {
@@ -326,6 +330,9 @@ func TestBuildDisplayIssue(t *testing.T) {
 			if got.URL != tt.expect.URL {
 				t.Errorf("URL: got %q, want %q", got.URL, tt.expect.URL)
 			}
+			if got.Parent != "-" || got.SubIssues != "-" {
+				t.Errorf("hierarchy defaults: got parent %q and sub-issues %q, want - and -", got.Parent, got.SubIssues)
+			}
 		})
 	}
 }
@@ -534,14 +541,30 @@ func TestRenderIssueTableHeaders(t *testing.T) {
 	if lines[0] != lines[2] || strings.Trim(lines[0], "─") != "" {
 		t.Fatalf("expected matching horizontal rules around header, got %q and %q", lines[0], lines[2])
 	}
-	for _, h := range []string{"#", "PRs", "Title", "Author", "State", "Labels", "Assignees", "Updated"} {
+	for _, h := range []string{"#", "PRs", "Parent", "Sub", "Title", "Author", "State", "Labels", "Assignees", "Updated"} {
 		if !strings.Contains(lines[1], h) {
 			t.Fatalf("expected header %q in output: %q", h, output)
 		}
 	}
 }
 
+func TestFitIssueColumnsPreservesHeadersAtEightyColumns(t *testing.T) {
+	headers := []string{"#", "PRs", "Parent", "Sub", "Title", "Author", "State", "Labels", "Assignees", "Updated"}
+	widths := []int{4, 20, 24, 7, 40, 18, 6, 16, 18, 10}
+
+	fitted, _ := fitIssueColumns(widths, 80)
+	if got := tableWidth(fitted); got > 80 {
+		t.Fatalf("fitted issue table width = %d, want at most 80 (columns %v)", got, fitted)
+	}
+	for index, header := range headers {
+		if fitted[index] < len(header) {
+			t.Fatalf("column %d width = %d, narrower than header %q", index, fitted[index], header)
+		}
+	}
+}
+
 func TestExecuteIssueListHappyPath(t *testing.T) {
+	stubEmptyIssueHierarchies(t)
 	origFetch := fetchIssuesFunc
 	defer func() { fetchIssuesFunc = origFetch }()
 	origRelationships := fetchIssueRelationshipsFunc
@@ -562,7 +585,7 @@ func TestExecuteIssueListHappyPath(t *testing.T) {
 			},
 		}, nil
 	}
-	fetchIssueRelationshipsFunc = func(_, _, _ string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsFunc = func(_ context.Context, _, _, _ string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
 		return map[int][]linkedReference{numbers[0]: {{Number: 9, URL: "https://github.com/org/repo/pull/9"}}}, nil, nil
 	}
 
@@ -681,6 +704,7 @@ func TestIssueRouting(t *testing.T) {
 }
 
 func TestExecuteIssueListAuthorResolution(t *testing.T) {
+	stubEmptyIssueHierarchies(t)
 	origFetch := fetchIssuesFunc
 	defer func() { fetchIssuesFunc = origFetch }()
 	origRelationships := fetchIssueRelationshipsFunc
@@ -703,7 +727,7 @@ func TestExecuteIssueListAuthorResolution(t *testing.T) {
 			{Number: 1, Title: "Test", State: "OPEN", UpdatedAt: now},
 		}, nil
 	}
-	fetchIssueRelationshipsFunc = func(_, _, _ string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsFunc = func(_ context.Context, _, _, _ string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
 		return map[int][]linkedReference{numbers[0]: {}}, nil, nil
 	}
 
@@ -723,6 +747,7 @@ func TestExecuteIssueListAuthorResolution(t *testing.T) {
 }
 
 func TestFetchDisplayIssuesRelationships(t *testing.T) {
+	stubEmptyIssueHierarchies(t)
 	savedIssues := fetchIssuesFunc
 	savedRelationships := fetchIssueRelationshipsFunc
 	defer func() {
@@ -734,7 +759,7 @@ func TestFetchDisplayIssuesRelationships(t *testing.T) {
 	fetchIssuesFunc = func(_ issueListOptions) ([]issueEntry, error) {
 		return []issueEntry{{Number: 7}, {Number: 9}}, nil
 	}
-	fetchIssueRelationshipsFunc = func(owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsFunc = func(_ context.Context, owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
 		if owner != "owner" || name != "repo" || host != "ghe.example.com" {
 			t.Fatalf("relationship target = %s/%s on %s", owner, name, host)
 		}
@@ -756,7 +781,7 @@ func TestFetchDisplayIssuesRelationships(t *testing.T) {
 	}
 }
 
-func TestFetchIssueRelationshipDataUsesConfiguredSSHHost(t *testing.T) {
+func TestFetchIssueEnrichmentDataUsesConfiguredSSHHost(t *testing.T) {
 	t.Setenv("GH_REPO", "")
 	t.Setenv("GH_HOST", "")
 	withRemoteURLStub(t, "git@github.com-hemsoft:HemSoft/codexbar-ios.git")
@@ -768,8 +793,12 @@ func TestFetchIssueRelationshipDataUsesConfiguredSSHHost(t *testing.T) {
 		return defaultGitHubHost
 	})
 	savedRelationships := fetchIssueRelationshipsFunc
-	t.Cleanup(func() { fetchIssueRelationshipsFunc = savedRelationships })
-	fetchIssueRelationshipsFunc = func(owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+	savedHierarchies := fetchIssueHierarchiesFunc
+	t.Cleanup(func() {
+		fetchIssueRelationshipsFunc = savedRelationships
+		fetchIssueHierarchiesFunc = savedHierarchies
+	})
+	fetchIssueRelationshipsFunc = func(_ context.Context, owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
 		if owner != "HemSoft" || name != "codexbar-ios" || host != defaultGitHubHost {
 			t.Fatalf("relationship target = %s/%s on %s, want HemSoft/codexbar-ios on github.com", owner, name, host)
 		}
@@ -778,17 +807,124 @@ func TestFetchIssueRelationshipDataUsesConfiguredSSHHost(t *testing.T) {
 		}
 		return map[int][]linkedReference{305: {{Number: 335}}}, nil, nil
 	}
-
-	relationships, unavailable, err := fetchIssueRelationshipData("HemSoft/codexbar-ios", []issueEntry{{Number: 305}})
-	if err != nil {
-		t.Fatalf("fetchIssueRelationshipData returned error: %v", err)
+	fetchIssueHierarchiesFunc = func(_ context.Context, _, _, _ string, _ []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+		return map[int]issueHierarchy{305: {}}, nil, nil
 	}
-	if len(relationships[305]) != 1 || relationships[305][0].Number != 335 || len(unavailable) != 0 {
-		t.Fatalf("relationships = %v, unavailable = %v; want issue #305 linked to PR #335", relationships, unavailable)
+
+	enrichment := fetchIssueEnrichmentData(context.Background(), "HemSoft/codexbar-ios", []issueEntry{{Number: 305}})
+	if enrichment.RelErr != nil {
+		t.Fatalf("fetchIssueEnrichmentData returned error: %v", enrichment.RelErr)
+	}
+	if len(enrichment.Relationships[305]) != 1 || enrichment.Relationships[305][0].Number != 335 || len(enrichment.RelationshipsMissing) != 0 {
+		t.Fatalf("relationships = %v, unavailable = %v; want issue #305 linked to PR #335", enrichment.Relationships, enrichment.RelationshipsMissing)
+	}
+}
+
+func TestFetchIssueEnrichmentDataMarksAllFieldsUnavailableWhenRepoResolutionFails(t *testing.T) {
+	t.Setenv("GH_REPO", "")
+	savedCurrent := repositoryCurrentFunc
+	savedExec := ghExecContextFunc
+	t.Cleanup(func() {
+		repositoryCurrentFunc = savedCurrent
+		ghExecContextFunc = savedExec
+	})
+	repositoryCurrentFunc = func() (repository.Repository, error) {
+		return repository.Repository{}, errors.New("no repository")
+	}
+	ghExecContextFunc = func(context.Context, ...string) (bytes.Buffer, bytes.Buffer, error) {
+		return bytes.Buffer{}, bytes.Buffer{}, errors.New("fallback unavailable")
+	}
+
+	enrichment := fetchIssueEnrichmentData(context.Background(), "", []issueEntry{{Number: 7}})
+	if enrichment.RelErr == nil || enrichment.HierarchyErr == nil {
+		t.Fatalf("resolution errors = %v, %v", enrichment.RelErr, enrichment.HierarchyErr)
+	}
+	if !enrichment.RelationshipsMissing[7] {
+		t.Fatalf("relationship availability = %v", enrichment.RelationshipsMissing)
+	}
+	missing := enrichment.HierarchyMissing[7]
+	if !missing.Parent || !missing.SubIssues {
+		t.Fatalf("hierarchy availability = %#v", missing)
+	}
+}
+
+func TestFetchDisplayIssuesSharesOneGitHubDeadline(t *testing.T) {
+	t.Setenv(githubCommandTimeoutEnv, "2s")
+	savedExec := ghExecContextFunc
+	savedIssues := fetchIssuesFunc
+	savedRelationships := fetchIssueRelationshipsFunc
+	savedHierarchies := fetchIssueHierarchiesFunc
+	t.Cleanup(func() {
+		ghExecContextFunc = savedExec
+		fetchIssuesFunc = savedIssues
+		fetchIssueRelationshipsFunc = savedRelationships
+		fetchIssueHierarchiesFunc = savedHierarchies
+	})
+	fetchIssuesFunc = fetchIssues
+	fetchIssueRelationshipsFunc = fetchIssueRelationshipsContext
+	fetchIssueHierarchiesFunc = fetchIssueHierarchiesContext
+
+	var deadlines []time.Time
+	ghExecContextFunc = func(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("GitHub invocation has no deadline")
+		}
+		deadlines = append(deadlines, deadline)
+		joined := strings.Join(args, " ")
+		switch {
+		case len(args) >= 2 && args[0] == "issue" && args[1] == "list":
+			return *bytes.NewBufferString(`[{"number":7}]`), bytes.Buffer{}, nil
+		case strings.Contains(joined, "closedByPullRequestsReferences"):
+			return *bytes.NewBufferString(`{"data":{"repository":{"issue7":{"number":7,"closedByPullRequestsReferences":{"totalCount":0,"nodes":[]}}}}}`), bytes.Buffer{}, nil
+		case strings.Contains(joined, "subIssuesSummary"):
+			return *bytes.NewBufferString(`{"data":{"repository":{"issue7":{"number":7,"parent":null,"subIssuesSummary":{"completed":0,"total":0}}}}}`), bytes.Buffer{}, nil
+		default:
+			t.Fatalf("unexpected GitHub invocation: %v", args)
+			return bytes.Buffer{}, bytes.Buffer{}, nil
+		}
+	}
+
+	result, err := fetchDisplayIssues(issueListOptions{repo: "owner/repo"}, time.Time{})
+	if err != nil {
+		t.Fatalf("fetchDisplayIssues returned error: %v", err)
+	}
+	if len(result.Display) != 1 || result.Display[0].PullRequests != "-" || result.Display[0].Parent != "-" || result.Display[0].SubIssues != "-" {
+		t.Fatalf("display result = %#v", result.Display)
+	}
+	if len(deadlines) != 3 {
+		t.Fatalf("GitHub invocation count = %d, want 3", len(deadlines))
+	}
+	for _, deadline := range deadlines[1:] {
+		if !deadline.Equal(deadlines[0]) {
+			t.Fatalf("GitHub deadlines differ: %v", deadlines)
+		}
+	}
+}
+
+func TestIssueListOperationContextReusesParent(t *testing.T) {
+	parent, parentCancel := context.WithCancel(context.Background())
+	defer parentCancel()
+	ctx, cancel, err := issueListOperationContext(parent)
+	if err != nil {
+		t.Fatalf("issueListOperationContext returned error: %v", err)
+	}
+	cancel()
+	if ctx != parent || ctx.Err() != nil {
+		t.Fatalf("context = %v, want unchanged parent", ctx)
+	}
+}
+
+func TestFetchDisplayIssuesRejectsInvalidGitHubTimeout(t *testing.T) {
+	t.Setenv(githubCommandTimeoutEnv, "never")
+	_, err := fetchDisplayIssues(issueListOptions{}, time.Time{})
+	if err == nil || !strings.Contains(err.Error(), githubCommandTimeoutEnv) {
+		t.Fatalf("fetchDisplayIssues error = %v, want timeout configuration error", err)
 	}
 }
 
 func TestFetchDisplayIssuesRelationshipFailure(t *testing.T) {
+	stubEmptyIssueHierarchies(t)
 	savedIssues := fetchIssuesFunc
 	savedRelationships := fetchIssueRelationshipsFunc
 	defer func() {
@@ -799,7 +935,7 @@ func TestFetchDisplayIssuesRelationshipFailure(t *testing.T) {
 	fetchIssuesFunc = func(_ issueListOptions) ([]issueEntry, error) {
 		return []issueEntry{{Number: 7}}, nil
 	}
-	fetchIssueRelationshipsFunc = func(_, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsFunc = func(_ context.Context, _, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
 		return nil, nil, fmt.Errorf("graphql unavailable")
 	}
 
@@ -812,6 +948,19 @@ func TestFetchDisplayIssuesRelationshipFailure(t *testing.T) {
 	}
 	if result.RelErr == nil {
 		t.Fatal("expected relationship failure to be carried for display")
+	}
+}
+
+func stubEmptyIssueHierarchies(t *testing.T) {
+	t.Helper()
+	saved := fetchIssueHierarchiesFunc
+	t.Cleanup(func() { fetchIssueHierarchiesFunc = saved })
+	fetchIssueHierarchiesFunc = func(_ context.Context, _, _, _ string, numbers []int) (map[int]issueHierarchy, map[int]issueHierarchyUnavailable, error) {
+		result := make(map[int]issueHierarchy, len(numbers))
+		for _, number := range numbers {
+			result[number] = issueHierarchy{}
+		}
+		return result, nil, nil
 	}
 }
 

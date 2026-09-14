@@ -103,6 +103,8 @@ The issue table keeps the standard filters and adds compact repository context:
 |--------|-------------|
 | **#** | Issue number, linked to the issue on GitHub in terminals with OSC 8 support |
 | **PRs** | Pull requests linked through GitHub's issue-closing relationship. `-` means none and `?` means relationship data was unavailable |
+| **Parent** | Immediate parent issue. Same-repository parents use `#NUMBER`; cross-repository parents use `OWNER/REPO#NUMBER` |
+| **Sub** | Completed direct sub-issues over total direct sub-issues, such as `2/5` |
 | **Title** | Truncated to 51 characters |
 | **Author** | Issue author login |
 | **State** | `open` or `closed` |
@@ -222,6 +224,8 @@ of supplemental enrichment.
 issues across multiple repositories. The sidebar selects a repository, the top
 tabs switch between pull requests and issues, configurable sections apply
 GitHub search filters, and the detail pane shows the selected item's body.
+Issue rows include the immediate parent and direct sub-issue progress. The
+issue detail pane repeats both values.
 
 ```bash
 gh x monitor                 # launch the dashboard

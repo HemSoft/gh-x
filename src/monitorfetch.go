@@ -1,20 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // monitorSectionData is one section's fetch outcome.
 type monitorSectionData struct {
-	Kind  monitorRowKind
-	Total int
-	Rows  []monitorRow
+	Kind          monitorRowKind
+	Total         int
+	Rows          []monitorRow
+	sourceIndexes []int
 }
 
 // monitorFetchResult is the complete payload for one refresh cycle.
@@ -65,10 +68,14 @@ type monitorIssueNode struct {
 	Assignees struct {
 		Nodes []*author `json:"nodes"`
 	} `json:"assignees"`
-	Labels    monitorLabels
-	Milestone struct {
+	Labels           monitorLabels
+	Parent           *issueParentReference  `json:"parent"`
+	SubIssuesSummary *issueSubIssuesSummary `json:"subIssuesSummary"`
+	Milestone        struct {
 		Title string `json:"title"`
 	} `json:"milestone"`
+	parentAvailable    bool
+	subIssuesAvailable bool
 }
 
 type monitorRepositoryGroup struct {
@@ -77,9 +84,10 @@ type monitorRepositoryGroup struct {
 }
 
 type monitorHostQuery struct {
-	Host         string
-	Repositories []monitorRepository
-	Query        string
+	Host          string
+	Repositories  []monitorRepository
+	Query         string
+	FallbackQuery string
 }
 
 // buildMonitorRepoQualifiers renders "repo:a/b repo:c/d" for server-side scoping.
@@ -105,7 +113,7 @@ func buildMonitorSearchQuery(kind monitorRowKind, filters, repoQualifiers string
 	return strings.Join(parts, " ")
 }
 
-const monitorIssueFieldsFragment = `
+const monitorIssueBaseFieldsFragment = `
         number
         title
         state
@@ -117,6 +125,10 @@ const monitorIssueFieldsFragment = `
         assignees(first: 10) { nodes { login } }
         labels(first: 20) { nodes { name } }
         milestone { title }`
+
+const monitorIssueHierarchyFieldsFragment = `
+        parent { number url repository { nameWithOwner } }
+        subIssuesSummary { completed total }`
 
 const monitorDetailFieldsFragment = `
         body
@@ -136,9 +148,10 @@ func buildMonitorHostQueries(cfg *monitorConfig) ([]monitorHostQuery, error) {
 	queries := make([]monitorHostQuery, 0, len(groups))
 	for _, group := range groups {
 		queries = append(queries, monitorHostQuery{
-			Host:         group.Host,
-			Repositories: group.Repositories,
-			Query:        buildMonitorGraphQLQueryForRepos(cfg, group.Repositories),
+			Host:          group.Host,
+			Repositories:  group.Repositories,
+			Query:         buildMonitorGraphQLQueryForRepos(cfg, group.Repositories),
+			FallbackQuery: buildMonitorGraphQLQuery(cfg, group.Repositories, false),
 		})
 	}
 	return queries, nil
@@ -162,6 +175,10 @@ func groupMonitorRepositories(repositories []monitorRepository) []monitorReposit
 // buildMonitorGraphQLQueryForRepos builds one aliased GraphQL document for a
 // set of repositories that all belong to the same GitHub host.
 func buildMonitorGraphQLQueryForRepos(cfg *monitorConfig, repositories []monitorRepository) string {
+	return buildMonitorGraphQLQuery(cfg, repositories, true)
+}
+
+func buildMonitorGraphQLQuery(cfg *monitorConfig, repositories []monitorRepository, includeHierarchy bool) string {
 	repoQualifiers := buildMonitorRepoQualifiers(repositories)
 
 	var sb strings.Builder
@@ -171,12 +188,12 @@ func buildMonitorGraphQLQueryForRepos(cfg *monitorConfig, repositories []monitor
 	for i, section := range cfg.PRSections {
 		writeMonitorSearchAlias(&sb, fmt.Sprintf("pr%d", i), monitorKindPR,
 			buildMonitorSearchQuery(monitorKindPR, section.Filters, repoQualifiers),
-			monitorSectionLimit(section, cfg.Defaults.Limit))
+			monitorSectionLimit(section, cfg.Defaults.Limit), includeHierarchy)
 	}
 	for i, section := range cfg.IssueSections {
 		writeMonitorSearchAlias(&sb, fmt.Sprintf("is%d", i), monitorKindIssue,
 			buildMonitorSearchQuery(monitorKindIssue, section.Filters, repoQualifiers),
-			monitorSectionLimit(section, cfg.Defaults.Limit))
+			monitorSectionLimit(section, cfg.Defaults.Limit), includeHierarchy)
 	}
 	sb.WriteString("}")
 	return sb.String()
@@ -191,13 +208,16 @@ func writeMonitorAccessProbes(sb *strings.Builder, repos []monitorRepository) {
 	}
 }
 
-func writeMonitorSearchAlias(sb *strings.Builder, alias string, kind monitorRowKind, query string, limit int) {
+func writeMonitorSearchAlias(sb *strings.Builder, alias string, kind monitorRowKind, query string, limit int, includeHierarchy bool) {
 	fmt.Fprintf(sb, "  %s: search(query: %q, type: ISSUE, first: %d) {\n", alias, query, limit)
 	sb.WriteString("    issueCount\n    nodes {\n")
 	if kind == monitorKindPR {
 		fmt.Fprintf(sb, "      ... on PullRequest {%s\n", atmPRFieldsFragment+monitorDetailFieldsFragment)
 	} else {
-		fmt.Fprintf(sb, "      ... on Issue {%s\n", monitorIssueFieldsFragment)
+		fmt.Fprintf(sb, "      ... on Issue {%s\n", monitorIssueBaseFieldsFragment)
+		if includeHierarchy {
+			fmt.Fprintf(sb, "%s\n", monitorIssueHierarchyFieldsFragment)
+		}
 	}
 	sb.WriteString("      }\n")
 	sb.WriteString("    }\n")
@@ -264,8 +284,10 @@ func executeMonitorFetch(ctx context.Context, cfg *monitorConfig, now time.Time)
 }
 
 func fetchMonitorHost(ctx context.Context, request monitorHostQuery, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
-	args := []string{"api", "--hostname", request.Host, "graphql", "-f", fmt.Sprintf("query=%s", request.Query)}
-	stdoutBuf, stderrBuf, execErr := monitorGHExecFunc(ctx, args...)
+	stdoutBuf, stderrBuf, execErr := executeMonitorHostQuery(ctx, request.Host, request.Query)
+	if issueHierarchyUnsupported(stdoutBuf.Bytes(), stderrBuf.String()) {
+		return fetchMonitorHostWithoutHierarchy(ctx, request, cfg, now)
+	}
 	if execErr != nil && (errors.Is(execErr, context.Canceled) || errors.Is(execErr, context.DeadlineExceeded) || !hasUsableGraphQLData(stdoutBuf.Bytes())) {
 		return nil, wrapExecError(fmt.Errorf("GraphQL search failed: %w", execErr), stderrBuf.String())
 	}
@@ -274,6 +296,46 @@ func fetchMonitorHost(ctx context.Context, request monitorHostQuery, cfg *monito
 		return nil, fmt.Errorf("parse GraphQL response: %w", err)
 	}
 	return result, nil
+}
+
+func executeMonitorHostQuery(ctx context.Context, host, query string) (bytes.Buffer, bytes.Buffer, error) {
+	args := []string{"api", "--hostname", host, "graphql", "-f", fmt.Sprintf("query=%s", query)}
+	return monitorGHExecFunc(ctx, args...)
+}
+
+func fetchMonitorHostWithoutHierarchy(ctx context.Context, request monitorHostQuery, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
+	stdoutBuf, stderrBuf, execErr := executeMonitorHostQuery(ctx, request.Host, request.FallbackQuery)
+	if execErr != nil && (errors.Is(execErr, context.Canceled) || errors.Is(execErr, context.DeadlineExceeded) || !hasUsableGraphQLData(stdoutBuf.Bytes())) {
+		return nil, wrapExecError(fmt.Errorf("GraphQL fallback search failed: %w", execErr), stderrBuf.String())
+	}
+	result, err := parseMonitorHostResponse(stdoutBuf.Bytes(), cfg, request.Repositories, now)
+	if err != nil {
+		return nil, fmt.Errorf("parse fallback GraphQL response: %w", err)
+	}
+	result.Warnings = append(result.Warnings, "Issue hierarchy is unavailable on "+request.Host)
+	return result, nil
+}
+
+func issueHierarchyUnsupported(stdout []byte, stderr string) bool {
+	var envelope struct {
+		Errors []monitorGraphQLError `json:"errors"`
+	}
+	if json.Unmarshal(stdout, &envelope) == nil && len(envelope.Errors) > 0 {
+		for _, entry := range envelope.Errors {
+			if unsupportedHierarchyMessage(entry.Message) {
+				return true
+			}
+		}
+		return false
+	}
+	return unsupportedHierarchyMessage(stderr)
+}
+
+func unsupportedHierarchyMessage(message string) bool {
+	message = strings.ToLower(message)
+	mentionsField := strings.Contains(message, "subissuessummary") || strings.Contains(message, "parent")
+	unsupported := strings.Contains(message, "cannot query field") || strings.Contains(message, "doesn't exist") || strings.Contains(message, "unknown field")
+	return mentionsField && unsupported
 }
 
 func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResult {
@@ -332,13 +394,15 @@ func hasUsableGraphQLData(data []byte) bool {
 // GraphQL partial errors (e.g. an inaccessible repository probe) become
 // warnings instead of failing the whole refresh; a response with no data at
 // all is still fatal.
+type monitorGraphQLError struct {
+	Message string `json:"message"`
+	Path    []any  `json:"path"`
+}
+
 func parseMonitorHostResponse(data []byte, cfg *monitorConfig, repositories []monitorRepository, now time.Time) (*monitorFetchResult, error) {
 	var envelope struct {
-		Data   json.RawMessage `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-			Path    []any  `json:"path"`
-		} `json:"errors"`
+		Data   json.RawMessage       `json:"data"`
+		Errors []monitorGraphQLError `json:"errors"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return nil, fmt.Errorf("decode GraphQL response: %w", err)
@@ -364,6 +428,7 @@ func parseMonitorHostResponse(data []byte, cfg *monitorConfig, repositories []mo
 	}
 	decodePRSections(dataMap, result, now)
 	decodeIssueSections(dataMap, result, now)
+	applyMonitorHierarchyErrors(result, envelope.Errors)
 	if len(repositories) > 0 {
 		qualifyMonitorResultRows(result, repositories[0].Host)
 	}
@@ -388,10 +453,7 @@ func qualifyMonitorResultRows(result *monitorFetchResult, host string) {
 }
 
 // monitorWarnings condenses partial-error entries into short footer lines.
-func monitorWarnings(errors []struct {
-	Message string `json:"message"`
-	Path    []any  `json:"path"`
-}) []string {
+func monitorWarnings(errors []monitorGraphQLError) []string {
 	warnings := make([]string, 0, len(errors))
 	for _, entry := range errors {
 		text := strings.TrimSpace(entry.Message)
@@ -404,6 +466,51 @@ func monitorWarnings(errors []struct {
 		}
 	}
 	return warnings
+}
+
+// applyMonitorHierarchyErrors keeps partial field failures scoped to the
+// affected hierarchy cell instead of discarding the issue row.
+func applyMonitorHierarchyErrors(result *monitorFetchResult, errors []monitorGraphQLError) {
+	for _, entry := range errors {
+		row, field, ok := monitorHierarchyErrorRow(result, entry.Path)
+		if !ok {
+			continue
+		}
+		switch field {
+		case "parent":
+			row.Parent = "?"
+		case "subIssuesSummary":
+			row.SubIssues = "?"
+		}
+	}
+}
+
+func monitorHierarchyErrorRow(result *monitorFetchResult, path []any) (*monitorRow, string, bool) {
+	sectionIndex, rowIndex, field, ok := parseMonitorHierarchyErrorPath(path)
+	if !ok || sectionIndex < 0 || sectionIndex >= len(result.IssueSections) {
+		return nil, "", false
+	}
+	section := &result.IssueSections[sectionIndex]
+	for index, sourceIndex := range section.sourceIndexes {
+		if sourceIndex == rowIndex {
+			return &section.Rows[index], field, true
+		}
+	}
+	return nil, "", false
+}
+
+func parseMonitorHierarchyErrorPath(path []any) (int, int, string, bool) {
+	if len(path) < 4 {
+		return 0, 0, "", false
+	}
+	alias, aliasOK := path[0].(string)
+	nodeIndex, indexOK := path[2].(float64)
+	field, fieldOK := path[3].(string)
+	if !aliasOK || !indexOK || !fieldOK || !strings.HasPrefix(alias, "is") {
+		return 0, 0, "", false
+	}
+	sectionIndex, err := strconv.Atoi(strings.TrimPrefix(alias, "is"))
+	return sectionIndex, int(nodeIndex), field, err == nil
 }
 
 // decodeAccessProbes resolves which configured repos the active account sees.
@@ -469,14 +576,20 @@ func decodeMonitorIssueSection(raw json.RawMessage, now time.Time) monitorSectio
 		return monitorSectionData{Kind: monitorKindIssue}
 	}
 	rows := make([]monitorRow, 0, len(nodes))
-	for _, node := range nodes {
+	sourceIndexes := make([]int, 0, len(nodes))
+	for index, node := range nodes {
 		var issueNode monitorIssueNode
-		if json.Unmarshal(node, &issueNode) != nil {
+		if json.Unmarshal(node, &issueNode) != nil || issueNode.Number <= 0 {
 			continue
 		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(node, &fields) == nil {
+			decodeMonitorIssueHierarchy(fields, &issueNode)
+		}
 		rows = append(rows, mapMonitorIssueNode(issueNode, now))
+		sourceIndexes = append(sourceIndexes, index)
 	}
-	return monitorSectionData{Kind: monitorKindIssue, Total: entry.IssueCount, Rows: rows}
+	return monitorSectionData{Kind: monitorKindIssue, Total: entry.IssueCount, Rows: rows, sourceIndexes: sourceIndexes}
 }
 
 func decodeMonitorSearchEntry(raw json.RawMessage) (monitorSearchEntry, []json.RawMessage, bool) {
@@ -489,6 +602,17 @@ func decodeMonitorSearchEntry(raw json.RawMessage) (monitorSearchEntry, []json.R
 		return entry, nil, false
 	}
 	return entry, nodes, true
+}
+
+func decodeMonitorIssueHierarchy(fields map[string]json.RawMessage, node *monitorIssueNode) {
+	parentRaw, parentPresent := fields["parent"]
+	node.parentAvailable = parentPresent && (string(parentRaw) == "null" || node.Parent != nil && validIssueParent(*node.Parent))
+
+	summary, unavailable := parseSubIssuesSummary(fields)
+	node.subIssuesAvailable = !unavailable
+	if !unavailable {
+		node.SubIssuesSummary = &summary
+	}
 }
 
 func sortAllMonitorSections(result *monitorFetchResult) {
@@ -557,6 +681,11 @@ func mapMonitorPRNode(node monitorPRNode, now time.Time) monitorRow {
 }
 
 func mapMonitorIssueNode(node monitorIssueNode, now time.Time) monitorRow {
+	parent, _ := issueParentDisplay(node.Parent, node.Repository.NameWithOwner, !node.parentAvailable)
+	summary := issueSubIssuesSummary{}
+	if node.SubIssuesSummary != nil {
+		summary = *node.SubIssuesSummary
+	}
 	return monitorRow{
 		Kind:      monitorKindIssue,
 		Number:    node.Number,
@@ -564,6 +693,8 @@ func mapMonitorIssueNode(node monitorIssueNode, now time.Time) monitorRow {
 		Author:    formatMonitorLogin(node.Author),
 		State:     normalizeState(node.State, false),
 		Assignees: joinMonitorLogins(node.Assignees.Nodes),
+		Parent:    parent,
+		SubIssues: subIssueProgressDisplay(summary, !node.subIssuesAvailable),
 		Labels:    labelNames(node.Labels),
 		Milestone: node.Milestone.Title,
 		Body:      node.Body,

@@ -9,8 +9,9 @@ import (
 
 // monitorDetailLine is one rendered line of the detail pane.
 type monitorDetailLine struct {
-	label string
-	value string
+	label     string
+	value     string
+	showEmpty bool
 }
 
 // monitorDetailMetadata builds the label/value block for the selected row.
@@ -30,6 +31,8 @@ func monitorDetailMetadata(row monitorRow) []monitorDetailLine {
 	} else {
 		lines = append(lines,
 			monitorDetailLine{label: "State", value: row.State},
+			monitorDetailLine{label: "Parent", value: row.Parent, showEmpty: true},
+			monitorDetailLine{label: "Sub-issues", value: row.SubIssues, showEmpty: true},
 			monitorDetailLine{label: "Assignees", value: row.Assignees},
 		)
 	}
@@ -99,7 +102,7 @@ func renderMonitorMetadataLines(metadata []monitorDetailLine, width int) []strin
 	items := make([]monitorDetailLine, 0, len(metadata))
 	labelWidth := 0
 	for _, item := range metadata {
-		if item.value == "" || item.value == "-" {
+		if !item.showEmpty && (item.value == "" || item.value == "-") {
 			continue
 		}
 		if w := runewidth.StringWidth(item.label); w > labelWidth {

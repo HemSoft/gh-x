@@ -84,7 +84,11 @@ func TestCLIBehaviorSuccess(t *testing.T) {
 			args: []string{"issue", "list", "--repo", "HemSoft/gh-x"},
 			wantStdout: []string{
 				"Issues for HemSoft/gh-x",
+				"Parent",
+				"Sub",
 				"#50",
+				"#45",
+				"1/2",
 				"Behavior fixture issue",
 				"enhancement",
 			},
@@ -363,6 +367,8 @@ func runFakeGH() int {
 		fixture = "required-checks.json"
 	case hasCommandPrefix(args, "api") && strings.Contains(strings.Join(args, " "), "closedByPullRequestsReferences"):
 		fixture = "issue-relationships.json"
+	case hasCommandPrefix(args, "api") && strings.Contains(strings.Join(args, " "), "subIssuesSummary"):
+		fixture = "issue-hierarchy.json"
 	case hasCommandPrefix(args, "api") && strings.Contains(strings.Join(args, " "), "pullRequest(number: 42)"):
 		fixture = "pr-supplemental.json"
 	default:

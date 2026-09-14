@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -124,7 +125,7 @@ func TestFetchIssueRelationshipsBatchesAndPreservesHost(t *testing.T) {
 	defer func() { fetchIssueRelationshipsBatchFunc = saved }()
 
 	calls := 0
-	fetchIssueRelationshipsBatchFunc = func(owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsBatchFunc = func(_ context.Context, owner, name, host string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
 		calls++
 		if owner != "owner" || name != "repo" || host != "ghe.example.com" {
 			t.Fatalf("unexpected target: %s/%s on %s", owner, name, host)
@@ -140,7 +141,7 @@ func TestFetchIssueRelationshipsBatchesAndPreservesHost(t *testing.T) {
 	for i := range numbers {
 		numbers[i] = i + 1
 	}
-	result, unavailable, err := fetchIssueRelationships("owner", "repo", "ghe.example.com", numbers)
+	result, unavailable, err := fetchIssueRelationshipsContext(context.Background(), "owner", "repo", "ghe.example.com", numbers)
 	if err != nil {
 		t.Fatalf("fetchIssueRelationships returned error: %v", err)
 	}
@@ -149,14 +150,51 @@ func TestFetchIssueRelationshipsBatchesAndPreservesHost(t *testing.T) {
 	}
 }
 
+func TestFetchIssueRelationshipsStopsAfterContextCancellation(t *testing.T) {
+	saved := fetchIssueRelationshipsBatchFunc
+	t.Cleanup(func() { fetchIssueRelationshipsBatchFunc = saved })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	fetchIssueRelationshipsBatchFunc = func(_ context.Context, _, _, _ string, numbers []int) (map[int][]linkedReference, map[int]bool, error) {
+		calls++
+		result := make(map[int][]linkedReference, len(numbers))
+		for _, number := range numbers {
+			result[number] = nil
+		}
+		cancel()
+		return result, nil, nil
+	}
+	numbers := make([]int, 35)
+	for index := range numbers {
+		numbers[index] = index + 1
+	}
+
+	result, unavailable, err := fetchIssueRelationshipsContext(ctx, "owner", "repo", "github.com", numbers)
+	if calls != 1 {
+		t.Fatalf("batch calls = %d, want 1", calls)
+	}
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled relationship fetch error = %v", err)
+	}
+	if len(result) != relationshipBatchSize {
+		t.Fatalf("completed relationship entries = %d, want %d", len(result), relationshipBatchSize)
+	}
+	for _, number := range numbers[relationshipBatchSize:] {
+		if !unavailable[number] {
+			t.Fatalf("remaining issue %d was not marked unavailable: %v", number, unavailable)
+		}
+	}
+}
+
 func TestFetchIssueRelationshipsReturnsBatchError(t *testing.T) {
 	saved := fetchIssueRelationshipsBatchFunc
 	defer func() { fetchIssueRelationshipsBatchFunc = saved }()
 
-	fetchIssueRelationshipsBatchFunc = func(_, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsBatchFunc = func(_ context.Context, _, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
 		return nil, map[int]bool{1: true}, fmt.Errorf("graphql unavailable")
 	}
-	result, unavailable, err := fetchIssueRelationships("owner", "repo", "github.com", []int{1})
+	result, unavailable, err := fetchIssueRelationshipsContext(context.Background(), "owner", "repo", "github.com", []int{1})
 	if err == nil || err.Error() != "graphql unavailable" {
 		t.Fatalf("fetchIssueRelationships error = %v, want graphql unavailable", err)
 	}
@@ -166,7 +204,7 @@ func TestFetchIssueRelationshipsReturnsBatchError(t *testing.T) {
 }
 
 func TestFetchIssueRelationshipsEmpty(t *testing.T) {
-	result, unavailable, err := fetchIssueRelationships("owner", "repo", "github.com", nil)
+	result, unavailable, err := fetchIssueRelationshipsContext(context.Background(), "owner", "repo", "github.com", nil)
 	if err != nil || result != nil || unavailable != nil {
 		t.Fatalf("empty relationship fetch = (%v, %v, %v), want (nil, nil, nil)", result, unavailable, err)
 	}
@@ -185,7 +223,7 @@ func TestFetchIssueRelationshipsBatchUsesOneGraphQLRequest(t *testing.T) {
 		return *bytes.NewBufferString(response), bytes.Buffer{}, nil
 	}
 
-	result, unavailable, err := fetchIssueRelationshipsBatch("owner", "repo", "ghe.example.com", []int{7, 9})
+	result, unavailable, err := fetchIssueRelationshipsBatchWithGraphQL("owner", "repo", "ghe.example.com", []int{7, 9}, fetchGraphQL)
 	if err != nil {
 		t.Fatalf("fetchIssueRelationshipsBatch returned error: %v", err)
 	}
@@ -333,6 +371,7 @@ func TestParsePRSupplementalNodeTreatsIncompleteRelationshipsAsUnavailable(t *te
 
 func TestRelationshipColumnsRenderInStatus(t *testing.T) {
 	issueRefs := []linkedReference{{Number: 25, URL: "https://github.com/owner/repo/pull/25"}}
+	parentRefs := []linkedReference{{Number: 3, URL: "https://github.com/owner/repo/issues/3", Text: "#3"}}
 	prRefs := []linkedReference{{Number: 18, URL: "https://github.com/owner/repo/issues/18"}}
 	dashboard := statusDashboard{
 		Repository:        "owner/repo",
@@ -341,7 +380,7 @@ func TestRelationshipColumnsRenderInStatus(t *testing.T) {
 		DefaultCheckedOut: true,
 		CurrentStatus:     statusSummary{Branch: "main", Upstream: "origin/main"},
 		Issues: []displayIssue{{
-			Number: 7, PullRequests: "#25", pullRequestRefs: issueRefs, Title: "Issue", State: "open",
+			Number: 7, PullRequests: "#25", pullRequestRefs: issueRefs, Parent: "#3", parentRefs: parentRefs, SubIssues: "1/2", Title: "Issue", State: "open",
 		}},
 		PullRequests: []displayPullRequest{{
 			Number: 25, Issues: "#18", issueRefs: prRefs, Title: "PR", State: "open",
@@ -353,7 +392,7 @@ func TestRelationshipColumnsRenderInStatus(t *testing.T) {
 		t.Fatalf("renderStatus returned error: %v", err)
 	}
 	text := output.String()
-	for _, want := range []string{"PRs", "Issues", "#25", "#18"} {
+	for _, want := range []string{"PRs", "Parent", "Sub", "Issues", "#25", "#3", "1/2", "#18"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status output missing %q: %s", want, text)
 		}
@@ -369,7 +408,7 @@ func TestFetchIssueRelationshipsBatchRecoversHealthyAliasesFromPartialError(t *t
 		return *bytes.NewBufferString(body), *bytes.NewBufferString("gh: Could not resolve to a Issue with the number of 998.\n"), errors.New("exit status 1")
 	}
 
-	refs, unavailable, err := fetchIssueRelationshipsBatch("HemSoft", "codexbar-ios", "github.com", []int{332, 998})
+	refs, unavailable, err := fetchIssueRelationshipsBatchWithGraphQL("HemSoft", "codexbar-ios", "github.com", []int{332, 998}, fetchGraphQL)
 	if err == nil {
 		t.Fatal("partial GraphQL error must be carried for display")
 	}
@@ -385,6 +424,7 @@ func TestFetchIssueRelationshipsBatchRecoversHealthyAliasesFromPartialError(t *t
 }
 
 func TestFetchDisplayIssuesMarksOnlyUnavailableIssueUnknown(t *testing.T) {
+	stubEmptyIssueHierarchies(t)
 	savedIssues := fetchIssuesFunc
 	savedRelationships := fetchIssueRelationshipsFunc
 	defer func() {
@@ -395,7 +435,7 @@ func TestFetchDisplayIssuesMarksOnlyUnavailableIssueUnknown(t *testing.T) {
 	fetchIssuesFunc = func(_ issueListOptions) ([]issueEntry, error) {
 		return []issueEntry{{Number: 332}, {Number: 998}}, nil
 	}
-	fetchIssueRelationshipsFunc = func(_, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
+	fetchIssueRelationshipsFunc = func(_ context.Context, _, _, _ string, _ []int) (map[int][]linkedReference, map[int]bool, error) {
 		return map[int][]linkedReference{
 			332: {{Number: 333, URL: "https://github.com/HemSoft/codexbar-ios/pull/333"}},
 		}, map[int]bool{998: true}, fmt.Errorf("gh api graphql: Could not resolve to a Issue with the number of 998.")
