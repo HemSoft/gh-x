@@ -7,7 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.9
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/cli/go-gh/v2 v2.16.0
-	github.com/mattn/go-runewidth v0.0.29
+	github.com/mattn/go-runewidth v0.0.30
 	github.com/muesli/termenv v0.16.0
 	golang.org/x/term v0.46.0
 	gopkg.in/yaml.v3 v3.0.1
