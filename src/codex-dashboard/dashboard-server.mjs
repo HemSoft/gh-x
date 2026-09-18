@@ -37,7 +37,13 @@ export async function createDashboardServer({
     ]);
     const html = htmlTemplate.replace("__CODEX_API_URL__", escapeHtmlAttribute(apiPath));
     const server = createServerImpl(async (request, response) => {
-        const requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+        let requestUrl;
+        try {
+            requestUrl = new URL(request.url || "/", "http://127.0.0.1");
+        } catch {
+            sendJson(response, 400, { error: "Invalid request target." });
+            return;
+        }
         if (!requestUrl.pathname.startsWith(`${basePath}/`) && requestUrl.pathname !== basePath) {
             sendJson(response, 403, { error: "Unauthorized." });
             return;

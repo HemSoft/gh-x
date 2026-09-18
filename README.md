@@ -562,7 +562,9 @@ snapshot, and projected usage at reset based on the current pace. Changed
 session rows glow after each refresh. The server listens only on `127.0.0.1`
 behind a random URL token. The Codex launcher starts that server in the
 background and opens it in a dedicated Microsoft Edge or Google Chrome app
-window. Later launches reuse the running local server.
+window. Later launches reuse the running local server. Both dashboard servers
+reject malformed HTTP request targets with a 400 response and keep serving
+healthy requests.
 
 For phone access over Tailscale, install the persistent loopback-only hub once:
 
