@@ -93,7 +93,13 @@ export async function createDashboardHub({
     );
 
     const server = createServerImpl(async (request, response) => {
-        const url = new URL(request.url || "/", "http://127.0.0.1");
+        let url;
+        try {
+            url = new URL(request.url || "/", "http://127.0.0.1");
+        } catch {
+            sendJson(response, 400, { error: "Invalid request target." });
+            return;
+        }
         if (url.pathname === "/dashboards") {
             redirect(response, "/dashboards/");
             return;
