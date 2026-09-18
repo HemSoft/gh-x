@@ -1,4 +1,6 @@
-# Run every gh-x quality gate from the repository root.
+# Run local CI gates independently; hosted qualification remains in GitHub.
+param([string]$ReportPath)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -59,9 +61,12 @@ function Assert-NoSourceMatches {
 }
 
 function Assert-PinnedToolVersions {
-    param([Parameter(Mandatory)][string]$VersionFile)
+    param(
+        [Parameter(Mandatory)][string]$VersionFile,
+        [Parameter(Mandatory)][string]$ToolName
+    )
 
-    Show-Section 'pinned analyzer versions'
+    Show-Section "pinned analyzer version: $ToolName"
     $pins = @{}
     foreach ($line in Get-Content -LiteralPath $VersionFile) {
         if ($line -match '^(?<name>[A-Z0-9_]+)=(?<version>\S+)$') {
@@ -80,7 +85,7 @@ function Assert-PinnedToolVersions {
         @{ Name = 'gremlins'; Module = 'github.com/go-gremlins/gremlins'; Pin = 'GREMLINS_VERSION' }
     )
 
-    foreach ($tool in $tools) {
+    foreach ($tool in @($tools | Where-Object Name -EQ $ToolName)) {
         $expected = $pins[$tool.Pin]
         if (-not $expected) {
             throw "Missing $($tool.Pin) in $VersionFile."
@@ -236,86 +241,9 @@ function Assert-MutationThresholds {
     }
 }
 
-$repoRoot = (& git rev-parse --show-toplevel 2>$null).Trim()
-if (-not $repoRoot -or $LASTEXITCODE -ne 0) {
-    throw 'Run this script from a gh-x worktree.'
-}
-Set-Location $repoRoot
+. (Join-Path $PSScriptRoot 'audit-plan.ps1')
 
-$requiredTools = @(
-    'go',
-    'gofmt',
-    'node',
-    'npx',
-    'staticcheck',
-    'gocritic',
-    'errcheck',
-    'deadcode',
-    'govulncheck',
-    'gocyclo',
-    'gocognit',
-    'gremlins'
-)
-$missingTools = @($requiredTools | Where-Object { -not (Get-Command $_ -ErrorAction SilentlyContinue) })
-if ($missingTools.Count -gt 0) {
-    throw "Missing required quality tools: $($missingTools -join ', '). See .github/quality-tools.env for the pinned versions."
-}
-$qualityToolPins = Assert-PinnedToolVersions (Join-Path $repoRoot '.github\quality-tools.env')
-$markdownlintVersion = $qualityToolPins['MARKDOWNLINT_CLI2_VERSION']
-$mutationEfficacyThreshold = $qualityToolPins['MUTATION_EFFICACY_THRESHOLD']
-$mutationCoverageThreshold = $qualityToolPins['MUTATION_COVERAGE_THRESHOLD']
-$mutationPackageScope = $qualityToolPins['MUTATION_PACKAGE_SCOPE']
-if (-not $markdownlintVersion -or -not $mutationEfficacyThreshold -or -not $mutationCoverageThreshold -or -not $mutationPackageScope) {
-    throw 'Missing a quality threshold or tool version in .github/quality-tools.env.'
-}
-
-$tempRoot = [System.IO.Path]::GetTempPath()
-$coveragePath = Join-Path $tempRoot "gh-x-coverage-$([guid]::NewGuid().ToString('N')).out"
-$buildPath = Join-Path $tempRoot "gh-x-build-$([guid]::NewGuid().ToString('N')).exe"
-
-try {
-    Invoke-CheckedCommand 'build' 'go' @('build', '-o', $buildPath, './...')
-    Invoke-CheckedCommand 'vet' 'go' @('vet', './...')
-    Invoke-NoOutputCommand 'formatting (gofmt)' 'gofmt' @('-l', '.')
-    Invoke-CheckedCommand 'module tidiness' 'go' @('mod', 'tidy', '-diff')
-    Invoke-CheckedCommand 'staticcheck' 'staticcheck' @('./...')
-    Invoke-CheckedCommand 'gocritic' 'gocritic' @('check', './...')
-    Invoke-CheckedCommand 'errcheck' 'errcheck' @('-exclude', '.errcheck_excludes', './...')
-    Invoke-NoOutputCommand 'dead code' 'deadcode' @('./...')
-    Invoke-CheckedCommand 'vulnerability scan' 'govulncheck' @('./...')
-
-    $goFiles = @(Get-ChildItem -LiteralPath $repoRoot -Recurse -File -Filter '*.go')
-    $productionGoFiles = @($goFiles | Where-Object { $_.Name -notlike '*_test.go' })
-    Assert-NoSourceMatches 'lint suppressions' $goFiles '//nolint|//lint:ignore|//nosec|#nosec'
-    Assert-NoSourceMatches 'fmt.Print production calls' $productionGoFiles 'fmt\.Print'
-
-    Invoke-CheckedCommand 'race tests and coverage' 'go' @('test', '-race', '-count=1', "-coverprofile=$coveragePath", './...')
-    Invoke-CheckedCommand 'Node dashboard tests' 'node' @('--test', 'src/codex-dashboard/*.test.mjs', 'src/dashboard-hub/*.test.mjs')
-
-    Show-Section 'coverage >= 70%'
-    $coverageLines = @(& go tool cover "-func=$coveragePath" 2>&1)
-    if ($LASTEXITCODE -ne 0) {
-        $coverageLines | ForEach-Object { Write-Host $_ }
-        throw 'go tool cover failed.'
-    }
-    $coverageLines | ForEach-Object { Write-Host $_ }
-    $totalLine = $coverageLines | Where-Object { [string]$_ -match '^total:' } | Select-Object -Last 1
-    if (-not $totalLine -or [string]$totalLine -notmatch '([0-9.]+)%') {
-        throw 'Could not parse total coverage.'
-    }
-    $totalCoverage = [double]$Matches[1]
-    if ($totalCoverage -lt 70.0) {
-        throw "Total coverage $totalCoverage% is below 70%."
-    }
-
-    Invoke-NoOutputCommand 'cyclomatic complexity <= 10' 'gocyclo' @('-over', '10', '-ignore', '_test\.go', '.')
-    Invoke-NoOutputCommand 'cognitive complexity <= 15' 'gocognit' @('-over', '15', '-ignore', '_test\.go', '.')
-    Assert-CrapThreshold $coveragePath 30.0
-    Invoke-CheckedCommand 'Markdown lint' 'npx' @('--yes', "markdownlint-cli2@$markdownlintVersion", '**/*.md', '#node_modules', '#.agents', '#.github/agents')
-
-    Assert-MutationThresholds ([double]$mutationEfficacyThreshold) ([double]$mutationCoverageThreshold) $mutationPackageScope
-
-    Write-Host "`nAll quality gates passed." -ForegroundColor Green
-} finally {
-    Remove-Item -LiteralPath $coveragePath, $buildPath -Force -ErrorAction SilentlyContinue
+# Dot-sourcing exposes the same executor to offline regression tests.
+if ($MyInvocation.InvocationName -ne '.') {
+    exit (Invoke-LocalAudit -ReportPath $ReportPath)
 }

@@ -590,8 +590,42 @@ Neither route is exposed to the LAN or public internet. The hub reads Codex stat
 
 ## Quality limits
 
-CI and `.agents/skills/perfection/scripts/perfection-audit.ps1` enforce the
-same checked-in limits:
+CI and the local audit enforce the same checked-in measurement limits.
+Run the complete local check set from a disposable checkout with PowerShell 7:
+
+```powershell
+pwsh -NoProfile -File .agents/skills/perfection/scripts/perfection-audit.ps1
+```
+
+The runner reports each gate as `pass`, `fail` or `blocked` and continues
+independent checks after failures. A missing tool or unavailable GitHub access
+blocks the affected gate, not unrelated work. Failed coverage collection blocks
+coverage and CRAP instead of reusing an old profile. Any failed or blocked local
+gate makes the audit exit nonzero.
+
+The local set includes release-helper tests, all 12 release-target builds,
+CLI behavior, dashboard tests, ruleset and changelog validation, mutation
+fixtures, and performance tests and budgets. Local performance qualification
+always measures the full workload rather than applying CI's changed-path filter.
+The runner tests and `.github/local-quality-gates.json` inventory are checked in
+CI; an unclassified new or removed CI step fails the inventory test.
+
+Install Go from `go.mod`, Node 24, PowerShell 7, Git, GitHub CLI, Bash with its
+standard Unix utilities, and the pinned analyzers from `.github/quality-tools.env`.
+Race tests require Go's supported C compiler setup. Git Bash supplies the shell
+utilities on Windows; CI runs these checks on Ubuntu. Changelog validation needs
+read access to this repository's releases through `gh`. The runner does not
+install Go analyzers or modify GitHub. Markdown lint uses the pinned `npx` command.
+
+A JSON report and performance evidence are retained in a unique system temporary
+directory, printed at completion. Use `-ReportPath <existing-directory>/audit.json`
+to save the report elsewhere. Build outputs and the coverage profile are removed
+from that temporary directory; no generated output is placed in the checkout.
+
+Local success does not replace GitHub qualification. The report separately lists
+CodeQL setup/analysis, PR dependency review, current-head Codex review and the
+required aggregate `Quality Gate` as hosted checks not run locally. The audit
+never uploads source, requests reviews, posts comments or dispatches workflows.
 
 | Gate | Limit |
 | --- | ---: |

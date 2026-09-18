@@ -1,0 +1,46 @@
+{
+  "gates": [
+    { "id": "build", "tools": ["go"], "needs": [], "ci": ["build-and-test/Build"] },
+    { "id": "release-builds", "tools": ["go", "git"], "needs": [], "ci": ["build-and-test/Build all release targets"] },
+    { "id": "vet", "tools": ["go"], "needs": [], "ci": ["build-and-test/Vet"] },
+    { "id": "unit-tests", "tools": ["go"], "needs": [], "ci": ["build-and-test/Test Go packages (race detection enabled)"] },
+    { "id": "helper-tests", "tools": ["go"], "needs": [], "ci": ["build-and-test/Test release automation helpers"] },
+    { "id": "behavior-tests", "tools": ["go"], "needs": [], "ci": ["build-and-test/Test CLI behavior"] },
+    { "id": "dashboard-tests", "tools": ["node"], "needs": [], "ci": ["build-and-test/Test Node dashboards"] },
+    { "id": "runner-tests", "tools": ["pwsh", "go", "gofmt"], "needs": [], "ci": ["build-and-test/Test local audit runner"] },
+    { "id": "format", "tools": ["gofmt"], "needs": [], "ci": ["lint/Check formatting (gofmt)"] },
+    { "id": "tidy", "tools": ["go"], "needs": [], "ci": ["lint/Check module tidiness"] },
+    { "id": "ruleset", "tools": ["go"], "needs": [], "ci": ["lint/Validate main ruleset"] },
+    { "id": "changelog", "tools": ["go", "gh"], "needs": [], "ci": ["lint/Validate changelog release links"] },
+    { "id": "staticcheck", "tools": ["go", "staticcheck"], "needs": [], "ci": ["lint/Staticcheck"] },
+    { "id": "gocritic", "tools": ["go", "gocritic"], "needs": [], "ci": ["lint/Gocritic (anti-pattern detection)"] },
+    { "id": "errcheck", "tools": ["go", "errcheck"], "needs": [], "ci": ["lint/Errcheck (unchecked errors)"] },
+    { "id": "deadcode", "tools": ["go", "deadcode"], "needs": [], "ci": ["lint/Dead code detection"] },
+    { "id": "vulnerabilities", "tools": ["go", "govulncheck"], "needs": [], "ci": ["lint/Vulnerability scan"] },
+    { "id": "suppressions", "tools": [], "needs": [], "ci": ["lint/No lint suppressions allowed"] },
+    { "id": "output-policy", "tools": [], "needs": [], "ci": ["lint/No anti-patterns allowed"] },
+    { "id": "markdown", "tools": ["npx"], "needs": [], "ci": ["lint/Lint markdown"] },
+    { "id": "coverage", "tools": ["go"], "needs": ["unit-tests"], "ci": ["quality/Verify coverage artifact", "quality/Enforce: coverage ≥ 70%"] },
+    { "id": "cyclomatic", "tools": ["go", "gocyclo"], "needs": [], "ci": ["quality/Enforce: cyclomatic complexity ≤ 10"] },
+    { "id": "cognitive", "tools": ["go", "gocognit"], "needs": [], "ci": ["quality/Enforce: cognitive complexity ≤ 15"] },
+    { "id": "crap", "tools": ["go", "gocyclo"], "needs": ["unit-tests"], "ci": ["quality/Enforce: CRAP score < 30"] },
+    { "id": "mutation-fixtures", "tools": ["bash"], "needs": [], "ci": ["mutation/Verify mutation threshold fixtures"] },
+    { "id": "mutation", "tools": ["go", "gremlins"], "needs": [], "ci": ["mutation/Enforce: mutation efficacy ≥ 90% and mutator coverage ≥ 90%"] },
+    { "id": "performance-tests", "tools": ["node"], "needs": [], "ci": ["performance/Test performance gate"] },
+    { "id": "performance", "tools": ["go", "node", "git"], "needs": [], "ci": ["performance/Detect performance workload changes", "performance/Measure critical local paths"] }
+  ],
+  "hosted": [
+    { "step": "security-analysis/Initialize CodeQL", "reason": "GitHub-hosted CodeQL setup; local audit never uploads source or security results." },
+    { "step": "security-analysis/Analyze with CodeQL", "reason": "Require the current-revision GitHub CodeQL checks; not qualified by local success." },
+    { "step": "dependency-review/Review dependency changes", "reason": "Requires a GitHub pull-request dependency diff and the Dependency Review Action." },
+    { "step": "dependency-review/Skip dependency review outside pull requests", "reason": "CI event routing only; dependency review is not locally qualified." },
+    { "step": "codex-review/Require a clean current-head Codex review", "reason": "Requires current-head PR review evidence; local audit never requests reviews." },
+    { "step": "gate/Evaluate all gates", "reason": "The required GitHub Quality Gate includes hosted checks; local pass does not replace it." }
+  ],
+  "infrastructure": [
+    { "step": "lint/Install lint tools", "reason": "Local analyzers must already be installed at quality-tools.env pins; the audit verifies versions without installing." },
+    { "step": "quality/Install quality tools", "reason": "Local analyzers must already be installed at quality-tools.env pins." },
+    { "step": "mutation/Install gremlins", "reason": "Local Gremlins must already match quality-tools.env." },
+    { "step": "quality/Settle before retry", "reason": "GitHub artifact propagation only; local gates use the fresh local coverage file." }
+  ]
+}

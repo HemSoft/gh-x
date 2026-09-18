@@ -67,6 +67,10 @@ jobs:
       - name: Test Node dashboards
         run: node --test src/codex-dashboard/*.test.mjs src/dashboard-hub/*.test.mjs
 
+      - name: Test local audit runner
+        shell: pwsh
+        run: ./.agents/skills/perfection/scripts/test-audit.ps1
+
       - name: Upload coverage artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
