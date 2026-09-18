@@ -12,6 +12,11 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+## [0.13.7] - 2026-09-18
+
+- fix: isolate malformed dashboard requests (#131)
+- docs: record v0.13.6 release (#128)
+
 ## [0.13.6] - 2026-09-17
 
 - chore(deps): bump gh-aw setup CLI to v0.89.7 (#126)
@@ -191,7 +196,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.13.6...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.13.7...HEAD
+[0.13.7]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.7
 [0.13.6]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.6
 [0.13.5]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.5
 [0.13.4]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.4
