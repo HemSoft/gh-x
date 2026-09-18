@@ -92,29 +92,48 @@ current command is `npx --yes markdownlint-cli2@0.20.0 '**/*.md' '#node_modules'
 
 ### `audit` — Full Quality Report
 
-Run `.agents/skills/perfection/scripts/perfection-audit.ps1`. It stops at the
-first failure and executes these gates in order:
+Run `.agents/skills/perfection/scripts/perfection-audit.ps1` with PowerShell 7
+from a disposable checkout. It records `pass`, `fail` or `blocked` per local
+gate and continues independent work after failures. Missing tools and unavailable
+GitHub access block affected gates. Coverage and CRAP require successful fresh
+coverage collection. Any failed or blocked local gate exits nonzero.
 
-1. Verify every installed analyzer matches `.github/quality-tools.env`.
-2. `go build -o <temp-path> ./...`
-3. `go vet ./...`
-4. `gofmt -l .` (must produce no output)
-5. `go mod tidy -diff` (must produce no diff)
-6. `staticcheck ./...`
-7. `gocritic check ./...`
-8. `errcheck -exclude .errcheck_excludes ./...`
-9. `deadcode ./...` (must produce no output)
-10. `govulncheck ./...`
-11. Scan Go files for forbidden lint suppressions.
-12. Scan production Go files for `fmt.Print*` calls.
-13. `go test -race -count=1 "-coverprofile=<temp-path>" ./...`
-14. `node --test src/codex-dashboard/*.test.mjs src/dashboard-hub/*.test.mjs`
-15. Enforce total coverage at 70% or higher.
-16. `gocyclo -over 10 -ignore "_test\.go" .` (must produce no output)
-17. `gocognit -over 15 -ignore "_test\.go" .` (must produce no output)
-18. Enforce a CRAP score below 30 for every production function.
-19. `npx --yes markdownlint-cli2@0.20.0 '**/*.md' '#node_modules' '#.agents' '#.github/agents'`
-20. `gremlins unleash --timeout-coefficient 10 --threshold-efficacy 90 --threshold-mcover 90 ./src`
+The authoritative local inventory is `.github/local-quality-gates.json`.
+CI tests its step mapping against `.github/workflows/ci.yml` and runs the
+PowerShell executor regression tests. The local runner executes:
+
+1. Build locally and cross-build every canonical release target into temporary output.
+2. Vet, race-test production Go packages with fresh coverage, explicitly test
+   `.github/scripts/...`, and run CLI behavior with `-trimpath -race -count=1`.
+3. Run Node dashboard tests and the dependency-free PowerShell runner tests.
+4. Check formatting and module tidiness without rewriting source or module files.
+5. Validate the ruleset and changelog release links. Changelog access is read-only.
+6. Run staticcheck, gocritic, errcheck, deadcode and govulncheck, verifying each
+   analyzer's exact `.github/quality-tools.env` pin before its own gate.
+7. Scan all Go files for forbidden suppressions and production `fmt.Print*` calls.
+8. Run pinned Markdown lint with the same CI exclusions.
+9. Enforce statement coverage >=70%, cyclomatic complexity <=10, cognitive
+   complexity <=15 and CRAP <30 with the existing Go analyzer scopes.
+10. Run mutation fixtures and Gremlins against the package scope and 90% floors
+    in `.github/quality-tools.env`, including integer-ratio boundary checks.
+11. Run performance gate tests and all versioned benchmark budgets. Local audits
+    always measure; only CI applies changed-path selection.
+
+Prerequisites: PowerShell 7, the Go version in `go.mod`, a supported race-test C
+compiler, Node 24 with npx, Git, authenticated read-only GitHub CLI access, Bash
+and its standard Unix utilities. Git Bash supplies those utilities on Windows.
+Pinned analyzers must already be installed; the audit never installs them.
+
+The default JSON report and performance evidence live in a unique system temp
+directory. `-ReportPath <existing-directory>/audit.json` selects another report
+path. Build and coverage artifacts are cleaned up after all gates. The source
+checkout receives no generated audit output.
+
+CodeQL setup/upload, PR dependency review, current-head Codex review and the
+aggregate GitHub Quality Gate are listed as hosted-only, not run locally. A
+successful local audit never claims those checks passed and performs no GitHub
+writes. Test the executor with
+`pwsh -NoProfile -File .agents/skills/perfection/scripts/test-audit.ps1`.
 
 Present results as a scorecard table:
 
@@ -348,7 +367,9 @@ These thresholds are enforced in CI (`.github/workflows/ci.yml`). Every gate is 
 | Mutation efficacy | ≥90% | Mutation Testing |
 | Mutator coverage | ≥90% | Mutation Testing |
 
-All jobs feed into a single **Quality Gate** status check required by branch protection.
+All CI jobs feed into a single **Quality Gate** status check required by branch
+protection. A local audit pass qualifies only its local gates; hosted checks
+remain required in GitHub.
 
 ## CI Integration
 
