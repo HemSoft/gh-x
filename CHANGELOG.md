@@ -10,8 +10,6 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
-- Fix Copilot verdict handling so `Needs a closer look` cannot render as a clean AI review (#135)
-
 See the comparison link below for changes since the latest published release.
 
 ## [0.13.9] - 2026-09-20
