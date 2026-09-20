@@ -15,6 +15,12 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
+## [0.13.10] - 2026-09-20
+
+- Show recent merged pull requests in status (#140)
+- docs: record issue #135 quality audit (#138)
+- docs: record v0.13.9 release (#137)
+
 ## [0.13.9] - 2026-09-20
 
 - fix: honor Copilot review verdicts (#135) (#136)
@@ -209,7 +215,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.13.9...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.13.10...HEAD
+[0.13.10]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.10
 [0.13.9]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.9
 [0.13.8]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.8
 [0.13.7]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.7
