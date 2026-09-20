@@ -170,6 +170,7 @@ func buildDisplayPullRequest(pullRequest pullRequest, now time.Time) displayPull
 		Updated:   formatRelativeTime(pullRequest.UpdatedAt, now),
 		URL:       pullRequest.URL,
 		updatedAt: pullRequest.UpdatedAt,
+		mergedAt:  pullRequest.MergedAt,
 	}
 }
 

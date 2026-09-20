@@ -40,7 +40,7 @@ gh x pr atm [flags]     # org-wide PRs needing your attention
 gh x pr review [number] # read-only agentic PR review
 gh x pr changelog       # show release notes for recent versions
 gh x monitor            # full-terminal multi-repository PR and issue dashboard
-gh x status             # repository, branch, worktree, issue, and PR health
+gh x status             # repository health with open and recently merged PRs
 gh x run list [flags]   # workflow runs with clickable IDs
 gh x version            # show version and check for updates (also: --version, -v)
 ```
@@ -133,8 +133,12 @@ branch or detached commit known to be merged. Current, primary, locked, and
 default-branch worktrees are never suggested. Suggestions are informational;
 the command never deletes or prunes a worktree.
 
-Open issues, enriched open pull requests, and the five most recent workflow
-runs appear in separate tables below the header. Workflow runs keep the same
+Open issues, enriched open pull requests, the five most recently merged pull
+requests, and the five most recent workflow runs appear in separate tables
+below the header. Use `--merged=N` to change the merged pull request count.
+`--merged=0` hides that section and skips its fetch. Merged pull requests are
+ordered by merge time, newest first, and use the same enriched table as open
+pull requests. Workflow runs keep the same
 status, title, workflow, branch, event, linked ID, elapsed-time, and age columns
 as `gh x run list`. Local Git status still renders
 when GitHub data is unavailable. When supplemental pull request data or issue
@@ -145,6 +149,12 @@ When either unfiltered open-work section is empty, it prints one randomly
 selected celebration from the same pool used by the list commands.
 When all five recent workflow runs completed successfully, status prints one
 randomly selected perfection message from a workflow-specific pool.
+
+```bash
+gh x status              # show the five most recently merged pull requests
+gh x status --merged=10  # show up to ten
+gh x status --merged=0   # hide recently merged pull requests
+```
 
 ## What `gh x pr list` adds
 

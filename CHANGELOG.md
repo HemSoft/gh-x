@@ -10,6 +10,8 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+- feat: show recent merged pull requests in status (#139)
+
 See the comparison link below for changes since the latest published release.
 
 ## [0.13.9] - 2026-09-20

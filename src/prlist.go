@@ -9,25 +9,30 @@ import (
 	"time"
 )
 
-const jsonFields = "number,title,author,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,headRefName,baseRefName,url,latestReviews,mergeable"
+const (
+	jsonFields                 = "number,title,author,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt,headRefName,baseRefName,url,latestReviews,mergeable"
+	recentMergedCandidateFloor = 25
+	recentMergedCandidateLimit = 1000
+)
 
 // executeListFunc is swapped in tests to avoid real API calls.
 var executeListFunc = executeList
 
 type listOptions struct {
-	repo      string
-	limit     int
-	state     string
-	author    string
-	assignee  string
-	app       string
-	base      string
-	head      string
-	search    string
-	draftOnly bool
-	web       bool
-	json      bool
-	labels    stringSliceFlag
+	repo           string
+	limit          int
+	state          string
+	author         string
+	assignee       string
+	app            string
+	base           string
+	head           string
+	search         string
+	draftOnly      bool
+	web            bool
+	json           bool
+	recentlyMerged bool
+	labels         stringSliceFlag
 }
 
 type stringSliceFlag []string
@@ -49,6 +54,7 @@ type pullRequest struct {
 	ReviewDecision    string      `json:"reviewDecision"`
 	StatusCheckRollup []checkItem `json:"statusCheckRollup"`
 	UpdatedAt         time.Time   `json:"updatedAt"`
+	MergedAt          time.Time   `json:"mergedAt"`
 	HeadRefName       string      `json:"headRefName"`
 	BaseRefName       string      `json:"baseRefName"`
 	URL               string      `json:"url"`
@@ -101,6 +107,7 @@ type displayPullRequest struct {
 	checksDowngraded bool // unexported; required-check rules downgraded a pass
 	issueRefs        []linkedReference
 	updatedAt        time.Time // unexported; used for sorting
+	mergedAt         time.Time // unexported; used for recent-merge sorting
 }
 
 type pullRequestListResult struct {
@@ -138,17 +145,12 @@ func executeList(options listOptions, stdout io.Writer, stderr io.Writer) error 
 }
 
 func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListResult, error) {
-	arguments := buildListArgs(options)
-	commandOutput, commandError, err := ghExecFunc(arguments...)
+	pullRequests, err := fetchPullRequests(options)
 	if err != nil {
-		return pullRequestListResult{}, wrapExecError(err, commandError.String())
+		return pullRequestListResult{}, err
 	}
 	if options.web {
 		return pullRequestListResult{}, nil
-	}
-	var pullRequests []pullRequest
-	if err := json.Unmarshal(commandOutput.Bytes(), &pullRequests); err != nil {
-		return pullRequestListResult{}, fmt.Errorf("decode gh pr list output: %w", err)
 	}
 	supplemental, repoOwner, repoName := fetchSupplementalData(options.repo, pullRequests)
 	requiredByBranch, failedRequiredBranches := fetchRequiredChecks(repoOwner, repoName, pullRequests)
@@ -169,6 +171,64 @@ func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListRe
 		RequiredChecksFailed:   requiredChecksFailed,
 		FailedRequiredCheckPRs: failedRequiredPRs,
 	}, nil
+}
+
+func fetchPullRequests(options listOptions) ([]pullRequest, error) {
+	if options.recentlyMerged {
+		return fetchRecentlyMergedPullRequests(options)
+	}
+	return fetchRawPullRequests(options)
+}
+
+func fetchRawPullRequests(options listOptions) ([]pullRequest, error) {
+	arguments := buildListArgs(options)
+	commandOutput, commandError, err := ghExecFunc(arguments...)
+	if err != nil {
+		return nil, wrapExecError(err, commandError.String())
+	}
+	if options.web {
+		return nil, nil
+	}
+	var pullRequests []pullRequest
+	if err := json.Unmarshal(commandOutput.Bytes(), &pullRequests); err != nil {
+		return nil, fmt.Errorf("decode gh pr list output: %w", err)
+	}
+	return pullRequests, nil
+}
+
+func fetchRecentlyMergedPullRequests(options listOptions) ([]pullRequest, error) {
+	desired := options.limit
+	if desired > recentMergedCandidateLimit {
+		return nil, fmt.Errorf("recently merged pull request limit cannot exceed %d", recentMergedCandidateLimit)
+	}
+	candidateLimit := max(desired, recentMergedCandidateFloor)
+	for {
+		candidateOptions := options
+		candidateOptions.limit = candidateLimit
+		candidates, err := fetchRawPullRequests(candidateOptions)
+		if err != nil {
+			return nil, err
+		}
+		exhausted := len(candidates) < candidateLimit
+		oldestUpdate := time.Time{}
+		if len(candidates) > 0 {
+			oldestUpdate = candidates[len(candidates)-1].UpdatedAt
+		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return candidates[i].MergedAt.After(candidates[j].MergedAt)
+		})
+		if len(candidates) < desired {
+			return candidates, nil
+		}
+		selected := candidates[:desired]
+		if exhausted || !oldestUpdate.After(selected[len(selected)-1].MergedAt) {
+			return selected, nil
+		}
+		if candidateLimit == recentMergedCandidateLimit {
+			return nil, fmt.Errorf("cannot determine the %d most recent merges from %d updated pull requests", desired, candidateLimit)
+		}
+		candidateLimit = min(candidateLimit*2, recentMergedCandidateLimit)
+	}
 }
 
 // requiredChecksError turns failed required-check rules lookups into the

@@ -220,13 +220,27 @@ func TestFetchStatusDashboard(t *testing.T) {
 		return issueListResult{Display: []displayIssue{{Number: 7, Title: "Status dashboard", State: "open"}}}, nil
 	}
 	statusPullRequestListFunc = func(options listOptions, _ time.Time) (pullRequestListResult, error) {
-		if options.limit != statusListLimit || options.state != "open" {
-			t.Fatalf("unexpected PR options: %#v", options)
+		switch options.state {
+		case "open":
+			if options.limit != statusListLimit || options.search != "" {
+				t.Fatalf("unexpected open PR options: %#v", options)
+			}
+			return pullRequestListResult{
+				Entries:  []pullRequest{{HeadRefName: "open-branch"}},
+				Rendered: []displayPullRequest{{Number: 2, Title: "Open PR", State: "open"}},
+			}, nil
+		case "merged":
+			if options.limit != statusMergedDefaultLimit || options.search != "sort:updated-desc" || !options.recentlyMerged {
+				t.Fatalf("unexpected merged PR options: %#v", options)
+			}
+			return pullRequestListResult{Rendered: []displayPullRequest{
+				{Number: 137, Title: "Older merge", State: "merged", mergedAt: time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)},
+				{Number: 138, Title: "Newest merge", State: "merged", mergedAt: time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)},
+			}}, nil
+		default:
+			t.Fatalf("unexpected PR state: %#v", options)
+			return pullRequestListResult{}, nil
 		}
-		return pullRequestListResult{
-			Entries:  []pullRequest{{HeadRefName: "open-branch"}},
-			Rendered: []displayPullRequest{{Number: 2, Title: "Open PR", State: "open"}},
-		}, nil
 	}
 	statusWorkflowRunListFunc = func(options runListOptions, now time.Time) (workflowRunListResult, error) {
 		if options.limit != statusWorkflowRunLimit || options.repo != "" || options.status != "" || options.workflow != "" || options.branch != "" || options.event != "" || options.user != "" {
@@ -277,7 +291,7 @@ func TestFetchStatusDashboard(t *testing.T) {
 		}
 	}
 
-	got, err := fetchStatusDashboard(true)
+	got, err := fetchStatusDashboard(true, statusMergedDefaultLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,6 +304,9 @@ func TestFetchStatusDashboard(t *testing.T) {
 	if got.CurrentStatus.Branch != "feature/status" || len(got.Issues) != 1 || len(got.PullRequests) != 1 || len(got.WorkflowRuns) != statusWorkflowRunLimit {
 		t.Fatalf("unexpected dashboard data: %#v", got)
 	}
+	if !got.ShowMergedPullRequests || len(got.MergedPullRequests) != 2 || got.MergedPullRequests[0].Number != 138 || got.MergedPullRequests[1].Number != 137 {
+		t.Fatalf("merged pull requests are not newest-first: %#v", got.MergedPullRequests)
+	}
 	if !got.WorkflowRunsPerfect {
 		t.Fatal("five successful runs should produce a clean streak")
 	}
@@ -298,6 +315,32 @@ func TestFetchStatusDashboard(t *testing.T) {
 	}
 	if got.Worktrees[1].CleanupCandidate {
 		t.Fatal("current feature worktree must never be a cleanup candidate")
+	}
+}
+
+func TestFetchStatusDashboardSkipsMergedPullRequestsWhenDisabled(t *testing.T) {
+	defer saveStatusFuncs()()
+	statusRepoLabelFunc = func(string) string { return "owner/repo" }
+	statusIssueListFunc = func(issueListOptions, time.Time) (issueListResult, error) { return issueListResult{}, nil }
+	prCalls := 0
+	statusPullRequestListFunc = func(options listOptions, _ time.Time) (pullRequestListResult, error) {
+		prCalls++
+		if options.state != "open" {
+			t.Fatalf("unexpected pull request fetch: %#v", options)
+		}
+		return pullRequestListResult{}, nil
+	}
+	statusWorkflowRunListFunc = func(runListOptions, time.Time) (workflowRunListResult, error) {
+		return workflowRunListResult{}, nil
+	}
+	installStatusDashboardGitFixture()
+
+	dashboard, err := fetchStatusDashboard(false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prCalls != 1 || dashboard.ShowMergedPullRequests {
+		t.Fatalf("disabled merged section made %d pull request fetches: %#v", prCalls, dashboard)
 	}
 }
 
@@ -313,7 +356,7 @@ func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
 	}
 	installStatusDashboardGitFixture()
 
-	dashboard, err := fetchStatusDashboard(true)
+	dashboard, err := fetchStatusDashboard(true, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +380,7 @@ func TestFetchStatusDashboardKeepsLocalHealthWhenGitHubFails(t *testing.T) {
 	installStatusDashboardGitFixture()
 	statusRepoURLFunc = func(string) (string, error) { return "", errors.New("repository URL offline") }
 
-	dashboard, err := fetchStatusDashboard(true)
+	dashboard, err := fetchStatusDashboard(true, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +440,7 @@ func TestFetchStatusDashboardSkipsRepositoryURLWithoutColor(t *testing.T) {
 		return "", nil
 	}
 
-	dashboard, err := fetchStatusDashboard(false)
+	dashboard, err := fetchStatusDashboard(false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +460,7 @@ func TestRenderStatusNoColor(t *testing.T) {
 		"Repository", "owner/repo", "Main", "synced with origin/main", "Current", "feature/status",
 		"3 local (1 dangling) · 2 remote", "3 total · 1 cleanup candidate",
 		"old — C:/repo.worktrees/old", "Open issues (1)", "#7", "Open pull requests (1)", "#2",
-		"Recent workflow runs (1)", "Status run", "808",
+		"Recently merged pull requests (1)", "#138", "Recent workflow runs (1)", "Status run", "808",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected %q in output:\n%s", want, output)
@@ -517,6 +560,9 @@ func TestRenderStatusColorHasLinksButNoClipboard(t *testing.T) {
 	if !strings.Contains(output, "\x1b]8;;https://github.com/owner/repo/issues/7") {
 		t.Fatal("expected clickable issue link")
 	}
+	if !strings.Contains(output, "\x1b]8;;https://github.com/owner/repo/pull/138") {
+		t.Fatal("expected clickable merged pull request link")
+	}
 	if !strings.Contains(output, "\x1b]8;;https://github.com/owner/repo/actions/runs/808") {
 		t.Fatal("expected clickable workflow run link")
 	}
@@ -576,6 +622,34 @@ func TestRenderStatusEmptyAndUnavailableSections(t *testing.T) {
 		output := buf.String()
 		if !strings.Contains(output, "Unavailable: offline extra") || !strings.Contains(output, "Unavailable: unauthorized") || !strings.Contains(output, "Unavailable: actions offline") {
 			t.Fatalf("missing unavailable states:\n%s", output)
+		}
+	})
+
+	t.Run("merged empty", func(t *testing.T) {
+		var buf bytes.Buffer
+		dashboard := statusDashboard{ShowMergedPullRequests: true}
+		if err := renderStatus(&buf, dashboard, false); err != nil {
+			t.Fatal(err)
+		}
+		output := buf.String()
+		if !strings.Contains(output, "Recently merged pull requests (0)") || !strings.Contains(output, "No merged pull requests found.") {
+			t.Fatalf("missing merged empty state:\n%s", output)
+		}
+	})
+
+	t.Run("merged unavailable preserves other sections", func(t *testing.T) {
+		var buf bytes.Buffer
+		dashboard := sampleStatusDashboard()
+		dashboard.MergedPullRequests = nil
+		dashboard.MergedPullRequestsErr = errors.New("merged pull requests offline")
+		if err := renderStatus(&buf, dashboard, false); err != nil {
+			t.Fatal(err)
+		}
+		output := buf.String()
+		for _, want := range []string{"#7", "#2", "Recently merged pull requests", "Unavailable: merged pull requests offline", "Recent workflow runs"} {
+			if !strings.Contains(output, want) {
+				t.Fatalf("merged pull request failure suppressed %q:\n%s", want, output)
+			}
 		}
 	})
 
@@ -645,11 +719,54 @@ func TestRenderStatusWorkflowRunSection(t *testing.T) {
 	}
 }
 
+func TestParseStatusMergedLimit(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want int
+	}{
+		{name: "default", want: statusMergedDefaultLimit},
+		{name: "override", args: []string{"--merged=2"}, want: 2},
+		{name: "disabled", args: []string{"--merged=0"}, want: 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			got, err := parseStatusArgs(tc.args, &stderr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("merged limit = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunStatusRejectsInvalidMergedLimitsBeforeFetching(t *testing.T) {
+	defer saveStatusFuncs()()
+	fetchStatusDashboardFunc = func(bool, int) (statusDashboard, error) {
+		t.Fatal("invalid arguments must not fetch dashboard data")
+		return statusDashboard{}, nil
+	}
+
+	for _, args := range [][]string{{"--merged=-1"}, {"--merged=abc"}} {
+		var stdout, stderr bytes.Buffer
+		if err := runStatus(args, &stdout, &stderr); err == nil {
+			t.Fatalf("runStatus(%v) succeeded, want argument error", args)
+		}
+	}
+}
+
 func TestRunStatusAliasesUseFetcher(t *testing.T) {
 	useBacklogPraiseIndex(t, 0)
 	defer saveStatusFuncs()()
 	statusNowFunc = func() time.Time { return time.Date(2026, 9, 5, 16, 32, 0, 0, time.UTC) }
-	fetchStatusDashboardFunc = func(bool) (statusDashboard, error) {
+	fetchStatusDashboardFunc = func(_ bool, mergedLimit int) (statusDashboard, error) {
+		if mergedLimit != statusMergedDefaultLimit {
+			t.Fatalf("merged limit = %d, want %d", mergedLimit, statusMergedDefaultLimit)
+		}
 		return statusDashboard{Repository: "owner/repo"}, nil
 	}
 
@@ -705,7 +822,7 @@ func TestRunStatusHelp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"gh x status", "branches", "worktrees", "open issues", "open pull requests", "workflow runs"} {
+	for _, want := range []string{"gh x status", "branches", "worktrees", "open issues", "open pull requests", "recently merged pull requests", "workflow runs", "--merged int", "0 hides the section", "default 5"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("expected %q in status usage, got %q", want, stderr.String())
 		}
@@ -726,9 +843,11 @@ func sampleStatusDashboard() statusDashboard {
 			{Path: "C:/repo.worktrees/current", Branch: "feature/status", Current: true},
 			{Path: "C:/repo.worktrees/old", Branch: "old", CleanupCandidate: true, CleanupReason: "clean, merged branch with no open PR"},
 		},
-		Issues:       []displayIssue{{Number: 7, Title: "Status dashboard", Author: "alice", State: "open", Updated: "1m", URL: "https://github.com/owner/repo/issues/7"}},
-		PullRequests: []displayPullRequest{{Number: 2, Title: "Open PR", Author: "bob", State: "open", Review: "required", AIReview: "-", Checks: "pending", Comments: "-", Branch: "feature", Updated: "2m", URL: "https://github.com/owner/repo/pull/2"}},
-		WorkflowRuns: []displayWorkflowRun{{Status: "✓", Title: "Status run", Workflow: "CI", Branch: "main", Event: "push", ID: "808", URL: "https://github.com/owner/repo/actions/runs/808", Elapsed: "8s", Age: "1m"}},
+		Issues:                 []displayIssue{{Number: 7, Title: "Status dashboard", Author: "alice", State: "open", Updated: "1m", URL: "https://github.com/owner/repo/issues/7"}},
+		PullRequests:           []displayPullRequest{{Number: 2, Title: "Open PR", Author: "bob", State: "open", Review: "required", AIReview: "-", Checks: "pending", Comments: "-", Branch: "feature", Updated: "2m", URL: "https://github.com/owner/repo/pull/2"}},
+		ShowMergedPullRequests: true,
+		MergedPullRequests:     []displayPullRequest{{Number: 138, Title: "Merged PR", Author: "carol", State: "merged", Review: "approved", AIReview: "pass", Checks: "pass", Comments: "-", Branch: "merged-feature", Updated: "3m", URL: "https://github.com/owner/repo/pull/138"}},
+		WorkflowRuns:           []displayWorkflowRun{{Status: "✓", Title: "Status run", Workflow: "CI", Branch: "main", Event: "push", ID: "808", URL: "https://github.com/owner/repo/actions/runs/808", Elapsed: "8s", Age: "1m"}},
 	}
 }
 
@@ -825,7 +944,7 @@ func TestFetchStatusDashboardKeepsSupplementalDiagnostics(t *testing.T) {
 	}
 	installStatusDashboardGitFixture()
 
-	dashboard, err := fetchStatusDashboard(true)
+	dashboard, err := fetchStatusDashboard(true, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -49,6 +49,59 @@ func TestFetchPullRequestListError(t *testing.T) {
 	}
 }
 
+func TestFetchRecentlyMergedPullRequestsExpandsUntilMergeOrderIsProven(t *testing.T) {
+	saved := ghExecFunc
+	defer func() { ghExecFunc = saved }()
+
+	firstPage := []pullRequest{
+		{Number: 1, MergedAt: time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)},
+		{Number: 2, MergedAt: time.Date(2026, 9, 9, 0, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 10, 29, 0, 0, 0, 0, time.UTC)},
+	}
+	for i := 0; i < recentMergedCandidateFloor-2; i++ {
+		firstPage = append(firstPage, pullRequest{
+			Number:    10 + i,
+			MergedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2026, 10, 28-i, 0, 0, 0, 0, time.UTC),
+		})
+	}
+	secondPage := append([]pullRequest{}, firstPage...)
+	secondPage = append(secondPage,
+		pullRequest{Number: 3, MergedAt: time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)},
+		pullRequest{Number: 4, MergedAt: time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+	)
+
+	calls := 0
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		calls++
+		command := strings.Join(args, " ")
+		var rows []pullRequest
+		switch {
+		case strings.Contains(command, "--limit 25"):
+			rows = firstPage
+		case strings.Contains(command, "--limit 50"):
+			rows = secondPage
+		default:
+			t.Fatalf("unexpected arguments: %s", command)
+		}
+		data, err := json.Marshal(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return *bytes.NewBuffer(data), bytes.Buffer{}, nil
+	}
+
+	got, err := fetchRecentlyMergedPullRequests(listOptions{limit: 2, state: "merged", search: "sort:updated-desc", recentlyMerged: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("fetch calls = %d, want 2", calls)
+	}
+	if len(got) != 2 || got[0].Number != 3 || got[1].Number != 1 {
+		t.Fatalf("recent merges = %#v, want #3 then #1", got)
+	}
+}
+
 func TestResolveAuthorFromOrg_SearchError(t *testing.T) {
 	saved := ghExecFunc
 	defer func() { ghExecFunc = saved }()

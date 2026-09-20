@@ -67,36 +67,43 @@ type statusWorktree struct {
 }
 
 type statusDashboard struct {
-	Repository          string
-	RepositoryURL       string
-	DefaultBranch       string
-	DefaultStatus       statusSummary
-	DefaultCheckedOut   bool
-	DefaultStatusErr    error
-	CurrentStatus       statusSummary
-	Branches            statusBranchInventory
-	Worktrees           []statusWorktree
-	Issues              []displayIssue
-	IssuesErr           error
-	IssuesRelErr        error
-	IssuesHierarchyErr  error
-	PullRequests        []displayPullRequest
-	PullRequestsErr     error
-	PullRequestsSuppErr error
-	RequiredChecksErr   error
-	WorkflowRuns        []displayWorkflowRun
-	WorkflowRunsPerfect bool
-	WorkflowRunsErr     error
+	Repository                string
+	RepositoryURL             string
+	DefaultBranch             string
+	DefaultStatus             statusSummary
+	DefaultCheckedOut         bool
+	DefaultStatusErr          error
+	CurrentStatus             statusSummary
+	Branches                  statusBranchInventory
+	Worktrees                 []statusWorktree
+	Issues                    []displayIssue
+	IssuesErr                 error
+	IssuesRelErr              error
+	IssuesHierarchyErr        error
+	PullRequests              []displayPullRequest
+	PullRequestsErr           error
+	PullRequestsSuppErr       error
+	RequiredChecksErr         error
+	ShowMergedPullRequests    bool
+	MergedPullRequests        []displayPullRequest
+	MergedPullRequestsErr     error
+	MergedPullRequestsSuppErr error
+	MergedRequiredChecksErr   error
+	WorkflowRuns              []displayWorkflowRun
+	WorkflowRunsPerfect       bool
+	WorkflowRunsErr           error
 }
 
 const (
-	statusListLimit        = 30
-	statusWorkflowRunLimit = 5
-	statusBranchFormat     = "%(refname)%09%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(symref)"
+	statusListLimit          = 30
+	statusMergedDefaultLimit = 5
+	statusWorkflowRunLimit   = 5
+	statusBranchFormat       = "%(refname)%09%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(symref)"
 )
 
 func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
-	if err := parseStatusArgs(args, stderr); err != nil {
+	mergedLimit, err := parseStatusArgs(args, stderr)
+	if err != nil {
 		if errors.Is(err, errHelpDisplayed) {
 			return nil
 		}
@@ -104,7 +111,7 @@ func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 
 	colorEnabled := term.FromEnv().IsColorEnabled()
-	dashboard, err := fetchStatusDashboardFunc(colorEnabled)
+	dashboard, err := fetchStatusDashboardFunc(colorEnabled, mergedLimit)
 	if err != nil {
 		return err
 	}
@@ -112,25 +119,29 @@ func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 	return renderStatus(stdout, dashboard, colorEnabled)
 }
 
-func parseStatusArgs(args []string, stderr io.Writer) error {
+func parseStatusArgs(args []string, stderr io.Writer) (int, error) {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
 		writeStatusUsage(stderr)
 	}
+	mergedLimit := flags.Int("merged", statusMergedDefaultLimit, "number of recently merged pull requests to show; 0 hides the section")
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return errHelpDisplayed
+			return 0, errHelpDisplayed
 		}
-		return err
+		return 0, err
 	}
 
 	if flags.NArg() > 0 {
-		return fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), ", "))
+		return 0, fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), ", "))
+	}
+	if *mergedLimit < 0 {
+		return 0, fmt.Errorf("--merged must be 0 or greater")
 	}
 
-	return nil
+	return *mergedLimit, nil
 }
 
 var (
@@ -145,7 +156,7 @@ var (
 	statusPathExistsFunc      = statusPathExists
 )
 
-func fetchStatusDashboard(colorEnabled bool) (statusDashboard, error) {
+func fetchStatusDashboard(colorEnabled bool, mergedLimit int) (statusDashboard, error) {
 	output, err := statusCommandFunc("git", "status", "--porcelain=v2", "--branch")
 	if err != nil {
 		return statusDashboard{}, fmt.Errorf("git status: %w", err)
@@ -205,6 +216,8 @@ func fetchStatusDashboard(colorEnabled bool) (statusDashboard, error) {
 		dashboard.RequiredChecksErr = prResult.RequiredChecksErr
 	}
 
+	fetchStatusMergedPullRequests(&dashboard, mergedLimit, now)
+
 	runOptions := runListOptions{limit: statusWorkflowRunLimit}
 	runResult, runErr := statusWorkflowRunListFunc(runOptions, now)
 	dashboard.WorkflowRunsErr = runErr
@@ -218,6 +231,29 @@ func fetchStatusDashboard(colorEnabled bool) (statusDashboard, error) {
 	pullRequestsKnown := prErr == nil && len(prResult.Entries) < prOptions.limit
 	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, defaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
 	return dashboard, nil
+}
+
+func fetchStatusMergedPullRequests(dashboard *statusDashboard, limit int, now time.Time) {
+	if limit == 0 {
+		return
+	}
+	dashboard.ShowMergedPullRequests = true
+	options := defaultListOptions()
+	options.limit = limit
+	options.state = "merged"
+	options.search = "sort:updated-desc"
+	options.recentlyMerged = true
+	result, err := statusPullRequestListFunc(options, now)
+	dashboard.MergedPullRequestsErr = err
+	if err != nil {
+		return
+	}
+	dashboard.MergedPullRequests = result.Rendered
+	sort.SliceStable(dashboard.MergedPullRequests, func(i, j int) bool {
+		return dashboard.MergedPullRequests[i].mergedAt.After(dashboard.MergedPullRequests[j].mergedAt)
+	})
+	dashboard.MergedPullRequestsSuppErr = result.SupplementalErr
+	dashboard.MergedRequiredChecksErr = result.RequiredChecksErr
 }
 
 func resolveStatusRepository(colorEnabled bool) (string, string) {
@@ -635,6 +671,9 @@ func renderStatus(stdout io.Writer, dashboard statusDashboard, colorEnabled bool
 	if err := renderStatusPullRequestSection(stdout, styler, dashboard); err != nil {
 		return err
 	}
+	if err := renderStatusMergedPullRequestSection(stdout, styler, dashboard); err != nil {
+		return err
+	}
 	return renderStatusWorkflowRunSection(stdout, styler, dashboard)
 }
 
@@ -902,6 +941,30 @@ func renderStatusPullRequestSection(stdout io.Writer, styler tableStyler, dashbo
 	return nil
 }
 
+func renderStatusMergedPullRequestSection(stdout io.Writer, styler tableStyler, dashboard statusDashboard) error {
+	if !dashboard.ShowMergedPullRequests {
+		return nil
+	}
+	fmt.Fprintln(stdout)
+	if dashboard.MergedPullRequestsErr != nil {
+		fmt.Fprintln(stdout, "Recently merged pull requests")
+		fmt.Fprintln(stdout, styler.dim("Unavailable: "+conciseStatusError(dashboard.MergedPullRequestsErr)).styled)
+		return nil
+	}
+	fmt.Fprintf(stdout, "Recently merged pull requests (%d)\n", len(dashboard.MergedPullRequests))
+	if dashboard.MergedPullRequestsSuppErr != nil {
+		fmt.Fprintln(stdout, styler.dim(supplementalNotice(dashboard.MergedPullRequestsSuppErr)).styled)
+	}
+	if dashboard.MergedRequiredChecksErr != nil {
+		fmt.Fprintln(stdout, styler.dim("Required check rules unavailable: "+boundedSingleLine(dashboard.MergedRequiredChecksErr.Error(), 500)).styled)
+	}
+	if len(dashboard.MergedPullRequests) == 0 {
+		fmt.Fprintln(stdout, "No merged pull requests found.")
+		return nil
+	}
+	return renderPullRequestRows(stdout, dashboard.MergedPullRequests, styler.colorEnabled)
+}
+
 func renderStatusWorkflowRunSection(stdout io.Writer, styler tableStyler, dashboard statusDashboard) error {
 	fmt.Fprintln(stdout)
 	if dashboard.WorkflowRunsErr != nil {
@@ -939,8 +1002,11 @@ func writeStatusUsage(w io.Writer) {
 }
 
 const statusUsage = `Usage:
-  gh x status
+  gh x status [flags]
 
 Show repository health, branches, worktrees, open issues, open pull requests,
-and the five most recent workflow runs.
+recently merged pull requests, and the five most recent workflow runs.
+
+Flags:
+      --merged int   Number of recently merged pull requests to show; 0 hides the section (default 5)
 `
