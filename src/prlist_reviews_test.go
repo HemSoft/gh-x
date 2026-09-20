@@ -107,6 +107,28 @@ func TestIsAIReviewer(t *testing.T) {
 	}
 }
 
+func TestClassifyCopilotReview(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want copilotReviewVerdict
+	}{
+		{name: "approval recommended", body: "### 🟢 Approval recommended\n\nNo issues found.", want: copilotVerdictClean},
+		{name: "needs closer look", body: "### 🔵 Needs a closer look\n\nA portability issue remains.", want: copilotVerdictFindings},
+		{name: "changes recommended", body: "### 🟡 Changes recommended\n\nPlease fix the parser.", want: copilotVerdictFindings},
+		{name: "verdict after marker", body: "<!-- ccr-overview-v2 -->\n\n### 🟢 Approval recommended", want: copilotVerdictClean},
+		{name: "legacy overview", body: "## Pull request overview\n\nCopilot generated no new comments.", want: copilotVerdictUnknown},
+		{name: "empty", want: copilotVerdictUnknown},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyCopilotReview(tc.body); got != tc.want {
+				t.Fatalf("classifyCopilotReview() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDetectAIReview(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -122,17 +144,25 @@ func TestDetectAIReview(t *testing.T) {
 		{name: "coderabbit approved", nodes: []aiReviewNode{
 			{State: "APPROVED", AuthorLogin: "coderabbitai[bot]", CommentCount: 0},
 		}, want: "pass"},
-		{name: "copilot no comments", nodes: []aiReviewNode{
-			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0},
+		{name: "copilot approval recommended", nodes: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "copilot[bot]", ReviewBody: "### 🟢 Approval recommended", CommentCount: 0},
 		}, want: "pass"},
 		{name: "clean review with unresolved AI thread", nodes: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", CommentCount: 0},
 		}, threads: []aiReviewThread{
 			{AuthorLogin: "coderabbitai[bot]", IsResolved: false},
 		}, want: "fail"},
-		{name: "copilot-pull-request-reviewer no comments", nodes: []aiReviewNode{
+		{name: "copilot zero comments without explicit verdict", nodes: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", CommentCount: 0},
-		}, want: "pass"},
+		}, want: "fail"},
+		{name: "copilot needs closer look with resolved threads", nodes: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", ReviewBody: "### 🔵 Needs a closer look", CommentCount: 0},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "copilot-pull-request-reviewer", IsResolved: true},
+		}, want: "fail"},
+		{name: "copilot changes recommended", nodes: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", ReviewBody: "### 🟡 Changes recommended", CommentCount: 0},
+		}, want: "fail"},
 		{name: "bot with comments no threads", nodes: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "coderabbitai[bot]", CommentCount: 3},
 		}, want: "fail"},
@@ -250,9 +280,17 @@ func TestIsAIReviewClean(t *testing.T) {
 		{name: "copilot approved with comments", reviews: []aiReviewNode{
 			{State: "APPROVED", AuthorLogin: "copilot[bot]", CommentCount: 2},
 		}, want: false},
-		{name: "copilot commented 0 comments", reviews: []aiReviewNode{
-			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", CommentCount: 0},
+		{name: "copilot approval recommended", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", ReviewBody: "### 🟢 Approval recommended", CommentCount: 0},
 		}, want: true},
+		{name: "copilot zero comments without explicit verdict", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", CommentCount: 0},
+		}, want: false},
+		{name: "copilot needs closer look after resolved threads", reviews: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", ReviewBody: "### 🔵 Needs a closer look", CommentCount: 0},
+		}, threads: []aiReviewThread{
+			{AuthorLogin: "copilot-pull-request-reviewer", IsResolved: true},
+		}, want: false},
 		{name: "copilot commented with comments", reviews: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 3},
 		}, want: false},
@@ -261,13 +299,13 @@ func TestIsAIReviewClean(t *testing.T) {
 		}, want: false},
 		{name: "latest bot review clean after earlier issues resolved", reviews: []aiReviewNode{
 			{State: "CHANGES_REQUESTED", AuthorLogin: "copilot[bot]", CommentCount: 1},
-			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0},
+			{State: "COMMENTED", AuthorLogin: "copilot[bot]", ReviewBody: "### 🟢 Approval recommended", CommentCount: 0},
 		}, threads: []aiReviewThread{
 			{AuthorLogin: "copilot[bot]", IsResolved: true},
 		}, want: true},
 		{name: "latest bot review clean but unresolved threads", reviews: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 1},
-			{State: "COMMENTED", AuthorLogin: "copilot[bot]", CommentCount: 0},
+			{State: "COMMENTED", AuthorLogin: "copilot[bot]", ReviewBody: "### 🟢 Approval recommended", CommentCount: 0},
 		}, threads: []aiReviewThread{
 			{AuthorLogin: "copilot[bot]", IsResolved: false},
 		}, want: false},
@@ -451,8 +489,8 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			"reviews": {
 				"totalCount": 2,
 				"nodes": [
-					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 2}},
-					{"state": "COMMENTED", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 0}}
+					{"state": "COMMENTED", "body": "### 🟡 Changes recommended", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 2}},
+					{"state": "COMMENTED", "body": "### 🟢 Approval recommended", "author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}, "commit": {"oid": "abc"}, "comments": {"totalCount": 0}}
 				]
 			},
 			"approvedReviews": {"nodes": []}
@@ -472,6 +510,53 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 		if !info.AIClean {
 			t.Fatalf("expected AIClean=true when latest bot review is clean and all threads resolved")
+		}
+	})
+
+	t.Run("captured current-head Copilot closer-look verdict fails", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 111,
+			"headRefOid": "b694974bc2ccc8230686fe42cd50d8f476997383",
+			"comments": {"totalCount": 1, "nodes": [{
+				"body": "Snyk checks have passed.",
+				"createdAt": "2026-09-01T18:48:59Z",
+				"author": {"login": "snyk-io", "__typename": "User"}
+			}]},
+			"reviewThreads": {
+				"totalCount": 7,
+				"nodes": [
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}}]}},
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}}]}},
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}}]}},
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}}]}},
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}}]}},
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}}]}},
+					{"isResolved": true, "comments": {"nodes": [{"author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"}}]}}
+				]
+			},
+			"reviews": {"totalCount": 1, "nodes": [{
+				"state": "COMMENTED",
+				"body": "### 🔵 Needs a closer look\n\nA few updated instructions are internally inconsistent and one portable command is not portable.",
+				"submittedAt": "2026-09-09T21:37:17Z",
+				"commit": {"oid": "b694974bc2ccc8230686fe42cd50d8f476997383"},
+				"author": {"login": "copilot-pull-request-reviewer", "__typename": "Bot"},
+				"comments": {"totalCount": 0}
+			}]},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		num, info, ok := parsePRSupplementalNode(raw)
+		if !ok || num != 111 {
+			t.Fatalf("expected captured PR 111, got number=%d ok=%v", num, ok)
+		}
+		if info.AIReview != "fail" || info.AIClean {
+			t.Fatalf("expected closer-look verdict to fail without clean marker, got review=%q clean=%v", info.AIReview, info.AIClean)
+		}
+		if info.Threads.Total != 7 || info.Threads.Resolved != 7 {
+			t.Fatalf("expected captured threads 7/7, got %d/%d", info.Threads.Resolved, info.Threads.Total)
+		}
+		if info.Approvals != 0 {
+			t.Fatalf("expected no formal approvals, got %d", info.Approvals)
 		}
 	})
 
@@ -1106,6 +1191,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 		},
 		"reviews":{"totalCount":1,"nodes":[{
 			"state":"COMMENTED",
+			"body":"### 🟢 Approval recommended",
 			"author":{"login":"copilot-pull-request-reviewer[bot]"},
 			"commit":{"oid":"abc"},
 			"comments":{"totalCount":1}
@@ -1124,7 +1210,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 	if !ok {
 		t.Fatal("expected supplemental info for PR 42")
 	}
-	// With bot review (COMMENTED + 1 comment = issues) + all AI threads resolved → "pass"
+	// An explicit clean verdict with all AI threads resolved reports pass.
 	if info.AIReview != "pass" {
 		t.Fatalf("expected AIReview='pass' (bot review with resolved threads), got %q", info.AIReview)
 	}
