@@ -384,9 +384,10 @@ func TestFetchPRSupplemental_BatchError(t *testing.T) {
 // capturedCodexbarSupplementalResponse is the supplemental GraphQL response
 // captured from HemSoft/codexbar-ios pull request #333 on 2026-09-09 while
 // investigating issue #88. Comment prose past 90 characters is truncated;
-// every field the parser consumes is verbatim: the closing relationship to
+// review fields from that capture stay verbatim: the closing relationship to
 // issue #332, four review threads (one unresolved, Codex-authored), the
-// completed current-head Codex review, and zero approvals.
+// completed current-head Codex review, and zero approvals. The empty reactions
+// connection was added when the parser began requiring that query field.
 const capturedCodexbarSupplementalResponse = `{
  "data": {
   "repository": {
@@ -454,6 +455,10 @@ const capturedCodexbarSupplementalResponse = `{
        }
       }
      ]
+    },
+    "reactions": {
+     "totalCount": 0,
+     "nodes": []
     },
     "reviewThreads": {
      "totalCount": 4,
@@ -679,7 +684,7 @@ func TestFetchPRSupplementalBatchRecoversHealthyAliasesFromPartialError(t *testi
 		if !strings.Contains(query, "reactions(content: THUMBS_UP") || !strings.Contains(query, "createdAt user { login __typename }") {
 			t.Fatalf("supplemental query must request timestamped PR thumbs-up reactions, got %q", args)
 		}
-		body := `{"data":{"repository":{"pr333":{"number":333,"headRefOid":"53b343204e072b22f6511ac68bf6284aa2c418c2","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":332,"url":"https://github.com/HemSoft/codexbar-ios/issues/332"}]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}},"pr999":null}},"errors":[{"type":"NOT_FOUND","path":["repository","pr999"],"message":"Could not resolve to a PullRequest with the number of 999."}]}`
+		body := `{"data":{"repository":{"pr333":{"number":333,"headRefOid":"53b343204e072b22f6511ac68bf6284aa2c418c2","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":332,"url":"https://github.com/HemSoft/codexbar-ios/issues/332"}]},"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}},"pr999":null}},"errors":[{"type":"NOT_FOUND","path":["repository","pr999"],"message":"Could not resolve to a PullRequest with the number of 999."}]}`
 		return *bytes.NewBufferString(body), *bytes.NewBufferString("gh: Could not resolve to a PullRequest with the number of 99999.\n"), errors.New("exit status 1")
 	}
 
@@ -798,7 +803,7 @@ func TestParseSupplementalNodeDropsPartialFieldFailure(t *testing.T) {
 	// valid PR object. The entry must not parse as available: unknown
 	// threads would otherwise render as empty comments and a clean AI
 	// review. Reproduces the Codex P1 finding on PR #89.
-	raw := json.RawMessage(`{"number":333,"headRefOid":"53b343204e072b22f6511ac68bf6284aa2c418c2","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":332,"url":"https://github.com/HemSoft/codexbar-ios/issues/332"}]},"comments":{"totalCount":2,"nodes":[{"body":"hi","author":{"login":"user","__typename":"User"}}]},"reviewThreads":null,"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]}}`)
+	raw := json.RawMessage(`{"number":333,"headRefOid":"53b343204e072b22f6511ac68bf6284aa2c418c2","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":332,"url":"https://github.com/HemSoft/codexbar-ios/issues/332"}]},"comments":{"totalCount":2,"nodes":[{"body":"hi","author":{"login":"user","__typename":"User"}}]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":null,"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]}}`)
 
 	envelope := `{"data":{"repository":{"pr333":` + string(raw) + `}},"errors":[{"type":"NOT_FOUND","path":["repository","pr333","reviewThreads"],"message":"Field failed"}]}`
 	infos, _, parseErr := parseSupplementalResponse([]byte(envelope))
@@ -972,12 +977,13 @@ func TestParseSupplementalResponseDropsIncompleteConnectionObjects(t *testing.T)
 		{name: "missing totalCount", field: "reviewThreads", payload: `{"nodes":[]}`},
 		{name: "null totalCount", field: "reviews", payload: `{"totalCount":null,"nodes":[]}`},
 		{name: "missing nodes", field: "comments", payload: `{"totalCount":0}`},
+		{name: "missing reaction nodes", field: "reactions", payload: `{"totalCount":0}`},
 		{name: "null nodes", field: "approvedReviews", payload: `{"nodes":null}`},
 		{name: "empty object", field: "reviewThreads", payload: `{}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			envelope := fmt.Sprintf(`{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]},%q:%s}}}}`, test.field, test.payload)
+			envelope := fmt.Sprintf(`{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]},%q:%s}}}}`, test.field, test.payload)
 			infos, _, err := parseSupplementalResponse([]byte(envelope))
 			if err != nil {
 				t.Fatalf("parseSupplementalResponse error: %v", err)
@@ -1050,7 +1056,7 @@ func TestParseSupplementalResponseDropsBrokenThreadNodes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			envelope := fmt.Sprintf(`{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":1,"nodes":[%s]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`, test.brokenNode)
+			envelope := fmt.Sprintf(`{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":1,"nodes":[%s]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`, test.brokenNode)
 			infos, _, err := parseSupplementalResponse([]byte(envelope))
 			if err != nil {
 				t.Fatalf("parseSupplementalResponse error: %v", err)
@@ -1138,7 +1144,7 @@ func TestEnrichPullRequestsKeepsReviewStateOnFailedRules(t *testing.T) {
 }
 
 func TestUnattributableThreadsForceUnknownAI(t *testing.T) {
-	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":1,"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":null}]}}]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
+	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":1,"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":null}]}}]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
 	infos, errored, err := parseSupplementalResponse([]byte(envelope))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)
@@ -1173,7 +1179,7 @@ func TestUnattributableThreadsForceUnknownAI(t *testing.T) {
 }
 
 func TestUnattributableFormalReviewForcesUnknownAI(t *testing.T) {
-	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":null,"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
+	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":null,"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
 	infos, errored, err := parseSupplementalResponse([]byte(envelope))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)
@@ -1207,7 +1213,7 @@ func TestUnattributableFormalReviewFieldsForceUnknownAI(t *testing.T) {
 	// A field-level failure always carries a GraphQL error path through the
 	// alias, which keeps the PR's data unavailable even when the object
 	// survived with zero values.
-	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":null,"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}},"errors":[{"type":null,"path":["repository","pr9","reviews"],"message":"Field failed"}]}`
+	envelope := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":null,"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}},"errors":[{"type":null,"path":["repository","pr9","reviews"],"message":"Field failed"}]}`
 	infos, errored, err := parseSupplementalResponse([]byte(envelope))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)
@@ -1220,7 +1226,7 @@ func TestUnattributableFormalReviewFieldsForceUnknownAI(t *testing.T) {
 	}
 
 	// A PENDING review carries no commit by design and stays legitimate data.
-	pending := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"PENDING","author":{"login":"user","__typename":"User"},"commit":null,"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
+	pending := `{"data":{"repository":{"pr9":{"number":9,"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"PENDING","author":{"login":"user","__typename":"User"},"commit":null,"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}}}`
 	infos, errored, err = parseSupplementalResponse([]byte(pending))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)
@@ -1264,7 +1270,7 @@ func TestNullRelationshipNodesStayUnavailable(t *testing.T) {
 
 	// PR side: the closing-issues connection with a null node is unavailable,
 	// so the relationship column renders ? rather than a false empty value.
-	prEnvelope := `{"data":{"repository":{"pr9":{"number":9,"closingIssuesReferences":{"totalCount":1,"nodes":[null]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`
+	prEnvelope := `{"data":{"repository":{"pr9":{"number":9,"closingIssuesReferences":{"totalCount":1,"nodes":[null]},"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`
 	infos, errored, err := parseSupplementalResponse([]byte(prEnvelope))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)
@@ -1313,7 +1319,7 @@ func TestFetchErrorJoinsDerivedPerPRReasons(t *testing.T) {
 func TestClosingIssueErrorPathsKeepHealthyData(t *testing.T) {
 	// An error confined to closingIssuesReferences keeps the healthy review
 	// and thread data rendered; only the Issues column goes unknown.
-	envelope := `{"data":{"repository":{"pr9":{"number":9,"headRefOid":"abc","closingIssuesReferences":null,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}},"errors":[{"type":"NOT_FOUND","path":["repository","pr9","closingIssuesReferences"],"message":"Field failed"}]}`
+	envelope := `{"data":{"repository":{"pr9":{"number":9,"headRefOid":"abc","closingIssuesReferences":null,"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"abc"},"comments":{"totalCount":0}}]},"approvedReviews":{"nodes":[]}}}},"errors":[{"type":"NOT_FOUND","path":["repository","pr9","closingIssuesReferences"],"message":"Field failed"}]}`
 	infos, errored, err := parseSupplementalResponse([]byte(envelope))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)
@@ -1333,7 +1339,7 @@ func TestClosingIssueErrorPathsKeepHealthyData(t *testing.T) {
 	}
 
 	// The same path into a different connection still marks the whole alias.
-	threadsEnvelope := `{"data":{"repository":{"pr9":{"number":9,"headRefOid":"abc","closingIssuesReferences":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":null,"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}},"errors":[{"type":"NOT_FOUND","path":["repository","pr9","reviewThreads"],"message":"Field failed"}]}`
+	threadsEnvelope := `{"data":{"repository":{"pr9":{"number":9,"headRefOid":"abc","closingIssuesReferences":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":null,"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}},"errors":[{"type":"NOT_FOUND","path":["repository","pr9","reviewThreads"],"message":"Field failed"}]}`
 	_, errored, err = parseSupplementalResponse([]byte(threadsEnvelope))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)
@@ -1410,7 +1416,7 @@ func TestWideTitleRendersWithoutPanic(t *testing.T) {
 }
 
 func TestUnattributableEvidenceKeepsComputedFailure(t *testing.T) {
-	envelope := `{"data":{"repository":{"pr9":{"number":9,"headRefOid":"head","closingIssuesReferences":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":2,"nodes":[{"state":"COMMENTED","author":null,"commit":{"oid":"old"},"comments":{"totalCount":1}},{"state":"CHANGES_REQUESTED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"head"},"comments":{"totalCount":1}}]},"approvedReviews":{"nodes":[]}}}}}`
+	envelope := `{"data":{"repository":{"pr9":{"number":9,"headRefOid":"head","closingIssuesReferences":{"totalCount":0,"nodes":[]},"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":2,"nodes":[{"state":"COMMENTED","author":null,"commit":{"oid":"old"},"comments":{"totalCount":1}},{"state":"CHANGES_REQUESTED","author":{"login":"bot[bot]","__typename":"Bot"},"commit":{"oid":"head"},"comments":{"totalCount":1}}]},"approvedReviews":{"nodes":[]}}}}}`
 	infos, errored, err := parseSupplementalResponse([]byte(envelope))
 	if err != nil {
 		t.Fatalf("parseSupplementalResponse error: %v", err)

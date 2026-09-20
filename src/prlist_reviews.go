@@ -32,13 +32,14 @@ type prSupplementalInfo struct {
 
 // aiReviewNode holds the fields needed to detect bot reviewer status.
 type aiReviewNode struct {
-	State        string
-	AuthorLogin  string
-	AuthorType   string
-	ReviewBody   string
-	CommentCount int
-	OccurredAt   time.Time
-	CommitOID    string
+	State         string
+	AuthorLogin   string
+	AuthorType    string
+	ReviewBody    string
+	CommentCount  int
+	ExplicitClean bool // Set only by parsed reviewer-specific clean evidence.
+	OccurredAt    time.Time
+	CommitOID     string
 }
 
 // aiReviewThread holds thread resolution state and authorship for AI review detection.
@@ -228,9 +229,11 @@ func reviewEvidenceOrderAmbiguous(
 
 var codexSummaryActivity = regexp.MustCompile(`(?m)^\| [^|\n]*\*\*(?:Code|Security) Review\*\* \| [^|\n]*\*\*(Running|Completed)\*\*[^|\n]*<relative-time datetime="([^"]+)">[^|\n]*\| \x60([0-9a-fA-F]{7,40})\x60 \|`)
 
-func codexReviewNode(comment aiReviewComment, reactions []aiReviewReaction, headRefOID string) (aiReviewNode, bool) {
+// codexReviewNode returns parsed evidence plus whether the comment is a valid
+// completed current-head summary, even when its clean reaction is unavailable.
+func codexReviewNode(comment aiReviewComment, reactions []aiReviewReaction, headRefOID string) (aiReviewNode, bool, bool) {
 	if !isCodexReviewer(comment.AuthorLogin) || headRefOID == "" {
-		return aiReviewNode{}, false
+		return aiReviewNode{}, false, false
 	}
 	if strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") {
 		return codexSummaryReviewNode(comment, reactions, headRefOID)
@@ -238,12 +241,12 @@ func codexReviewNode(comment aiReviewComment, reactions []aiReviewReaction, head
 
 	body := strings.ToLower(comment.Body)
 	if !strings.Contains(body, "codex review:") {
-		return aiReviewNode{}, false
+		return aiReviewNode{}, false, false
 	}
 
 	shaLength := min(10, len(headRefOID))
 	if !strings.Contains(body, strings.ToLower(headRefOID[:shaLength])) {
-		return aiReviewNode{}, false
+		return aiReviewNode{}, false, false
 	}
 
 	commentCount := 1
@@ -253,36 +256,38 @@ func codexReviewNode(comment aiReviewComment, reactions []aiReviewReaction, head
 	}
 
 	return aiReviewNode{
-		State:        "COMMENTED",
-		AuthorLogin:  comment.AuthorLogin,
-		AuthorType:   comment.AuthorType,
-		CommentCount: commentCount,
-		OccurredAt:   comment.OccurredAt,
-		CommitOID:    headRefOID,
-	}, true
+		State:         "COMMENTED",
+		AuthorLogin:   comment.AuthorLogin,
+		AuthorType:    comment.AuthorType,
+		CommentCount:  commentCount,
+		ExplicitClean: commentCount == 0,
+		OccurredAt:    comment.OccurredAt,
+		CommitOID:     headRefOID,
+	}, true, false
 }
 
-func codexSummaryReviewNode(comment aiReviewComment, reactions []aiReviewReaction, headRefOID string) (aiReviewNode, bool) {
+func codexSummaryReviewNode(comment aiReviewComment, reactions []aiReviewReaction, headRefOID string) (aiReviewNode, bool, bool) {
 	matches := codexSummaryActivity.FindAllStringSubmatch(comment.Body, -1)
 	if len(matches) != 1 || matches[0][1] != "Completed" || !strings.HasPrefix(strings.ToLower(headRefOID), strings.ToLower(matches[0][3])) {
-		return aiReviewNode{}, false
+		return aiReviewNode{}, false, false
 	}
 	completedAt, err := time.Parse(time.RFC3339Nano, matches[0][2])
 	if err != nil {
-		return aiReviewNode{}, false
+		return aiReviewNode{}, false, false
 	}
 	reactionAt, ok := cleanCodexReactionAt(reactions, completedAt)
 	if !ok {
-		return aiReviewNode{}, false
+		return aiReviewNode{}, false, true
 	}
 	return aiReviewNode{
-		State:        "COMMENTED",
-		AuthorLogin:  comment.AuthorLogin,
-		AuthorType:   comment.AuthorType,
-		CommentCount: 0,
-		OccurredAt:   reactionAt,
-		CommitOID:    headRefOID,
-	}, true
+		State:         "COMMENTED",
+		AuthorLogin:   comment.AuthorLogin,
+		AuthorType:    comment.AuthorType,
+		CommentCount:  0,
+		ExplicitClean: true,
+		OccurredAt:    reactionAt,
+		CommitOID:     headRefOID,
+	}, true, true
 }
 
 func cleanCodexReactionAt(reactions []aiReviewReaction, completedAt time.Time) (time.Time, bool) {
@@ -330,9 +335,12 @@ func latestAIReviewIsClean(reviews []aiReviewNode) bool {
 		case "APPROVED":
 			clean = r.CommentCount == 0
 		case "COMMENTED":
-			if isCopilotReviewer(r.AuthorLogin) {
+			switch {
+			case isCopilotReviewer(r.AuthorLogin):
 				clean = classifyCopilotReview(r.ReviewBody) == copilotVerdictClean
-			} else {
+			case isCodexReviewer(r.AuthorLogin):
+				clean = r.ExplicitClean
+			default:
 				clean = r.CommentCount == 0
 			}
 		default:
@@ -409,10 +417,14 @@ func aiReviewPasses(review aiReviewNode, threads []aiReviewThread) bool {
 	case "APPROVED":
 		return review.CommentCount == 0 || allAIThreadsResolved(threads)
 	case "COMMENTED":
-		if isCopilotReviewer(review.AuthorLogin) {
+		switch {
+		case isCopilotReviewer(review.AuthorLogin):
 			return classifyCopilotReview(review.ReviewBody) == copilotVerdictClean
+		case isCodexReviewer(review.AuthorLogin):
+			return review.ExplicitClean || allAIThreadsResolved(threads)
+		default:
+			return review.CommentCount == 0 || allAIThreadsResolved(threads)
 		}
-		return review.CommentCount == 0 || allAIThreadsResolved(threads)
 	case "CHANGES_REQUESTED":
 		return allAIThreadsResolved(threads)
 	default:
@@ -532,7 +544,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		return 0, prSupplementalInfo{}, false
 	}
 
-	formal, aiNodes, hasCurrentHeadCodexReview, latestCurrentHeadCodexAt, unattributableReview := collectAIEvidence(&prData)
+	formal, aiNodes, hasCurrentHeadCodexReview, hasCurrentHeadCodexSummary, latestCurrentHeadCodexAt, unattributableReview := collectAIEvidence(&prData)
 	sortAIReviewsChronologically(aiNodes)
 	aiThreads, unknownUnresolved := parseReviewThreadStates(&prData)
 
@@ -547,6 +559,8 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		len(prData.Reviews.Nodes),
 		sufficientReviewEvidence(formal, prData.HeadRefOID, latestCurrentHeadCodexAt),
 	)
+	reactionsIncomplete := hasCurrentHeadCodexSummary && !hasCurrentHeadCodexReview &&
+		(prData.Reactions == nil || connectionIncomplete(prData.Reactions.TotalCount, len(prData.Reactions.Nodes), false))
 	evidenceOrderAmbiguous := reviewEvidenceOrderAmbiguous(
 		formal,
 		prData.HeadRefOID,
@@ -556,13 +570,13 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 	closingIssuesAvailable := closingIssuesConnectionPresent(raw) && prData.ClosingIssuesReferences.complete()
 	incomplete := supplementalConnectionsIncomplete(
 		closingIssuesAvailable,
-		commentsIncomplete, threadsTruncated, reviewsIncomplete,
+		commentsIncomplete, threadsTruncated, reviewsIncomplete, reactionsIncomplete,
 	)
 	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
 		aiThreads,
 		prData.HeadRefOID,
-		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, evidenceOrderAmbiguous) || unknownUnresolved || unattributableReview,
+		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, reactionsIncomplete, evidenceOrderAmbiguous) || unknownUnresolved || unattributableReview,
 	)
 
 	return prData.Number, prSupplementalInfo{
@@ -585,7 +599,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 
 // collectAIEvidence gathers the formal reviews plus any current-head Codex
 // conversation receipt, so both evidence sources feed one chronological list.
-func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReviewNode, hasCurrentHeadCodexReview bool, latestCurrentHeadCodexAt time.Time, unattributableReview bool) {
+func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReviewNode, hasCurrentHeadCodexReview, hasCurrentHeadCodexSummary bool, latestCurrentHeadCodexAt time.Time, unattributableReview bool) {
 	for _, r := range prData.Reviews.Nodes {
 		if (r.Author.Login == "" && r.Author.Typename == "") || r.State == "" {
 			// A review without attributable authorship or a state may be bot
@@ -604,29 +618,40 @@ func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReview
 		})
 	}
 	aiNodes = append([]aiReviewNode(nil), formal...)
-	reactions := make([]aiReviewReaction, 0, len(prData.Reactions.Nodes))
-	for _, reaction := range prData.Reactions.Nodes {
+	reactions := parseCodexReactions(prData.Reactions)
+	for _, comment := range prData.Comments.Nodes {
+		node, ok, summary := codexReviewNode(aiReviewComment{
+			Body:        comment.Body,
+			AuthorLogin: comment.Author.Login,
+			AuthorType:  comment.Author.Typename,
+			OccurredAt:  comment.CreatedAt,
+		}, reactions, prData.HeadRefOID)
+		hasCurrentHeadCodexSummary = hasCurrentHeadCodexSummary || summary
+		if !ok {
+			continue
+		}
+		aiNodes = append(aiNodes, node)
+		hasCurrentHeadCodexReview = true
+		if node.OccurredAt.After(latestCurrentHeadCodexAt) {
+			latestCurrentHeadCodexAt = node.OccurredAt
+		}
+	}
+	return formal, aiNodes, hasCurrentHeadCodexReview, hasCurrentHeadCodexSummary, latestCurrentHeadCodexAt, unattributableReview
+}
+
+func parseCodexReactions(connection *reactionConnection) []aiReviewReaction {
+	if connection == nil {
+		return nil
+	}
+	reactions := make([]aiReviewReaction, 0, len(connection.Nodes))
+	for _, reaction := range connection.Nodes {
 		reactions = append(reactions, aiReviewReaction{
 			AuthorLogin: reaction.User.Login,
 			AuthorType:  reaction.User.Typename,
 			OccurredAt:  reaction.CreatedAt,
 		})
 	}
-	for _, comment := range prData.Comments.Nodes {
-		if node, ok := codexReviewNode(aiReviewComment{
-			Body:        comment.Body,
-			AuthorLogin: comment.Author.Login,
-			AuthorType:  comment.Author.Typename,
-			OccurredAt:  comment.CreatedAt,
-		}, reactions, prData.HeadRefOID); ok {
-			aiNodes = append(aiNodes, node)
-			hasCurrentHeadCodexReview = true
-			if node.OccurredAt.After(latestCurrentHeadCodexAt) {
-				latestCurrentHeadCodexAt = node.OccurredAt
-			}
-		}
-	}
-	return formal, aiNodes, hasCurrentHeadCodexReview, latestCurrentHeadCodexAt, unattributableReview
+	return reactions
 }
 
 // parseReviewThreadStates maps review threads to their resolution state and
@@ -679,16 +704,7 @@ type supplementalNodeData struct {
 			} `json:"author"`
 		} `json:"nodes"`
 	} `json:"comments"`
-	Reactions struct {
-		TotalCount int `json:"totalCount"`
-		Nodes      []struct {
-			CreatedAt time.Time `json:"createdAt"`
-			User      struct {
-				Login    string `json:"login"`
-				Typename string `json:"__typename"`
-			} `json:"user"`
-		} `json:"nodes"`
-	} `json:"reactions"`
+	Reactions     *reactionConnection `json:"reactions"`
 	ReviewThreads struct {
 		TotalCount int `json:"totalCount"`
 		Nodes      []struct {
@@ -731,6 +747,17 @@ type supplementalNodeData struct {
 	} `json:"approvedReviews"`
 }
 
+type reactionConnection struct {
+	TotalCount int `json:"totalCount"`
+	Nodes      []struct {
+		CreatedAt time.Time `json:"createdAt"`
+		User      struct {
+			Login    string `json:"login"`
+			Typename string `json:"__typename"`
+		} `json:"user"`
+	} `json:"nodes"`
+}
+
 // supplementalConnectionsPresent reports whether every connection the
 // supplemental summary consumes was fully returned for this PR. GitHub nulls
 // an individual field of an otherwise valid object when that sub-query fails
@@ -741,6 +768,7 @@ type supplementalNodeData struct {
 func supplementalConnectionsPresent(raw json.RawMessage) bool {
 	var fields struct {
 		Comments        json.RawMessage `json:"comments"`
+		Reactions       json.RawMessage `json:"reactions"`
 		ReviewThreads   json.RawMessage `json:"reviewThreads"`
 		Reviews         json.RawMessage `json:"reviews"`
 		ApprovedReviews json.RawMessage `json:"approvedReviews"`
@@ -749,6 +777,7 @@ func supplementalConnectionsPresent(raw json.RawMessage) bool {
 		return false
 	}
 	return countedConnectionPresent(fields.Comments) &&
+		countedConnectionPresent(fields.Reactions) &&
 		reviewThreadsPresent(fields.ReviewThreads) &&
 		countedConnectionPresent(fields.Reviews) &&
 		nodeConnectionPresent(fields.ApprovedReviews)

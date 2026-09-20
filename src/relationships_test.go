@@ -253,7 +253,7 @@ func TestFetchPRSupplementalBatchIncludesClosingIssuesAndHost(t *testing.T) {
 	var captured string
 	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 		captured = strings.Join(args, " ")
-		response := `{"data":{"repository":{"pr25":{"number":25,"headRefOid":"abc","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":18,"url":"https://github.com/owner/repo/issues/18"}]},"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`
+		response := `{"data":{"repository":{"pr25":{"number":25,"headRefOid":"abc","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":18,"url":"https://github.com/owner/repo/issues/18"}]},"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`
 		return *bytes.NewBufferString(response), bytes.Buffer{}, nil
 	}
 
@@ -357,7 +357,7 @@ func TestParsePRSupplementalNodeTreatsIncompleteRelationshipsAsUnavailable(t *te
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			raw := json.RawMessage(`{"number":25,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]},"closingIssuesReferences":` + test.connection + `}`)
+			raw := json.RawMessage(`{"number":25,"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"nodes":[]},"approvedReviews":{"nodes":[]},"closingIssuesReferences":` + test.connection + `}`)
 			_, info, ok := parsePRSupplementalNode(raw)
 			if !ok {
 				t.Fatal("incomplete relationship supplemental node should still parse")

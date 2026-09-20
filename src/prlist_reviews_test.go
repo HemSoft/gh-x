@@ -120,17 +120,18 @@ func TestCodexSummaryReviewNode(t *testing.T) {
 	cleanReaction := aiReviewReaction{AuthorLogin: "chatgpt-codex-connector[bot]", OccurredAt: cleanAt}
 
 	tests := []struct {
-		name      string
-		comment   aiReviewComment
-		reactions []aiReviewReaction
-		head      string
-		want      bool
+		name        string
+		comment     aiReviewComment
+		reactions   []aiReviewReaction
+		head        string
+		want        bool
+		wantSummary bool
 	}{
-		{name: "completed current head with clean reaction", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: head, want: true},
-		{name: "missing clean reaction", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, head: head},
-		{name: "reaction predates completion", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "chatgpt-codex-connector[bot]", OccurredAt: completedAt.Add(-time.Second)}}, head: head},
-		{name: "reaction ties completion", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "chatgpt-codex-connector[bot]", OccurredAt: completedAt}}, head: head},
-		{name: "reaction from another actor", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "human", OccurredAt: cleanAt}}, head: head},
+		{name: "completed current head with clean reaction", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: head, want: true, wantSummary: true},
+		{name: "missing clean reaction", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, head: head, wantSummary: true},
+		{name: "reaction predates completion", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "chatgpt-codex-connector[bot]", OccurredAt: completedAt.Add(-time.Second)}}, head: head, wantSummary: true},
+		{name: "reaction ties completion", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "chatgpt-codex-connector[bot]", OccurredAt: completedAt}}, head: head, wantSummary: true},
+		{name: "reaction from another actor", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "human", OccurredAt: cleanAt}}, head: head, wantSummary: true},
 		{name: "running review", comment: aiReviewComment{Body: strings.Replace(completed, "Completed", "Running", 1), AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: head},
 		{name: "different head", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: strings.Repeat("a", 40)},
 		{name: "invalid timestamp", comment: aiReviewComment{Body: strings.Replace(completed, "2026-09-20T21:49:39.029122Z", "invalid", 1), AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: head},
@@ -141,9 +142,9 @@ func TestCodexSummaryReviewNode(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			node, got := codexReviewNode(tc.comment, tc.reactions, tc.head)
-			if got != tc.want {
-				t.Fatalf("codexReviewNode() matched = %v, want %v", got, tc.want)
+			node, got, summary := codexReviewNode(tc.comment, tc.reactions, tc.head)
+			if got != tc.want || summary != tc.wantSummary {
+				t.Fatalf("codexReviewNode() matched = %v, summary = %v; want matched = %v, summary = %v", got, summary, tc.want, tc.wantSummary)
 			}
 			if tc.want && (node.State != "COMMENTED" || node.CommentCount != 0 || node.CommitOID != head || !node.OccurredAt.Equal(cleanAt)) {
 				t.Fatalf("unexpected Codex summary node: %#v", node)
@@ -200,6 +201,12 @@ func TestDetectAIReview(t *testing.T) {
 		{name: "copilot zero comments without explicit verdict", nodes: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", CommentCount: 0},
 		}, want: "fail"},
+		{name: "Codex zero comments without explicit clean signal", nodes: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", CommentCount: 0},
+		}, want: "fail"},
+		{name: "Codex explicit clean signal", nodes: []aiReviewNode{
+			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", ExplicitClean: true},
+		}, want: "pass"},
 		{name: "copilot needs closer look with resolved threads", nodes: []aiReviewNode{
 			{State: "COMMENTED", AuthorLogin: "copilot-pull-request-reviewer", ReviewBody: "### 🔵 Needs a closer look", CommentCount: 0},
 		}, threads: []aiReviewThread{
@@ -253,7 +260,7 @@ func TestDetectAIReview(t *testing.T) {
 		}, want: "pass"},
 		{name: "newer clean review supersedes older findings", nodes: []aiReviewNode{
 			{State: "CHANGES_REQUESTED", AuthorLogin: "copilot[bot]", CommentCount: 1},
-			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", CommentCount: 0},
+			{State: "COMMENTED", AuthorLogin: "chatgpt-codex-connector", AuthorType: "Bot", ExplicitClean: true},
 		}, want: "pass"},
 		{name: "dismissed bot review ignored", nodes: []aiReviewNode{
 			{State: "DISMISSED", AuthorLogin: "coderabbitai[bot]", CommentCount: 0},
@@ -655,6 +662,46 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 		if info.Approvals != 0 {
 			t.Fatalf("PR reaction must not count as a formal approval, got %d", info.Approvals)
+		}
+	})
+
+	t.Run("Codex reaction completeness fails closed unless clean evidence is present", func(t *testing.T) {
+		const base = `{
+			"number": 140,
+			"headRefOid": "f92ca525d5a267d4a4c544ed1f0f90e1e3d63802",
+			"closingIssuesReferences": {"totalCount": 0, "nodes": []},
+			"comments": {"totalCount": 1, "nodes": [{
+				"body": "<!-- codex-pull-request-review-summary -->\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ✅ **Completed** <relative-time datetime=\"2026-09-20T21:49:39.029122Z\">done</relative-time> | ` + "`f92ca52`" + ` | PR opened |",
+				"createdAt": "2026-09-20T21:46:24Z",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reactions": REACTIONS,
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"totalCount": 0, "nodes": []},
+			"approvedReviews": {"nodes": []}
+		}`
+		tests := []struct {
+			name        string
+			reactions   string
+			wantReview  string
+			wantClean   bool
+			wantPartial bool
+		}{
+			{name: "complete connection without reaction", reactions: `{"totalCount":0,"nodes":[]}`, wantReview: "-"},
+			{name: "truncated connection without reaction", reactions: `{"totalCount":101,"nodes":[]}`, wantReview: "?", wantPartial: true},
+			{name: "truncated connection with matching reaction", reactions: `{"totalCount":101,"nodes":[{"createdAt":"2026-09-20T21:49:41Z","user":{"login":"chatgpt-codex-connector[bot]","__typename":"User"}}]}`, wantReview: "pass", wantClean: true},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				raw := []byte(strings.Replace(base, "REACTIONS", tc.reactions, 1))
+				_, info, ok := parsePRSupplementalNode(raw)
+				if !ok {
+					t.Fatal("expected valid supplemental node")
+				}
+				if info.AIReview != tc.wantReview || info.AIClean != tc.wantClean || info.Incomplete != tc.wantPartial {
+					t.Fatalf("got AI=%q clean=%v incomplete=%v; want AI=%q clean=%v incomplete=%v", info.AIReview, info.AIClean, info.Incomplete, tc.wantReview, tc.wantClean, tc.wantPartial)
+				}
+			})
 		}
 	})
 
@@ -1196,7 +1243,7 @@ func TestParseSupplementalResponse(t *testing.T) {
 	}{
 		{
 			name:    "valid with one PR",
-			input:   `{"data":{"repository":{"pr42":{"number":42,"comments":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":2,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`,
+			input:   `{"data":{"repository":{"pr42":{"number":42,"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":2,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}}}}}`,
 			wantLen: 1,
 		},
 		{
@@ -1235,6 +1282,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 	emptyComments := `{"data":{"repository":{"pr42":{
 		"number":42,
 		"comments":{"totalCount":0,"nodes":[]},
+		"reactions":{"totalCount":0,"nodes":[]},
 		"reviewThreads":{
 			"totalCount":1,
 			"nodes":[{"isResolved":false,"comments":{"nodes":[]}}]
@@ -1255,6 +1303,7 @@ func TestParseSupplementalResponseWithThreadComments(t *testing.T) {
 	botComments := `{"data":{"repository":{"pr42":{
 		"number":42,
 		"comments":{"totalCount":0,"nodes":[]},
+		"reactions":{"totalCount":0,"nodes":[]},
 		"reviewThreads":{
 			"totalCount":1,
 			"nodes":[{
