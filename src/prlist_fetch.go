@@ -306,7 +306,7 @@ func fetchPRSupplementalBatch(owner, name, host string, prNumbers []int) (map[in
 	var queryParts []string
 	for _, num := range prNumbers {
 		queryParts = append(queryParts, fmt.Sprintf(
-			`pr%d: pullRequest(number: %d) { number headRefOid closingIssuesReferences(first: 100) { totalCount nodes { number url } } comments(last: 100) { totalCount nodes { body createdAt author { login __typename } } } reviewThreads(last: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(last: 100) { totalCount nodes { state body submittedAt commit { oid } author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
+			`pr%d: pullRequest(number: %d) { number headRefOid closingIssuesReferences(first: 100) { totalCount nodes { number url } } comments(last: 100) { totalCount nodes { body createdAt author { login __typename } } } reactions(content: THUMBS_UP, last: 100) { totalCount nodes { createdAt user { login __typename } } } reviewThreads(last: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { author { login __typename } } } } } reviews(last: 100) { totalCount nodes { state body submittedAt commit { oid } author { login __typename } comments { totalCount } } } approvedReviews: reviews(states: [APPROVED], last: 50) { nodes { author { login __typename } } } }`,
 			num, num,
 		))
 	}
