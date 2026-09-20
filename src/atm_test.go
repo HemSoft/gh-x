@@ -499,6 +499,52 @@ func TestMapAtmNodeAIClean(t *testing.T) {
 	}
 }
 
+func TestMapAtmNodeCopilotCloserLookIsNotClean(t *testing.T) {
+	now := time.Date(2026, 9, 9, 21, 37, 17, 0, time.UTC)
+	node := atmPullRequestNode{
+		Number:     111,
+		Title:      "software request scan skill updates",
+		State:      "OPEN",
+		UpdatedAt:  now,
+		HeadRefOID: "b694974bc2ccc8230686fe42cd50d8f476997383",
+	}
+	review := makeAtmReview("COMMENTED", "copilot-pull-request-reviewer", 0, node.HeadRefOID)
+	review.Body = "### 🔵 Needs a closer look"
+	node.Reviews.TotalCount = 1
+	node.Reviews.Nodes = []atmReviewNode{review}
+	node.ReviewThreads.TotalCount = 1
+	node.ReviewThreads.Nodes = append(node.ReviewThreads.Nodes, struct {
+		IsResolved bool `json:"isResolved"`
+		Comments   struct {
+			Nodes []struct {
+				Author struct {
+					Login    string `json:"login"`
+					Typename string `json:"__typename"`
+				} `json:"author"`
+			} `json:"nodes"`
+		} `json:"comments"`
+	}{IsResolved: true})
+	node.ReviewThreads.Nodes[0].Comments.Nodes = append(node.ReviewThreads.Nodes[0].Comments.Nodes, struct {
+		Author struct {
+			Login    string `json:"login"`
+			Typename string `json:"__typename"`
+		} `json:"author"`
+	}{})
+	node.ReviewThreads.Nodes[0].Comments.Nodes[0].Author.Login = "copilot-pull-request-reviewer"
+	node.ReviewThreads.Nodes[0].Comments.Nodes[0].Author.Typename = "Bot"
+
+	dp := mapAtmNode(node, now)
+	if dp.AIReview != "fail" {
+		t.Fatalf("AIReview = %q, want fail", dp.AIReview)
+	}
+	if dp.AIClean != nil {
+		t.Fatalf("expected no clean marker, got %v", *dp.AIClean)
+	}
+	if dp.Comments != "1/1" {
+		t.Fatalf("Comments = %q, want 1/1", dp.Comments)
+	}
+}
+
 func TestMapAtmNodeAICleanNilWhenNotClean(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	node := atmPullRequestNode{
@@ -682,6 +728,9 @@ func TestBuildAtmMultiSearchQuery(t *testing.T) {
 	}
 	if !strings.Contains(result, "approvedReviews") {
 		t.Fatal("expected approvedReviews in multi-search query")
+	}
+	if !strings.Contains(result, "state\n            body\n            commit") {
+		t.Fatal("expected formal review bodies in multi-search query")
 	}
 }
 

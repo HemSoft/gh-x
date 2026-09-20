@@ -34,6 +34,7 @@ type aiReviewNode struct {
 	State        string
 	AuthorLogin  string
 	AuthorType   string
+	ReviewBody   string
 	CommentCount int
 	OccurredAt   time.Time
 	CommitOID    string
@@ -92,6 +93,41 @@ var knownAIReviewers = map[string]bool{
 func isAIReviewer(login string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(login))
 	return strings.HasSuffix(normalized, "[bot]") || knownAIReviewers[normalized]
+}
+
+func isCopilotReviewer(login string) bool {
+	normalized := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(login)), "[bot]")
+	return normalized == "copilot" || normalized == "copilot-pull-request-reviewer"
+}
+
+type copilotReviewVerdict uint8
+
+const (
+	copilotVerdictUnknown copilotReviewVerdict = iota
+	copilotVerdictClean
+	copilotVerdictFindings
+)
+
+// classifyCopilotReview reads the explicit verdict heading GitHub Copilot
+// emits. Copilot submits every verdict as COMMENTED, so state and inline
+// comment count alone cannot distinguish a clean review from suppressed
+// findings.
+func classifyCopilotReview(body string) copilotReviewVerdict {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.ToLower(strings.TrimSpace(line))
+		if !strings.HasPrefix(line, "#") {
+			continue
+		}
+		heading := strings.TrimSpace(strings.TrimLeft(line, "#"))
+		switch {
+		case strings.HasSuffix(heading, "approval recommended"):
+			return copilotVerdictClean
+		case strings.HasSuffix(heading, "needs a closer look"),
+			strings.HasSuffix(heading, "changes recommended"):
+			return copilotVerdictFindings
+		}
+	}
+	return copilotVerdictUnknown
 }
 
 // currentHeadReviewNodes keeps only review evidence tied to the current head.
@@ -227,8 +263,8 @@ func sortAIReviewsChronologically(reviews []aiReviewNode) {
 }
 
 // latestAIReviewIsClean returns true when the most recent bot-authored review
-// is a clean pass (APPROVED or COMMENTED state with zero review comments).
-// Reviews are expected in submission order, as returned by the GitHub API.
+// is an explicit clean pass. Copilot COMMENTED reviews require their verdict
+// heading; other reviewers retain the state and comment-count contract.
 func latestAIReviewIsClean(reviews []aiReviewNode) bool {
 	hasBotReview := false
 	clean := false
@@ -238,8 +274,14 @@ func latestAIReviewIsClean(reviews []aiReviewNode) bool {
 		}
 		hasBotReview = true
 		switch strings.ToUpper(r.State) {
-		case "APPROVED", "COMMENTED":
+		case "APPROVED":
 			clean = r.CommentCount == 0
+		case "COMMENTED":
+			if isCopilotReviewer(r.AuthorLogin) {
+				clean = classifyCopilotReview(r.ReviewBody) == copilotVerdictClean
+			} else {
+				clean = r.CommentCount == 0
+			}
 		default:
 			clean = false
 		}
@@ -299,18 +341,29 @@ func detectAIReview(reviews []aiReviewNode, threads []aiReviewThread) string {
 	}
 
 	switch strings.ToUpper(latest.State) {
-	case "APPROVED", "COMMENTED":
-		if latest.CommentCount == 0 || allAIThreadsResolved(threads) {
-			return "pass"
-		}
-		return "fail"
-	case "CHANGES_REQUESTED":
-		if allAIThreadsResolved(threads) {
+	case "APPROVED", "COMMENTED", "CHANGES_REQUESTED":
+		if aiReviewPasses(latest, threads) {
 			return "pass"
 		}
 		return "fail"
 	default:
 		return "-"
+	}
+}
+
+func aiReviewPasses(review aiReviewNode, threads []aiReviewThread) bool {
+	switch strings.ToUpper(review.State) {
+	case "APPROVED":
+		return review.CommentCount == 0 || allAIThreadsResolved(threads)
+	case "COMMENTED":
+		if isCopilotReviewer(review.AuthorLogin) {
+			return classifyCopilotReview(review.ReviewBody) == copilotVerdictClean
+		}
+		return review.CommentCount == 0 || allAIThreadsResolved(threads)
+	case "CHANGES_REQUESTED":
+		return allAIThreadsResolved(threads)
+	default:
+		return false
 	}
 }
 
@@ -491,6 +544,7 @@ func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReview
 			State:        r.State,
 			AuthorLogin:  r.Author.Login,
 			AuthorType:   r.Author.Typename,
+			ReviewBody:   r.Body,
 			CommentCount: r.Comments.TotalCount,
 			OccurredAt:   r.SubmittedAt,
 			CommitOID:    r.Commit.OID,
@@ -582,6 +636,7 @@ type supplementalNodeData struct {
 		TotalCount int `json:"totalCount"`
 		Nodes      []struct {
 			State       string    `json:"state"`
+			Body        string    `json:"body"`
 			SubmittedAt time.Time `json:"submittedAt"`
 			Commit      struct {
 				OID string `json:"oid"`

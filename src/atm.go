@@ -303,6 +303,7 @@ const atmPRFieldsFragment = `
           totalCount
           nodes {
             state
+            body
             commit { oid }
             author { login __typename }
             comments { totalCount }
@@ -354,6 +355,7 @@ func buildAtmMultiSearchQuery(queries []string, limit int) string {
 
 type atmReviewNode struct {
 	State  string `json:"state"`
+	Body   string `json:"body"`
 	Commit struct {
 		OID string `json:"oid"`
 	} `json:"commit"`
@@ -521,6 +523,7 @@ func mapAtmNode(node atmPullRequestNode, now time.Time) displayPullRequest {
 			CommitOID:    r.Commit.OID,
 			AuthorLogin:  r.Author.Login,
 			AuthorType:   r.Author.Typename,
+			ReviewBody:   r.Body,
 			CommentCount: r.Comments.TotalCount,
 		})
 	}
