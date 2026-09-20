@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,6 +52,14 @@ type aiReviewThread struct {
 // current-head Codex review summary.
 type aiReviewComment struct {
 	Body        string
+	AuthorLogin string
+	AuthorType  string
+	OccurredAt  time.Time
+}
+
+// aiReviewReaction holds PR-description reactions used by connected Codex to
+// signal that a completed current-head review found no issues.
+type aiReviewReaction struct {
 	AuthorLogin string
 	AuthorType  string
 	OccurredAt  time.Time
@@ -217,14 +226,18 @@ func reviewEvidenceOrderAmbiguous(
 	return found && latestFormal.Equal(evidenceAt)
 }
 
-func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, bool) {
-	login := strings.TrimSuffix(strings.ToLower(comment.AuthorLogin), "[bot]")
-	if login != "chatgpt-codex-connector" {
+var codexSummaryActivity = regexp.MustCompile(`(?m)^\| [^|\n]*\*\*(?:Code|Security) Review\*\* \| [^|\n]*\*\*(Running|Completed)\*\*[^|\n]*<relative-time datetime="([^"]+)">[^|\n]*\| \x60([0-9a-fA-F]{7,40})\x60 \|`)
+
+func codexReviewNode(comment aiReviewComment, reactions []aiReviewReaction, headRefOID string) (aiReviewNode, bool) {
+	if !isCodexReviewer(comment.AuthorLogin) || headRefOID == "" {
 		return aiReviewNode{}, false
+	}
+	if strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") {
+		return codexSummaryReviewNode(comment, reactions, headRefOID)
 	}
 
 	body := strings.ToLower(comment.Body)
-	if !strings.Contains(body, "codex review:") || headRefOID == "" {
+	if !strings.Contains(body, "codex review:") {
 		return aiReviewNode{}, false
 	}
 
@@ -247,6 +260,46 @@ func codexReviewNode(comment aiReviewComment, headRefOID string) (aiReviewNode, 
 		OccurredAt:   comment.OccurredAt,
 		CommitOID:    headRefOID,
 	}, true
+}
+
+func codexSummaryReviewNode(comment aiReviewComment, reactions []aiReviewReaction, headRefOID string) (aiReviewNode, bool) {
+	matches := codexSummaryActivity.FindAllStringSubmatch(comment.Body, -1)
+	if len(matches) != 1 || matches[0][1] != "Completed" || !strings.HasPrefix(strings.ToLower(headRefOID), strings.ToLower(matches[0][3])) {
+		return aiReviewNode{}, false
+	}
+	completedAt, err := time.Parse(time.RFC3339Nano, matches[0][2])
+	if err != nil {
+		return aiReviewNode{}, false
+	}
+	reactionAt, ok := cleanCodexReactionAt(reactions, completedAt)
+	if !ok {
+		return aiReviewNode{}, false
+	}
+	return aiReviewNode{
+		State:        "COMMENTED",
+		AuthorLogin:  comment.AuthorLogin,
+		AuthorType:   comment.AuthorType,
+		CommentCount: 0,
+		OccurredAt:   reactionAt,
+		CommitOID:    headRefOID,
+	}, true
+}
+
+func cleanCodexReactionAt(reactions []aiReviewReaction, completedAt time.Time) (time.Time, bool) {
+	var latest time.Time
+	for _, reaction := range reactions {
+		if !isCodexReviewer(reaction.AuthorLogin) || reaction.OccurredAt.Before(completedAt) {
+			continue
+		}
+		if reaction.OccurredAt.After(latest) {
+			latest = reaction.OccurredAt
+		}
+	}
+	return latest, !latest.IsZero()
+}
+
+func isCodexReviewer(login string) bool {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(login)), "[bot]") == "chatgpt-codex-connector"
 }
 
 func sortAIReviewsChronologically(reviews []aiReviewNode) {
@@ -551,13 +604,21 @@ func collectAIEvidence(prData *supplementalNodeData) (formal, aiNodes []aiReview
 		})
 	}
 	aiNodes = append([]aiReviewNode(nil), formal...)
+	reactions := make([]aiReviewReaction, 0, len(prData.Reactions.Nodes))
+	for _, reaction := range prData.Reactions.Nodes {
+		reactions = append(reactions, aiReviewReaction{
+			AuthorLogin: reaction.User.Login,
+			AuthorType:  reaction.User.Typename,
+			OccurredAt:  reaction.CreatedAt,
+		})
+	}
 	for _, comment := range prData.Comments.Nodes {
 		if node, ok := codexReviewNode(aiReviewComment{
 			Body:        comment.Body,
 			AuthorLogin: comment.Author.Login,
 			AuthorType:  comment.Author.Typename,
 			OccurredAt:  comment.CreatedAt,
-		}, prData.HeadRefOID); ok {
+		}, reactions, prData.HeadRefOID); ok {
 			aiNodes = append(aiNodes, node)
 			hasCurrentHeadCodexReview = true
 			if node.OccurredAt.After(latestCurrentHeadCodexAt) {
@@ -618,6 +679,16 @@ type supplementalNodeData struct {
 			} `json:"author"`
 		} `json:"nodes"`
 	} `json:"comments"`
+	Reactions struct {
+		TotalCount int `json:"totalCount"`
+		Nodes      []struct {
+			CreatedAt time.Time `json:"createdAt"`
+			User      struct {
+				Login    string `json:"login"`
+				Typename string `json:"__typename"`
+			} `json:"user"`
+		} `json:"nodes"`
+	} `json:"reactions"`
 	ReviewThreads struct {
 		TotalCount int `json:"totalCount"`
 		Nodes      []struct {

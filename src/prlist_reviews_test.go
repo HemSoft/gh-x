@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -102,6 +103,49 @@ func TestIsAIReviewer(t *testing.T) {
 		t.Run(tc.login, func(t *testing.T) {
 			if got := isAIReviewer(tc.login); got != tc.want {
 				t.Fatalf("isAIReviewer(%q) = %v, want %v", tc.login, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCodexSummaryReviewNode(t *testing.T) {
+	const head = "f92ca525d5a267d4a4c544ed1f0f90e1e3d63802"
+	const completed = `<!-- codex-pull-request-review-summary -->
+
+| Review | Status | Commit | Review trigger |
+| --- | --- | --- | --- |
+| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-09-20T21:49:39.029122Z">2026-09-20T21:49:39.029122Z</relative-time> | ` + "`f92ca52`" + ` | PR opened |`
+	completedAt := time.Date(2026, 9, 20, 21, 49, 39, 29122000, time.UTC)
+	cleanAt := time.Date(2026, 9, 20, 21, 49, 41, 0, time.UTC)
+	cleanReaction := aiReviewReaction{AuthorLogin: "chatgpt-codex-connector[bot]", OccurredAt: cleanAt}
+
+	tests := []struct {
+		name      string
+		comment   aiReviewComment
+		reactions []aiReviewReaction
+		head      string
+		want      bool
+	}{
+		{name: "completed current head with clean reaction", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: head, want: true},
+		{name: "missing clean reaction", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, head: head},
+		{name: "reaction predates completion", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "chatgpt-codex-connector[bot]", OccurredAt: completedAt.Add(-time.Second)}}, head: head},
+		{name: "reaction from another actor", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "human", OccurredAt: cleanAt}}, head: head},
+		{name: "running review", comment: aiReviewComment{Body: strings.Replace(completed, "Completed", "Running", 1), AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: head},
+		{name: "different head", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: strings.Repeat("a", 40)},
+		{name: "invalid timestamp", comment: aiReviewComment{Body: strings.Replace(completed, "2026-09-20T21:49:39.029122Z", "invalid", 1), AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: head},
+		{name: "ambiguous activity rows", comment: aiReviewComment{Body: completed + "\n" + completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: head},
+		{name: "non-Codex author", comment: aiReviewComment{Body: completed, AuthorLogin: "human"}, reactions: []aiReviewReaction{cleanReaction}, head: head},
+		{name: "missing head", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			node, got := codexReviewNode(tc.comment, tc.reactions, tc.head)
+			if got != tc.want {
+				t.Fatalf("codexReviewNode() matched = %v, want %v", got, tc.want)
+			}
+			if tc.want && (node.State != "COMMENTED" || node.CommentCount != 0 || node.CommitOID != head || !node.OccurredAt.Equal(cleanAt)) {
+				t.Fatalf("unexpected Codex summary node: %#v", node)
 			}
 		})
 	}
@@ -580,6 +624,36 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		}
 		if info.AIReview != "pass" || !info.AIClean {
 			t.Fatalf("expected clean AI pass, got review=%q clean=%v", info.AIReview, info.AIClean)
+		}
+	})
+
+	t.Run("current-head completed Codex summary and PR reaction count as AI pass", func(t *testing.T) {
+		raw := []byte(`{
+			"number": 140,
+			"headRefOid": "f92ca525d5a267d4a4c544ed1f0f90e1e3d63802",
+			"comments": {"totalCount": 1, "nodes": [{
+				"body": "<!-- codex-pull-request-review-summary -->\n\n| Review | Status | Commit | Review trigger |\n| --- | --- | --- | --- |\n| 📝 **Code Review** | ✅ **Completed** <relative-time datetime=\"2026-09-20T21:49:39.029122Z\">2026-09-20T21:49:39.029122Z</relative-time> | ` + "`f92ca52`" + ` | PR opened |",
+				"createdAt": "2026-09-20T21:46:24Z",
+				"author": {"login": "chatgpt-codex-connector", "__typename": "Bot"}
+			}]},
+			"reactions": {"totalCount": 1, "nodes": [{
+				"createdAt": "2026-09-20T21:49:41Z",
+				"user": {"login": "chatgpt-codex-connector[bot]", "__typename": "User"}
+			}]},
+			"reviewThreads": {"totalCount": 0, "nodes": []},
+			"reviews": {"totalCount": 0, "nodes": []},
+			"approvedReviews": {"nodes": []}
+		}`)
+
+		num, info, ok := parsePRSupplementalNode(raw)
+		if !ok || num != 140 {
+			t.Fatalf("expected PR 140, got number=%d ok=%v", num, ok)
+		}
+		if info.AIReview != "pass" || !info.AIClean {
+			t.Fatalf("expected clean AI pass from current-head summary and reaction, got review=%q clean=%v", info.AIReview, info.AIClean)
+		}
+		if info.Approvals != 0 {
+			t.Fatalf("PR reaction must not count as a formal approval, got %d", info.Approvals)
 		}
 	})
 

@@ -168,7 +168,7 @@ Compared to `gh pr list`, this command keeps all existing filters but renders a 
 | **Author**| PR author login |
 | **State**| `open`, `draft`, `closed`, or `merged` |
 | **Rev**  | Overall review decision: `✓` approved, `✗` changes requested, or `•` review required |
-| **AI**   | AI reviewer status: `pass` (approved/no issues), `fail` (issues found), `?` (review data unavailable), or `-` (no AI review). Detects CodeRabbit, Copilot PR reviewer, other `[bot]` reviewers, and Cubic's AI reviewer check. Copilot passes only when its current-head summary explicitly recommends approval; `Needs a closer look` and `Changes recommended` fail |
+| **AI**   | AI reviewer status: `pass` (approved/no issues), `fail` (issues found), `?` (review data unavailable), or `-` (no AI review). Detects CodeRabbit, Copilot PR reviewer, connected Codex, other `[bot]` reviewers, and Cubic's AI reviewer check. Copilot passes only when its current-head summary explicitly recommends approval; `Needs a closer look` and `Changes recommended` fail |
 | **Appv** | Count of unique formal approvals, including bot reviewers |
 | **Checks**| CI status: `pass`, `review`, `fail`, `pending`, `merge`, or `-`. `review` (green) means every non-review check passed and only a recognized AI reviewer check remains. `merge` (red) indicates merge conflicts with the base branch. Includes required checks from repo rulesets that haven't reported yet |
 | **Cmts** | Review thread resolution: `resolved/total` (e.g., `3/5`). A trailing `!` marks a clean AI verdict with no unresolved AI threads. `-` means no threads, and `?` means thread data was unavailable |
@@ -226,7 +226,10 @@ results and standard CLI messages, not credentials.
 A completed current-head AI review still decides the `AI` column on its own:
 a review with an unresolved actionable finding reports `fail` even when other
 enrichment is unknown, and pending CI keeps reporting `pending` independently
-of supplemental enrichment.
+of supplemental enrichment. Connected Codex counts as clean only when its
+`Completed` activity row names the current head and the connector adds a later
+thumbs-up reaction to the pull request. That reaction does not count as a formal
+approval.
 
 ## What `gh x monitor` adds
 
