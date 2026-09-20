@@ -288,7 +288,7 @@ func codexSummaryReviewNode(comment aiReviewComment, reactions []aiReviewReactio
 func cleanCodexReactionAt(reactions []aiReviewReaction, completedAt time.Time) (time.Time, bool) {
 	var latest time.Time
 	for _, reaction := range reactions {
-		if !isCodexReviewer(reaction.AuthorLogin) || reaction.OccurredAt.Before(completedAt) {
+		if !isCodexReviewer(reaction.AuthorLogin) || !reaction.OccurredAt.After(completedAt) {
 			continue
 		}
 		if reaction.OccurredAt.After(latest) {

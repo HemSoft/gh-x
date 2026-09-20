@@ -129,6 +129,7 @@ func TestCodexSummaryReviewNode(t *testing.T) {
 		{name: "completed current head with clean reaction", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: head, want: true},
 		{name: "missing clean reaction", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, head: head},
 		{name: "reaction predates completion", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "chatgpt-codex-connector[bot]", OccurredAt: completedAt.Add(-time.Second)}}, head: head},
+		{name: "reaction ties completion", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "chatgpt-codex-connector[bot]", OccurredAt: completedAt}}, head: head},
 		{name: "reaction from another actor", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{{AuthorLogin: "human", OccurredAt: cleanAt}}, head: head},
 		{name: "running review", comment: aiReviewComment{Body: strings.Replace(completed, "Completed", "Running", 1), AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: head},
 		{name: "different head", comment: aiReviewComment{Body: completed, AuthorLogin: "chatgpt-codex-connector"}, reactions: []aiReviewReaction{cleanReaction}, head: strings.Repeat("a", 40)},
