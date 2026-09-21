@@ -141,7 +141,7 @@ func execGHContext(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buf
 	}
 	stdout, stderr, err := ghTransportFunc(ghInvocation{Context: ctx, Args: args})
 	if err == nil {
-		return stdout, stderr, nil
+		return retryEmptySearchWithAccounts(ctx, args, stdout, stderr)
 	}
 	if contextErr := githubContextError(ctx.Err()); contextErr != nil {
 		return stdout, stderr, contextErr
@@ -154,6 +154,59 @@ func execGHContext(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buf
 		return stdout, stderr, err
 	}
 	return retryGHWithAccounts(ctx, host, args, stdout, stderr, err)
+}
+
+// retryEmptySearchWithAccounts distinguishes a legitimate empty search from
+// GitHub's successful empty response when the active account cannot see a
+// private repository. The repository probe does not use fallback itself, so
+// an access failure can retry the original search under another account.
+func retryEmptySearchWithAccounts(ctx context.Context, args []string, stdout, stderr bytes.Buffer) (bytes.Buffer, bytes.Buffer, error) {
+	if !isEmptySearchList(args, stdout.Bytes()) {
+		return stdout, stderr, nil
+	}
+	probeArgs := repositoryAccessProbeArgs(args)
+	_, probeStderr, probeErr := ghTransportFunc(ghInvocation{Context: ctx, Args: probeArgs})
+	if probeErr == nil {
+		return stdout, stderr, nil
+	}
+	if contextErr := githubContextError(ctx.Err()); contextErr != nil {
+		return stdout, probeStderr, contextErr
+	}
+	host, eligible := fallbackHost(ctx, args, probeStderr.String())
+	if !eligible {
+		return stdout, stderr, nil
+	}
+	return retryGHWithAccounts(ctx, host, args, stdout, probeStderr, probeErr)
+}
+
+func isEmptySearchList(args []string, output []byte) bool {
+	if len(args) < 2 || (args[0] != "pr" && args[0] != "issue") || args[1] != "list" {
+		return false
+	}
+	hasSearch := false
+	for _, arg := range args[2:] {
+		if arg == "--search" || strings.HasPrefix(arg, "--search=") {
+			hasSearch = true
+			break
+		}
+	}
+	return hasSearch && bytes.Equal(bytes.TrimSpace(output), []byte("[]"))
+}
+
+func repositoryAccessProbeArgs(args []string) []string {
+	probeArgs := []string{"repo", "view"}
+	for i := 2; i < len(args); i++ {
+		switch {
+		case (args[i] == "--repo" || args[i] == "-R") && i+1 < len(args):
+			probeArgs = append(probeArgs, args[i+1])
+			i++
+		case strings.HasPrefix(args[i], "--repo="):
+			probeArgs = append(probeArgs, strings.TrimPrefix(args[i], "--repo="))
+		case strings.HasPrefix(args[i], "-R="):
+			probeArgs = append(probeArgs, strings.TrimPrefix(args[i], "-R="))
+		}
+	}
+	return append(probeArgs, "--json", "nameWithOwner")
 }
 
 func retryGHWithAccounts(ctx context.Context, host string, args []string, originalOut, originalErrs bytes.Buffer, originalErr error) (bytes.Buffer, bytes.Buffer, error) {
@@ -171,6 +224,10 @@ func retryGHWithAccounts(ctx context.Context, host string, args []string, origin
 		}
 		retry := ghInvocation{Context: ctx, Args: args, ExtraEnv: credentialEnvFor(host, token)}
 		retryOut, retryErrs, retryErr := ghTransportFunc(retry)
+		if retryErr == nil && isEmptySearchList(args, retryOut.Bytes()) {
+			probe := ghInvocation{Context: ctx, Args: repositoryAccessProbeArgs(args), ExtraEnv: retry.ExtraEnv}
+			_, _, retryErr = ghTransportFunc(probe)
+		}
 		if retryErr == nil {
 			noteFallback(login, host)
 			return retryOut, retryErrs, nil
