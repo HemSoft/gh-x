@@ -251,21 +251,23 @@ func TestExecGHFallsBackToAlternateAccount(t *testing.T) {
 
 func TestExecGHSearchListFallsBackWhenEmptyResultHidesPrivateRepo(t *testing.T) {
 	tests := []struct {
-		name          string
-		probeError    error
-		probeStderr   string
-		explicitToken bool
-		wantFallback  bool
-		wantCalls     int
-		wantOutput    string
+		name                string
+		probeError          error
+		probeStderr         string
+		explicitToken       bool
+		firstAlternateBlind bool
+		wantFallback        bool
+		wantCalls           int
+		wantOutput          string
 	}{
 		{
-			name:         "inaccessible repository retries search",
-			probeError:   errors.New("exit status 1"),
-			probeStderr:  "GraphQL: Could not resolve to a Repository with the name 'acme/private'. (repository)",
-			wantFallback: true,
-			wantCalls:    3,
-			wantOutput:   `[{"number":116}]`,
+			name:                "inaccessible repository retries search",
+			probeError:          errors.New("exit status 1"),
+			probeStderr:         "GraphQL: Could not resolve to a Repository with the name 'acme/private'. (repository)",
+			firstAlternateBlind: true,
+			wantFallback:        true,
+			wantCalls:           5,
+			wantOutput:          `[{"number":116}]`,
 		},
 		{
 			name:       "accessible repository keeps legitimate empty result",
@@ -284,6 +286,11 @@ func TestExecGHSearchListFallsBackWhenEmptyResultHidesPrivateRepo(t *testing.T) 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
+			accounts := []ghAccount{{Login: "primary", Active: true}}
+			if test.firstAlternateBlind {
+				accounts = append(accounts, ghAccount{Login: "blind-secondary"})
+			}
+			accounts = append(accounts, ghAccount{Login: "search-secondary"})
 			notices := withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
 				calls++
 				switch calls {
@@ -301,8 +308,24 @@ func TestExecGHSearchListFallsBackWhenEmptyResultHidesPrivateRepo(t *testing.T) 
 					}
 					return *bytes.NewBufferString(`{"nameWithOwner":"acme/private"}`), bytes.Buffer{}, nil
 				case 3:
+					if test.firstAlternateBlind {
+						if strings.Join(inv.ExtraEnv, "|") != "GH_TOKEN=blind-token" {
+							t.Fatalf("expected blind alternate account token, got %v", inv.ExtraEnv)
+						}
+						return *bytes.NewBufferString("[]"), bytes.Buffer{}, nil
+					}
 					if strings.Join(inv.ExtraEnv, "|") != "GH_TOKEN=alt-token" {
 						t.Fatalf("expected alternate account token, got %v", inv.ExtraEnv)
+					}
+					return *bytes.NewBufferString(`[{"number":116}]`), bytes.Buffer{}, nil
+				case 4:
+					if strings.Join(inv.Args, " ") != "repo view acme/private --json nameWithOwner" || strings.Join(inv.ExtraEnv, "|") != "GH_TOKEN=blind-token" {
+						t.Fatalf("unexpected blind alternate access probe: args=%v env=%v", inv.Args, inv.ExtraEnv)
+					}
+					return bytes.Buffer{}, *bytes.NewBufferString(test.probeStderr), test.probeError
+				case 5:
+					if strings.Join(inv.ExtraEnv, "|") != "GH_TOKEN=alt-token" {
+						t.Fatalf("expected accessible alternate account token, got %v", inv.ExtraEnv)
 					}
 					return *bytes.NewBufferString(`[{"number":116}]`), bytes.Buffer{}, nil
 				default:
@@ -310,8 +333,8 @@ func TestExecGHSearchListFallsBackWhenEmptyResultHidesPrivateRepo(t *testing.T) 
 					return bytes.Buffer{}, bytes.Buffer{}, nil
 				}
 			},
-				[]ghAccount{{Login: "primary", Active: true}, {Login: "search-secondary", Active: false}},
-				map[string]string{"search-secondary": "alt-token"},
+				accounts,
+				map[string]string{"blind-secondary": "blind-token", "search-secondary": "alt-token"},
 			)
 			if test.explicitToken {
 				t.Setenv("GH_TOKEN", "explicit-token")

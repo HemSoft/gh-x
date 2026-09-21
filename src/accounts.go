@@ -224,6 +224,10 @@ func retryGHWithAccounts(ctx context.Context, host string, args []string, origin
 		}
 		retry := ghInvocation{Context: ctx, Args: args, ExtraEnv: credentialEnvFor(host, token)}
 		retryOut, retryErrs, retryErr := ghTransportFunc(retry)
+		if retryErr == nil && isEmptySearchList(args, retryOut.Bytes()) {
+			probe := ghInvocation{Context: ctx, Args: repositoryAccessProbeArgs(args), ExtraEnv: retry.ExtraEnv}
+			_, _, retryErr = ghTransportFunc(probe)
+		}
 		if retryErr == nil {
 			noteFallback(login, host)
 			return retryOut, retryErrs, nil
