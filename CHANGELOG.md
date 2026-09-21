@@ -12,8 +12,6 @@ and this project uses semantic versioning.
 
 See the comparison link below for changes since the latest published release.
 
-- Fix multi-account fallback for empty private-repository searches (#145)
-
 ## [0.13.11] - 2026-09-21
 
 - fix: retry empty private repository searches (#146)
