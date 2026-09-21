@@ -249,6 +249,94 @@ func TestExecGHFallsBackToAlternateAccount(t *testing.T) {
 	}
 }
 
+func TestExecGHSearchListFallsBackWhenEmptyResultHidesPrivateRepo(t *testing.T) {
+	tests := []struct {
+		name          string
+		probeError    error
+		probeStderr   string
+		explicitToken bool
+		wantFallback  bool
+		wantCalls     int
+		wantOutput    string
+	}{
+		{
+			name:         "inaccessible repository retries search",
+			probeError:   errors.New("exit status 1"),
+			probeStderr:  "GraphQL: Could not resolve to a Repository with the name 'acme/private'. (repository)",
+			wantFallback: true,
+			wantCalls:    3,
+			wantOutput:   `[{"number":116}]`,
+		},
+		{
+			name:       "accessible repository keeps legitimate empty result",
+			wantCalls:  2,
+			wantOutput: "[]",
+		},
+		{
+			name:          "explicit token keeps fallback disabled",
+			probeError:    errors.New("exit status 1"),
+			probeStderr:   "GraphQL: Could not resolve to a Repository with the name 'acme/private'. (repository)",
+			explicitToken: true,
+			wantCalls:     2,
+			wantOutput:    "[]",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			notices := withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+				calls++
+				switch calls {
+				case 1:
+					if strings.Join(inv.Args, " ") != "pr list --repo acme/private --state merged --search sort:updated-desc --json number" {
+						t.Fatalf("unexpected search call: %v", inv.Args)
+					}
+					return *bytes.NewBufferString("[]"), bytes.Buffer{}, nil
+				case 2:
+					if strings.Join(inv.Args, " ") != "repo view acme/private --json nameWithOwner" {
+						t.Fatalf("unexpected access probe: %v", inv.Args)
+					}
+					if test.probeError != nil {
+						return bytes.Buffer{}, *bytes.NewBufferString(test.probeStderr), test.probeError
+					}
+					return *bytes.NewBufferString(`{"nameWithOwner":"acme/private"}`), bytes.Buffer{}, nil
+				case 3:
+					if strings.Join(inv.ExtraEnv, "|") != "GH_TOKEN=alt-token" {
+						t.Fatalf("expected alternate account token, got %v", inv.ExtraEnv)
+					}
+					return *bytes.NewBufferString(`[{"number":116}]`), bytes.Buffer{}, nil
+				default:
+					t.Fatalf("unexpected transport call %d: %v", calls, inv.Args)
+					return bytes.Buffer{}, bytes.Buffer{}, nil
+				}
+			},
+				[]ghAccount{{Login: "primary", Active: true}, {Login: "search-secondary", Active: false}},
+				map[string]string{"search-secondary": "alt-token"},
+			)
+			if test.explicitToken {
+				t.Setenv("GH_TOKEN", "explicit-token")
+			}
+
+			out, _, err := execGH("pr", "list", "--repo", "acme/private", "--state", "merged", "--search", "sort:updated-desc", "--json", "number")
+			if err != nil {
+				t.Fatalf("search list error = %v", err)
+			}
+			if out.String() != test.wantOutput {
+				t.Fatalf("search list output = %q, want %q", out.String(), test.wantOutput)
+			}
+			if calls != test.wantCalls {
+				t.Fatalf("transport calls = %d, want %d", calls, test.wantCalls)
+			}
+			if test.wantFallback && !strings.Contains(notices.String(), "search-secondary") {
+				t.Fatalf("expected fallback notice, got %q", notices.String())
+			}
+			if !test.wantFallback && notices.Len() != 0 {
+				t.Fatalf("unexpected fallback notice %q", notices.String())
+			}
+		})
+	}
+}
+
 func TestExecGHContextSkipsFallbackAfterCancellation(t *testing.T) {
 	fallbackCalls := 0
 	withFallbackStubs(t, func(ghInvocation) (bytes.Buffer, bytes.Buffer, error) {

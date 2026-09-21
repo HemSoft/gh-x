@@ -82,7 +82,9 @@ are respected for github.com targets, `GH_ENTERPRISE_TOKEN` or
 commands never fall back, and public repositories never trigger a retry
 because either token can read them. Tokens resolve lazily and are cached per
 account and host for the current process; they are not stored or shared
-between runs.
+between runs. Search-backed pull request and issue lists verify repository
+access before accepting an empty result because GitHub can return an empty
+successful response when the active account cannot see a private repository.
 
 Two flows are pinned to the active account and never fall back on any host:
 identity-scoped
