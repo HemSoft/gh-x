@@ -244,7 +244,7 @@ func TestStatusTargetFingerprintSeparatesGitHubOverrides(t *testing.T) {
 	t.Setenv("GH_REPO", "owner/repo")
 	t.Setenv("GH_HOST", "github.com")
 	config := "remote.origin.url\n" + remoteURL + "\x00"
-	original := statusTargetFingerprint(config)
+	original := statusTargetFingerprint(config, "auth-context")
 	for _, test := range []struct {
 		name, repo, host string
 	}{
@@ -255,7 +255,7 @@ func TestStatusTargetFingerprintSeparatesGitHubOverrides(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("GH_REPO", test.repo)
 			t.Setenv("GH_HOST", test.host)
-			if got := statusTargetFingerprint(config); got == original {
+			if got := statusTargetFingerprint(config, "auth-context"); got == original {
 				t.Fatal("changed GitHub target reused origin-only fingerprint")
 			}
 		})
@@ -306,8 +306,12 @@ func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 			return "", errors.New("unexpected git command")
 		}
 	}
+	authContext, err := statusAuthContext()
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, upstream, err := statusCacheDirectory()
-	if err != nil || upstream != statusTargetFingerprint(remoteConfig) {
+	if err != nil || upstream != statusTargetFingerprint(remoteConfig, authContext) {
 		t.Fatalf("upstream-only checkout cache = %q, err=%v", upstream, err)
 	}
 	t.Setenv("GH_REPO", "owner/repo")
@@ -323,8 +327,71 @@ func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 		return previousCommand(name, args...)
 	}
 	_, override, err := statusCacheDirectory()
-	if err != nil || override != statusTargetFingerprint("") || override == upstream {
+	if err != nil || override != statusTargetFingerprint("", authContext) || override == upstream {
 		t.Fatalf("GH_REPO-only checkout cache = %q, err=%v", override, err)
+	}
+}
+
+func TestStatusCacheDirectoryIsolatesAuthenticationContext(t *testing.T) {
+	defer saveStatusFuncs()()
+	commonDirectory := t.TempDir()
+	configDirectory := t.TempDir()
+	t.Setenv("GH_CONFIG_DIR", configDirectory)
+	configPath := filepath.Join(configDirectory, "hosts.yml")
+	if err := os.WriteFile(configPath, []byte("github.com:\n  active_user: alice\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statusCommandFunc = func(name string, args ...string) (string, error) {
+		switch name + " " + strings.Join(args, " ") {
+		case "git rev-parse --git-common-dir":
+			return commonDirectory, nil
+		case "git config --local --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
+			return "remote.origin.url\nhttps://github.com/owner/repo.git\x00", nil
+		default:
+			return "", errors.New("unexpected git command")
+		}
+	}
+	_, alice, err := statusCacheDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("github.com:\n  active_user: bob\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, bob, err := statusCacheDirectory()
+	if err != nil || bob == alice {
+		t.Fatalf("switched account reused cache key: %q, err=%v", bob, err)
+	}
+	t.Setenv("GH_TOKEN", "test-token-a")
+	_, tokenA, err := statusCacheDirectory()
+	if err != nil || tokenA == bob {
+		t.Fatalf("environment token reused account key: %q, err=%v", tokenA, err)
+	}
+	t.Setenv("GH_TOKEN", "test-token-b")
+	_, tokenB, err := statusCacheDirectory()
+	if err != nil || tokenB == tokenA {
+		t.Fatalf("changed environment token reused cache key: %q, err=%v", tokenB, err)
+	}
+	if err := os.Remove(configPath); err != nil {
+		t.Fatal(err)
+	}
+	_, tokenOnly, err := statusCacheDirectory()
+	if err != nil || tokenOnly == tokenB {
+		t.Fatalf("token-only authentication cache = %q, err=%v", tokenOnly, err)
+	}
+}
+
+func TestStatusCLIConfigDirPrecedence(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("GH_CONFIG_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	if got := statusCLIConfigDir(); got != filepath.Join(xdg, "gh") {
+		t.Fatalf("XDG config directory = %q", got)
+	}
+	configured := t.TempDir()
+	t.Setenv("GH_CONFIG_DIR", configured)
+	if got := statusCLIConfigDir(); got != configured {
+		t.Fatalf("GH_CONFIG_DIR override = %q", got)
 	}
 }
 

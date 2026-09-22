@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -252,17 +253,29 @@ func statusCacheDirectory() (string, string, error) {
 		}
 		commonDirectory = filepath.Join(workingDirectory, commonDirectory)
 	}
-	remoteConfig, err := statusCommandFunc("git", "config", "--local", "--null", "--get-regexp", `^remote\..*\.(url|gh-resolved)$`)
+	remoteConfig, err := statusRemoteConfig()
+	if err != nil {
+		return "", "", err
+	}
+	authContext, err := statusAuthContext()
+	if err != nil {
+		return "", "", fmt.Errorf("GitHub authentication context: %w", err)
+	}
+	return filepath.Join(filepath.Clean(commonDirectory), "gh-x", statusCacheDirectoryName), statusTargetFingerprint(remoteConfig, authContext), nil
+}
+
+func statusRemoteConfig() (string, error) {
+	config, err := statusCommandFunc("git", "config", "--local", "--null", "--get-regexp", `^remote\..*\.(url|gh-resolved)$`)
 	if err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
-			return "", "", fmt.Errorf("git remote configuration: %w", err)
+			return "", fmt.Errorf("git remote configuration: %w", err)
 		}
 	}
-	if remoteConfig == "" && strings.TrimSpace(os.Getenv("GH_REPO")) == "" {
-		return "", "", errors.New("no GitHub repository target")
+	if config == "" && strings.TrimSpace(os.Getenv("GH_REPO")) == "" {
+		return "", errors.New("no GitHub repository target")
 	}
-	return filepath.Join(filepath.Clean(commonDirectory), "gh-x", statusCacheDirectoryName), statusTargetFingerprint(remoteConfig), nil
+	return config, nil
 }
 
 func statusRemoteFingerprint(remoteURL string) string {
@@ -270,11 +283,46 @@ func statusRemoteFingerprint(remoteURL string) string {
 }
 
 // gh repo set-default writes remote.*.gh-resolved in local Git config.
-// Include every remote, rather than assuming origin exists, and environment
-// overrides so warm snapshots cannot cross effective GitHub targets.
-func statusTargetFingerprint(remoteConfig string) string {
-	return statusRemoteFingerprint(remoteConfig + "\x00" + strings.TrimSpace(os.Getenv("GH_REPO")) +
-		"\x00" + strings.TrimSpace(os.Getenv("GH_HOST")))
+// Hash all remotes, the gh auth configuration, and environment overrides;
+// neither tokens nor authentication files are persisted in cache entries.
+func statusTargetFingerprint(remoteConfig, authContext string) string {
+	return statusRemoteFingerprint(strings.Join([]string{
+		remoteConfig, authContext, os.Getenv("GH_REPO"), os.Getenv("GH_HOST"),
+		os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN"),
+		os.Getenv("GH_ENTERPRISE_TOKEN"), os.Getenv("GITHUB_ENTERPRISE_TOKEN"),
+	}, "\x00"))
+}
+
+func statusAuthContext() (string, error) {
+	configDirectory := statusCLIConfigDir()
+	if configDirectory == "" {
+		return "", errors.New("GitHub CLI config directory unavailable")
+	}
+	content, err := os.ReadFile(filepath.Join(configDirectory, "hosts.yml"))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil // An environment token can authenticate without a hosts file.
+	}
+	if err != nil {
+		return "", err // Do not reuse a snapshot if the active account is unknown.
+	}
+	return statusRemoteFingerprint(string(content)), nil
+}
+
+func statusCLIConfigDir() string {
+	if directory := os.Getenv("GH_CONFIG_DIR"); directory != "" {
+		return directory
+	}
+	if directory := os.Getenv("XDG_CONFIG_HOME"); directory != "" {
+		return filepath.Join(directory, "gh")
+	}
+	if runtime.GOOS == "windows" && os.Getenv("AppData") != "" {
+		return filepath.Join(os.Getenv("AppData"), "GitHub CLI")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "gh")
 }
 
 func cacheStatusIssues(issues []displayIssue) []statusCachedIssue {
