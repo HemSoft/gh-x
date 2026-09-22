@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -251,19 +252,17 @@ func statusCacheDirectory() (string, string, error) {
 		}
 		commonDirectory = filepath.Join(workingDirectory, commonDirectory)
 	}
-	remoteURL, err := statusCommandFunc("git", "remote", "get-url", "origin")
-	if err != nil {
-		return "", "", fmt.Errorf("git origin URL: %w", err)
-	}
-	remoteURL = strings.TrimSpace(remoteURL)
-	if remoteURL == "" {
-		return "", "", errors.New("git origin URL is empty")
-	}
 	remoteConfig, err := statusCommandFunc("git", "config", "--local", "--null", "--get-regexp", `^remote\..*\.(url|gh-resolved)$`)
 	if err != nil {
-		return "", "", fmt.Errorf("git remote configuration: %w", err)
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return "", "", fmt.Errorf("git remote configuration: %w", err)
+		}
 	}
-	return filepath.Join(filepath.Clean(commonDirectory), "gh-x", statusCacheDirectoryName), statusTargetFingerprint(remoteURL, remoteConfig), nil
+	if remoteConfig == "" && strings.TrimSpace(os.Getenv("GH_REPO")) == "" {
+		return "", "", errors.New("no GitHub repository target")
+	}
+	return filepath.Join(filepath.Clean(commonDirectory), "gh-x", statusCacheDirectoryName), statusTargetFingerprint(remoteConfig), nil
 }
 
 func statusRemoteFingerprint(remoteURL string) string {
@@ -271,11 +270,11 @@ func statusRemoteFingerprint(remoteURL string) string {
 }
 
 // gh repo set-default writes remote.*.gh-resolved in local Git config.
-// Include that configuration and environment overrides so warm snapshots
-// cannot cross targets when origin remains unchanged.
-func statusTargetFingerprint(remoteURL, remoteConfig string) string {
-	return statusRemoteFingerprint(remoteURL + "\x00" + remoteConfig + "\x00" +
-		strings.TrimSpace(os.Getenv("GH_REPO")) + "\x00" + strings.TrimSpace(os.Getenv("GH_HOST")))
+// Include every remote, rather than assuming origin exists, and environment
+// overrides so warm snapshots cannot cross effective GitHub targets.
+func statusTargetFingerprint(remoteConfig string) string {
+	return statusRemoteFingerprint(remoteConfig + "\x00" + strings.TrimSpace(os.Getenv("GH_REPO")) +
+		"\x00" + strings.TrimSpace(os.Getenv("GH_HOST")))
 }
 
 func cacheStatusIssues(issues []displayIssue) []statusCachedIssue {

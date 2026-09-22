@@ -244,7 +244,7 @@ func TestStatusTargetFingerprintSeparatesGitHubOverrides(t *testing.T) {
 	t.Setenv("GH_REPO", "owner/repo")
 	t.Setenv("GH_HOST", "github.com")
 	config := "remote.origin.url\n" + remoteURL + "\x00"
-	original := statusTargetFingerprint(remoteURL, config)
+	original := statusTargetFingerprint(config)
 	for _, test := range []struct {
 		name, repo, host string
 	}{
@@ -255,7 +255,7 @@ func TestStatusTargetFingerprintSeparatesGitHubOverrides(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("GH_REPO", test.repo)
 			t.Setenv("GH_HOST", test.host)
-			if got := statusTargetFingerprint(remoteURL, config); got == original {
+			if got := statusTargetFingerprint(config); got == original {
 				t.Fatal("changed GitHub target reused origin-only fingerprint")
 			}
 		})
@@ -272,8 +272,6 @@ func TestStatusCacheDirectoryTracksConfiguredDefaultRemote(t *testing.T) {
 		switch name + " " + strings.Join(args, " ") {
 		case "git rev-parse --git-common-dir":
 			return commonDirectory, nil
-		case "git remote get-url origin":
-			return "https://github.com/owner/repo.git", nil
 		case "git config --local --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
 			return remoteConfig, nil
 		default:
@@ -291,6 +289,42 @@ func TestStatusCacheDirectoryTracksConfiguredDefaultRemote(t *testing.T) {
 	}
 	if first == second {
 		t.Fatal("gh repo set-default changed the effective repository but retained the cache key")
+	}
+}
+
+func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
+	defer saveStatusFuncs()()
+	commonDirectory := t.TempDir()
+	remoteConfig := "remote.upstream.url\nhttps://github.com/owner/repo.git\x00"
+	statusCommandFunc = func(name string, args ...string) (string, error) {
+		switch name + " " + strings.Join(args, " ") {
+		case "git rev-parse --git-common-dir":
+			return commonDirectory, nil
+		case "git config --local --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
+			return remoteConfig, nil
+		default:
+			return "", errors.New("unexpected git command")
+		}
+	}
+	_, upstream, err := statusCacheDirectory()
+	if err != nil || upstream != statusTargetFingerprint(remoteConfig) {
+		t.Fatalf("upstream-only checkout cache = %q, err=%v", upstream, err)
+	}
+	t.Setenv("GH_REPO", "owner/repo")
+	remoteConfig = ""
+	configNoMatches := func() (string, error) {
+		return runStatusCommand("git", "config", "--local", "--get-regexp", `^nonexistent-gh-x-cache-config-key$`)
+	}
+	previousCommand := statusCommandFunc
+	statusCommandFunc = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) > 0 && args[0] == "config" {
+			return configNoMatches()
+		}
+		return previousCommand(name, args...)
+	}
+	_, override, err := statusCacheDirectory()
+	if err != nil || override != statusTargetFingerprint("") || override == upstream {
+		t.Fatalf("GH_REPO-only checkout cache = %q, err=%v", override, err)
 	}
 }
 
