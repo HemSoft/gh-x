@@ -16,6 +16,11 @@ type reviewThreadInfo struct {
 	Resolved int
 }
 
+type approverApproval struct {
+	Login      string
+	ApprovedAt time.Time
+}
+
 type prSupplementalInfo struct {
 	Threads                reviewThreadInfo
 	ThreadsTruncated       bool
@@ -25,6 +30,7 @@ type prSupplementalInfo struct {
 	AIClean                bool
 	HasUnresolvedAIThreads bool
 	Approvals              int
+	Approvers              []approverApproval
 	Incomplete             bool
 	EvidenceAmbiguous      bool
 	UnattributableEvidence bool
@@ -579,6 +585,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, reactionsIncomplete, evidenceOrderAmbiguous) || unknownUnresolved || unattributableReview,
 	)
 
+	approvers := approverApprovals(&prData)
 	return prData.Number, prSupplementalInfo{
 		Threads: reviewThreadInfo{
 			Total:    prData.ReviewThreads.TotalCount,
@@ -590,7 +597,8 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		AIReview:               aiReview,
 		AIClean:                aiClean,
 		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
-		Approvals:              countUniqueApprovers(approverLogins(&prData)),
+		Approvals:              len(approvers),
+		Approvers:              approvers,
 		Incomplete:             incomplete,
 		EvidenceAmbiguous:      evidenceOrderAmbiguous,
 		UnattributableEvidence: unknownUnresolved || unattributableReview,
@@ -679,13 +687,35 @@ func parseReviewThreadStates(prData *supplementalNodeData) ([]aiReviewThread, bo
 	return aiThreads, unknownUnresolved
 }
 
-// approverLogins collects the approved-review author logins for the PR.
-func approverLogins(prData *supplementalNodeData) []string {
-	logins := make([]string, 0, len(prData.ApprovedReviews.Nodes))
-	for _, r := range prData.ApprovedReviews.Nodes {
-		logins = append(logins, r.Author.Login)
+// approverApprovals returns one latest active approval per login, ordered from
+// newest to oldest and then by login when timestamps match.
+func approverApprovals(prData *supplementalNodeData) []approverApproval {
+	latest := make(map[string]approverApproval, len(prData.ApprovedReviews.Nodes))
+	for _, review := range prData.ApprovedReviews.Nodes {
+		login := strings.TrimSpace(review.Author.Login)
+		if login == "" {
+			continue
+		}
+		key := strings.ToLower(login)
+		candidate := approverApproval{Login: login, ApprovedAt: review.SubmittedAt}
+		current, found := latest[key]
+		if !found || candidate.ApprovedAt.After(current.ApprovedAt) ||
+			(candidate.ApprovedAt.Equal(current.ApprovedAt) && candidate.Login < current.Login) {
+			latest[key] = candidate
+		}
 	}
-	return logins
+
+	approvers := make([]approverApproval, 0, len(latest))
+	for _, approval := range latest {
+		approvers = append(approvers, approval)
+	}
+	sort.Slice(approvers, func(i, j int) bool {
+		if approvers[i].ApprovedAt.Equal(approvers[j].ApprovedAt) {
+			return strings.ToLower(approvers[i].Login) < strings.ToLower(approvers[j].Login)
+		}
+		return approvers[i].ApprovedAt.After(approvers[j].ApprovedAt)
+	})
+	return approvers
 }
 
 // supplementalNodeData mirrors the supplemental GraphQL query's per-PR shape.
@@ -739,7 +769,8 @@ type supplementalNodeData struct {
 	} `json:"reviews"`
 	ApprovedReviews struct {
 		Nodes []struct {
-			Author struct {
+			SubmittedAt time.Time `json:"submittedAt"`
+			Author      struct {
 				Login    string `json:"login"`
 				Typename string `json:"__typename"`
 			} `json:"author"`

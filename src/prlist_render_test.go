@@ -6,6 +6,7 @@ import (
 	"github.com/muesli/termenv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderTableNoColor(t *testing.T) {
@@ -84,6 +85,38 @@ func TestRenderTableAlignment(t *testing.T) {
 	row2TitleIdx := strings.Index(lines[4], "Longer")
 	if headerTitleIdx != row1TitleIdx || headerTitleIdx != row2TitleIdx {
 		t.Fatalf("Title column misaligned: header=%d row1=%d row2=%d", headerTitleIdx, row1TitleIdx, row2TitleIdx)
+	}
+}
+
+func TestRenderTableApprovalDetails(t *testing.T) {
+	savedLocal := time.Local
+	t.Cleanup(func() { time.Local = savedLocal })
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Local = location
+
+	var buf bytes.Buffer
+	prs := []displayPullRequest{{
+		Number: 1, Title: "Approved PR", Author: "author", State: "open", Review: "approved",
+		AIReview: "-", Approvals: 2, Checks: "pass", Comments: "-", Branch: "feature", Updated: "1h",
+		Approvers: []displayApprover{
+			{Login: "alice", ApprovedAt: time.Date(2026, 9, 22, 14, 30, 0, 0, time.UTC), Age: "30m"},
+			{Login: "bob", ApprovedAt: time.Date(2026, 9, 22, 13, 0, 0, 0, time.UTC), Age: "2h"},
+		},
+	}}
+	if err := renderTableWithStyle(&buf, listOptions{}, prs, false); err != nil {
+		t.Fatal(err)
+	}
+	output := buf.String()
+	alice := "    ✓ @alice approved 2026-09-22 10:30 AM EDT (30m ago)"
+	bob := "    ✓ @bob approved 2026-09-22 09:00 AM EDT (2h ago)"
+	if !strings.Contains(output, alice) || !strings.Contains(output, bob) {
+		t.Fatalf("approval details missing from output:\n%s", output)
+	}
+	if strings.Index(output, alice) > strings.Index(output, bob) {
+		t.Fatalf("approval details lost deterministic order:\n%s", output)
 	}
 }
 
@@ -191,15 +224,27 @@ func TestChecksCellReviewIsGreen(t *testing.T) {
 
 func TestRenderListOutputJSON(t *testing.T) {
 	var buf bytes.Buffer
-	prs := []displayPullRequest{
-		{Number: 1, Title: "Test PR"},
-	}
+	prs := []displayPullRequest{{
+		Number: 1,
+		Title:  "Test PR",
+		Approvers: []displayApprover{{
+			Login:      "alice",
+			ApprovedAt: time.Date(2026, 9, 22, 14, 30, 0, 0, time.UTC),
+			Age:        "30m",
+		}},
+	}}
 	err := renderListOutput(&buf, listOptions{json: true}, prs)
 	if err != nil {
 		t.Fatalf("renderListOutput(json) error: %v", err)
 	}
-	if !strings.Contains(buf.String(), `"number": 1`) {
-		t.Fatalf("JSON output missing PR number: %s", buf.String())
+	output := buf.String()
+	for _, want := range []string{`"number": 1`, `"approvers": [`, `"login": "alice"`, `"approvedAt": "2026-09-22T14:30:00Z"`, `"age": "30m"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("JSON output missing %s: %s", want, output)
+		}
+	}
+	if strings.Contains(output, "@alice approved") {
+		t.Fatalf("JSON output must not contain human table lines: %s", output)
 	}
 }
 
