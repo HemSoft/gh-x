@@ -191,6 +191,39 @@ func TestLoadStatusCacheKeepsRepositoriesAndOptionsIsolated(t *testing.T) {
 	}
 }
 
+func TestStatusTargetFingerprintSeparatesGitHubOverrides(t *testing.T) {
+	remoteURL := "git@github.com:owner/repo.git"
+	t.Setenv("GH_REPO", "owner/repo")
+	t.Setenv("GH_HOST", "github.com")
+	original := statusTargetFingerprint(remoteURL)
+	for _, test := range []struct {
+		name, repo, host string
+	}{
+		{name: "different repository", repo: "owner/other", host: "github.com"},
+		{name: "different host", repo: "owner/repo", host: "ghe.example.com"},
+		{name: "host qualified repository", repo: "ghe.example.com/owner/repo", host: "github.com"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GH_REPO", test.repo)
+			t.Setenv("GH_HOST", test.host)
+			if got := statusTargetFingerprint(remoteURL); got == original {
+				t.Fatal("changed GitHub target reused origin-only fingerprint")
+			}
+		})
+	}
+}
+
+func TestStatusCacheDirectoryWithGlobCharacters(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "[work]")
+	useStatusCacheDirectory(t, directory, "https://github.com/owner/repo.git")
+	now := time.Date(2026, 9, 21, 3, 30, 0, 0, time.UTC)
+	options := statusOptions{mergedLimit: 5}
+	saveStatusCache(options, false, now, statusDashboard{Repository: "owner/repo", ShowMergedPullRequests: true}, nil, true)
+	if cached, ok := loadStatusCache(options, false, now.Add(time.Second)); !ok || cached.Repository != "owner/repo" {
+		t.Fatalf("literal cache directory with glob characters did not load: %#v, hit=%v", cached, ok)
+	}
+}
+
 func useStatusCacheDirectory(t *testing.T, directory, remoteURL string) {
 	t.Helper()
 	saved := statusCacheDirectoryFunc

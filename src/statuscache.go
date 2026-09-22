@@ -62,14 +62,17 @@ func loadStatusCache(options statusOptions, colorEnabled bool, now time.Time) (s
 		return statusCacheEntry{}, false
 	}
 	matches := statusCacheKey{RemoteFingerprint: remoteFingerprint, MergedLimit: options.mergedLimit, ColorEnabled: colorEnabled}
-	paths, err := filepath.Glob(filepath.Join(directory, "status-*.json"))
+	files, err := os.ReadDir(directory)
 	if err != nil {
 		return statusCacheEntry{}, false
 	}
 	var newest statusCacheEntry
 	found := false
-	for _, path := range paths {
-		entry, readErr := readStatusCacheEntry(path)
+	for _, file := range files {
+		if !file.Type().IsRegular() || !strings.HasPrefix(file.Name(), "status-") || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+		entry, readErr := readStatusCacheEntry(filepath.Join(directory, file.Name()))
 		if readErr == nil && validStatusCacheEntry(entry, matches, now) && (!found || entry.FetchedAt.After(newest.FetchedAt)) {
 			newest = entry
 			found = true
@@ -237,11 +240,17 @@ func statusCacheDirectory() (string, string, error) {
 	if remoteURL == "" {
 		return "", "", errors.New("git origin URL is empty")
 	}
-	return filepath.Join(filepath.Clean(commonDirectory), "gh-x", statusCacheDirectoryName), statusRemoteFingerprint(remoteURL), nil
+	return filepath.Join(filepath.Clean(commonDirectory), "gh-x", statusCacheDirectoryName), statusTargetFingerprint(remoteURL), nil
 }
 
 func statusRemoteFingerprint(remoteURL string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(remoteURL)))
+}
+
+// GitHub CLI can target a different repository or host without changing origin.
+// Include both overrides so a warm snapshot cannot leak across effective targets.
+func statusTargetFingerprint(remoteURL string) string {
+	return statusRemoteFingerprint(remoteURL + "\x00" + strings.TrimSpace(os.Getenv("GH_REPO")) + "\x00" + strings.TrimSpace(os.Getenv("GH_HOST")))
 }
 
 func cacheStatusIssues(issues []displayIssue) []statusCachedIssue {
