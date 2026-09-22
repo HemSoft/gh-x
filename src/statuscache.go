@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	statusCacheSchemaVersion = 1
+	statusCacheSchemaVersion = 2
 	statusCacheTTL           = time.Minute
-	statusCacheDirectoryName = "status-cache-v1"
+	statusCacheDirectoryName = "status-cache-v2"
 )
 
 type statusCacheKey struct {
@@ -44,6 +44,7 @@ type statusCacheEntry struct {
 	Key                    statusCacheKey            `json:"key"`
 	Repository             string                    `json:"repository"`
 	RepositoryURL          string                    `json:"repositoryUrl,omitempty"`
+	DefaultBranch          string                    `json:"defaultBranch"`
 	Issues                 []statusCachedIssue       `json:"issues"`
 	PullRequests           []statusCachedPullRequest `json:"pullRequests"`
 	PullRequestHeads       []string                  `json:"pullRequestHeads"`
@@ -108,8 +109,8 @@ func validStatusCacheEntry(entry statusCacheEntry, expected statusCacheKey, now 
 }
 
 func statusCacheSectionsComplete(entry statusCacheEntry) bool {
-	return entry.Repository != "" && entry.Issues != nil && entry.PullRequests != nil &&
-		entry.PullRequestHeads != nil && entry.WorkflowRuns != nil
+	return entry.Repository != "" && entry.DefaultBranch != "" && entry.Issues != nil &&
+		entry.PullRequests != nil && entry.PullRequestHeads != nil && entry.WorkflowRuns != nil
 }
 
 func saveStatusCache(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, pullRequestHeads map[string]bool, pullRequestsKnown bool) {
@@ -126,6 +127,7 @@ func saveStatusCache(options statusOptions, colorEnabled bool, now time.Time, da
 		Key:                    statusCacheKey{RemoteFingerprint: remoteFingerprint, MergedLimit: options.mergedLimit, ColorEnabled: colorEnabled},
 		Repository:             dashboard.Repository,
 		RepositoryURL:          dashboard.RepositoryURL,
+		DefaultBranch:          dashboard.DefaultBranch,
 		Issues:                 cacheStatusIssues(dashboard.Issues),
 		PullRequests:           cacheStatusPullRequests(dashboard.PullRequests),
 		PullRequestHeads:       sortedStatusMapKeys(pullRequestHeads),
@@ -139,6 +141,9 @@ func saveStatusCache(options statusOptions, colorEnabled bool, now time.Time, da
 }
 
 func statusDashboardCacheable(dashboard statusDashboard) bool {
+	if dashboard.DefaultBranch == "" {
+		return false
+	}
 	errorsToCheck := []error{
 		dashboard.IssuesErr,
 		dashboard.IssuesRelErr,
@@ -254,17 +259,23 @@ func statusCacheDirectory() (string, string, error) {
 	if remoteURL == "" {
 		return "", "", errors.New("git origin URL is empty")
 	}
-	return filepath.Join(filepath.Clean(commonDirectory), "gh-x", statusCacheDirectoryName), statusTargetFingerprint(remoteURL), nil
+	remoteConfig, err := statusCommandFunc("git", "config", "--local", "--null", "--get-regexp", `^remote\..*\.(url|gh-resolved)$`)
+	if err != nil {
+		return "", "", fmt.Errorf("git remote configuration: %w", err)
+	}
+	return filepath.Join(filepath.Clean(commonDirectory), "gh-x", statusCacheDirectoryName), statusTargetFingerprint(remoteURL, remoteConfig), nil
 }
 
 func statusRemoteFingerprint(remoteURL string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(remoteURL)))
 }
 
-// GitHub CLI can target a different repository or host without changing origin.
-// Include both overrides so a warm snapshot cannot leak across effective targets.
-func statusTargetFingerprint(remoteURL string) string {
-	return statusRemoteFingerprint(remoteURL + "\x00" + strings.TrimSpace(os.Getenv("GH_REPO")) + "\x00" + strings.TrimSpace(os.Getenv("GH_HOST")))
+// gh repo set-default writes remote.*.gh-resolved in local Git config.
+// Include that configuration and environment overrides so warm snapshots
+// cannot cross targets when origin remains unchanged.
+func statusTargetFingerprint(remoteURL, remoteConfig string) string {
+	return statusRemoteFingerprint(remoteURL + "\x00" + remoteConfig + "\x00" +
+		strings.TrimSpace(os.Getenv("GH_REPO")) + "\x00" + strings.TrimSpace(os.Getenv("GH_HOST")))
 }
 
 func cacheStatusIssues(issues []displayIssue) []statusCachedIssue {

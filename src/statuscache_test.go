@@ -15,7 +15,7 @@ func TestStatusCacheEntryValidation(t *testing.T) {
 	key := statusCacheKey{RemoteFingerprint: statusRemoteFingerprint("https://github.com/owner/repo.git"), MergedLimit: 5, ColorEnabled: true}
 	complete := func(at time.Time, cacheKey statusCacheKey, version int) statusCacheEntry {
 		return statusCacheEntry{
-			Version: version, FetchedAt: at, Key: cacheKey, Repository: "owner/repo",
+			Version: version, FetchedAt: at, Key: cacheKey, Repository: "owner/repo", DefaultBranch: "main",
 			Issues: []statusCachedIssue{}, PullRequests: []statusCachedPullRequest{},
 			PullRequestHeads: []string{}, WorkflowRuns: []displayWorkflowRun{},
 			ShowMergedPullRequests: true, MergedPullRequests: []statusCachedPullRequest{},
@@ -34,6 +34,11 @@ func TestStatusCacheEntryValidation(t *testing.T) {
 		{name: "wrong merged limit", entry: complete(now, statusCacheKey{RemoteFingerprint: key.RemoteFingerprint, MergedLimit: 2, ColorEnabled: true}, statusCacheSchemaVersion)},
 		{name: "wrong color mode", entry: complete(now, statusCacheKey{RemoteFingerprint: key.RemoteFingerprint, MergedLimit: 5}, statusCacheSchemaVersion)},
 		{name: "incomplete cache", entry: statusCacheEntry{Version: statusCacheSchemaVersion, FetchedAt: now, Key: key}},
+		{name: "missing hosted default branch", entry: func() statusCacheEntry {
+			entry := complete(now, key, statusCacheSchemaVersion)
+			entry.DefaultBranch = ""
+			return entry
+		}()},
 		{name: "missing workflows", entry: func() statusCacheEntry {
 			entry := complete(now, key, statusCacheSchemaVersion)
 			entry.WorkflowRuns = nil
@@ -72,6 +77,7 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 	dashboard := statusDashboard{
 		Repository:    "owner/repo",
 		RepositoryURL: "https://github.com/owner/repo",
+		DefaultBranch: "trunk",
 		Issues: []displayIssue{{
 			Number: 8, PullRequests: "#42", Parent: "#7", Title: "Cached issue",
 			pullRequestRefs: []linkedReference{issueRef}, parentRefs: []linkedReference{parentRef},
@@ -96,8 +102,8 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 	}
 	var restored statusDashboard
 	heads, known := applyStatusCache(&restored, cached)
-	if !known || !heads["feature/cache"] {
-		t.Fatalf("cached pull request metadata = %#v, known=%v", heads, known)
+	if !known || !heads["feature/cache"] || cached.DefaultBranch != "trunk" {
+		t.Fatalf("cached pull request or branch metadata = %#v, known=%v, branch=%q", heads, known, cached.DefaultBranch)
 	}
 	if !reflect.DeepEqual(restored.Issues[0].pullRequestRefs, []linkedReference{issueRef}) || !reflect.DeepEqual(restored.Issues[0].parentRefs, []linkedReference{parentRef}) {
 		t.Fatalf("issue references were not restored: %#v", restored.Issues[0])
@@ -123,6 +129,48 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 		if strings.Contains(strings.ToLower(string(data)), forbidden) {
 			t.Fatalf("cache contains forbidden credential field %q", forbidden)
 		}
+	}
+}
+
+func TestStatusCacheReusesHostedDefaultBranchWithoutRemoteHEAD(t *testing.T) {
+	defer saveStatusFuncs()()
+	installStatusDashboardGitFixture()
+	directory := t.TempDir()
+	gitCommand := statusCommandFunc
+	statusCommandFunc = func(name string, args ...string) (string, error) {
+		output, err := gitCommand(name, args...)
+		if name == "git" && len(args) > 0 && args[0] == "for-each-ref" {
+			output = strings.ReplaceAll(output, "refs/remotes/origin/HEAD\torigin\t\t\trefs/remotes/origin/main\n", "")
+		}
+		return output, err
+	}
+	statusCacheDirectoryFunc = func() (string, string, error) {
+		return directory, statusRemoteFingerprint("owner/repo"), nil
+	}
+	statusNowFunc = func() time.Time { return time.Date(2026, 9, 21, 3, 30, 0, 0, time.UTC) }
+	statusRepoLabelFunc = func(string) string { return "owner/repo" }
+	branchCalls, remoteCalls := 0, 0
+	statusDefaultBranchFunc = func() string { branchCalls++; return "main" }
+	statusIssueListFunc = func(issueListOptions, time.Time) (issueListResult, error) {
+		remoteCalls++
+		return issueListResult{}, nil
+	}
+	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
+		remoteCalls++
+		return pullRequestListResult{}, nil
+	}
+	statusWorkflowRunListFunc = func(runListOptions, time.Time) (workflowRunListResult, error) {
+		remoteCalls++
+		return workflowRunListResult{}, nil
+	}
+	for i := 0; i < 2; i++ {
+		dashboard, err := fetchStatusDashboard(false, statusOptions{mergedLimit: 0})
+		if err != nil || dashboard.DefaultBranch != "main" {
+			t.Fatalf("status invocation %d: branch=%q, err=%v", i, dashboard.DefaultBranch, err)
+		}
+	}
+	if branchCalls != 1 || remoteCalls != 3 {
+		t.Fatalf("warm snapshot made %d hosted branch and %d remote calls, want 1 and 3", branchCalls, remoteCalls)
 	}
 }
 
@@ -166,7 +214,7 @@ func TestLoadStatusCacheKeepsRepositoriesAndOptionsIsolated(t *testing.T) {
 	options := statusOptions{mergedLimit: 5}
 	firstDirectory := t.TempDir()
 	useStatusCacheDirectory(t, firstDirectory, "https://github.com/owner/first.git")
-	saveStatusCache(options, false, now, statusDashboard{Repository: "owner/first", ShowMergedPullRequests: true}, nil, true)
+	saveStatusCache(options, false, now, statusDashboard{Repository: "owner/first", DefaultBranch: "main", ShowMergedPullRequests: true}, nil, true)
 
 	if cached, ok := loadStatusCache(options, false, now); !ok || cached.Repository != "owner/first" {
 		t.Fatalf("first repository cache = %#v, hit=%v", cached, ok)
@@ -195,7 +243,8 @@ func TestStatusTargetFingerprintSeparatesGitHubOverrides(t *testing.T) {
 	remoteURL := "git@github.com:owner/repo.git"
 	t.Setenv("GH_REPO", "owner/repo")
 	t.Setenv("GH_HOST", "github.com")
-	original := statusTargetFingerprint(remoteURL)
+	config := "remote.origin.url\n" + remoteURL + "\x00"
+	original := statusTargetFingerprint(remoteURL, config)
 	for _, test := range []struct {
 		name, repo, host string
 	}{
@@ -206,10 +255,42 @@ func TestStatusTargetFingerprintSeparatesGitHubOverrides(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("GH_REPO", test.repo)
 			t.Setenv("GH_HOST", test.host)
-			if got := statusTargetFingerprint(remoteURL); got == original {
+			if got := statusTargetFingerprint(remoteURL, config); got == original {
 				t.Fatal("changed GitHub target reused origin-only fingerprint")
 			}
 		})
+	}
+}
+
+func TestStatusCacheDirectoryTracksConfiguredDefaultRemote(t *testing.T) {
+	defer saveStatusFuncs()()
+	commonDirectory := t.TempDir()
+	remoteConfig := "remote.origin.url\nhttps://github.com/owner/repo.git\x00" +
+		"remote.other.url\nhttps://github.com/owner/other.git\x00" +
+		"remote.origin.gh-resolved\nbase\x00"
+	statusCommandFunc = func(name string, args ...string) (string, error) {
+		switch name + " " + strings.Join(args, " ") {
+		case "git rev-parse --git-common-dir":
+			return commonDirectory, nil
+		case "git remote get-url origin":
+			return "https://github.com/owner/repo.git", nil
+		case "git config --local --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
+			return remoteConfig, nil
+		default:
+			return "", errors.New("unexpected git command")
+		}
+	}
+	_, first, err := statusCacheDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteConfig = strings.Replace(remoteConfig, "remote.origin.gh-resolved", "remote.other.gh-resolved", 1)
+	_, second, err := statusCacheDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("gh repo set-default changed the effective repository but retained the cache key")
 	}
 }
 
@@ -218,7 +299,7 @@ func TestStatusCacheDirectoryWithGlobCharacters(t *testing.T) {
 	useStatusCacheDirectory(t, directory, "https://github.com/owner/repo.git")
 	now := time.Date(2026, 9, 21, 3, 30, 0, 0, time.UTC)
 	options := statusOptions{mergedLimit: 5}
-	saveStatusCache(options, false, now, statusDashboard{Repository: "owner/repo", ShowMergedPullRequests: true}, nil, true)
+	saveStatusCache(options, false, now, statusDashboard{Repository: "owner/repo", DefaultBranch: "main", ShowMergedPullRequests: true}, nil, true)
 	if cached, ok := loadStatusCache(options, false, now.Add(time.Second)); !ok || cached.Repository != "owner/repo" {
 		t.Fatalf("literal cache directory with glob characters did not load: %#v, hit=%v", cached, ok)
 	}

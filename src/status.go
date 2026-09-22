@@ -187,17 +187,11 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 		return statusDashboard{}, fmt.Errorf("git repository root: %w", err)
 	}
 	currentRoot := strings.TrimRight(root, "\r\n")
-	defaultBranch := resolveStatusDefaultBranch(branches)
-	if defaultBranch == "" {
-		defaultBranch = statusDefaultBranchFunc()
-	}
-
 	dashboard := statusDashboard{
-		DefaultBranch: defaultBranch,
+		DefaultBranch: resolveStatusDefaultBranch(branches),
 		CurrentStatus: parseGitStatus(output),
 		Branches:      branches,
 	}
-	dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(defaultBranch, branches)
 
 	now := statusNowFunc()
 	var openHeads map[string]bool
@@ -207,14 +201,21 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 		cached, cacheHit = loadStatusCache(options, colorEnabled, now)
 	}
 	if cacheHit {
+		if dashboard.DefaultBranch == "" {
+			dashboard.DefaultBranch = cached.DefaultBranch
+		}
 		openHeads, pullRequestsKnown = applyStatusCache(&dashboard, cached)
 	} else {
+		if dashboard.DefaultBranch == "" {
+			dashboard.DefaultBranch = statusDefaultBranchFunc()
+		}
 		openHeads, pullRequestsKnown = fetchStatusRemoteData(&dashboard, options.mergedLimit, colorEnabled, now)
 		saveStatusCache(options, colorEnabled, now, dashboard, openHeads, pullRequestsKnown)
 	}
 
-	merged, mergedKnown := fetchMergedStatusBranches(defaultBranch)
-	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, defaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
+	dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(dashboard.DefaultBranch, branches)
+	merged, mergedKnown := fetchMergedStatusBranches(dashboard.DefaultBranch)
+	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, dashboard.DefaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
 	return dashboard, nil
 }
 
