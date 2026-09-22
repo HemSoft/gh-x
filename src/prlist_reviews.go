@@ -16,6 +16,16 @@ type reviewThreadInfo struct {
 	Resolved int
 }
 
+type approverApproval struct {
+	Login      string
+	ApprovedAt time.Time
+}
+
+type decisiveApprovalReview struct {
+	approverApproval
+	State string
+}
+
 type prSupplementalInfo struct {
 	Threads                reviewThreadInfo
 	ThreadsTruncated       bool
@@ -25,6 +35,8 @@ type prSupplementalInfo struct {
 	AIClean                bool
 	HasUnresolvedAIThreads bool
 	Approvals              int
+	Approvers              []approverApproval
+	ApprovalsIncomplete    bool
 	Incomplete             bool
 	EvidenceAmbiguous      bool
 	UnattributableEvidence bool
@@ -568,9 +580,10 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		hasCurrentHeadCodexReview,
 	)
 	closingIssuesAvailable := closingIssuesConnectionPresent(raw) && prData.ClosingIssuesReferences.complete()
+	approvers, approvalsIncomplete := parseApproverSummary(&prData)
 	incomplete := supplementalConnectionsIncomplete(
 		closingIssuesAvailable,
-		commentsIncomplete, threadsTruncated, reviewsIncomplete, reactionsIncomplete,
+		commentsIncomplete, threadsTruncated, reviewsIncomplete, reactionsIncomplete, approvalsIncomplete,
 	)
 	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
@@ -590,7 +603,9 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		AIReview:               aiReview,
 		AIClean:                aiClean,
 		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
-		Approvals:              countUniqueApprovers(approverLogins(&prData)),
+		Approvals:              len(approvers),
+		Approvers:              approvers,
+		ApprovalsIncomplete:    approvalsIncomplete,
 		Incomplete:             incomplete,
 		EvidenceAmbiguous:      evidenceOrderAmbiguous,
 		UnattributableEvidence: unknownUnresolved || unattributableReview,
@@ -679,13 +694,61 @@ func parseReviewThreadStates(prData *supplementalNodeData) ([]aiReviewThread, bo
 	return aiThreads, unknownUnresolved
 }
 
-// approverLogins collects the approved-review author logins for the PR.
-func approverLogins(prData *supplementalNodeData) []string {
-	logins := make([]string, 0, len(prData.ApprovedReviews.Nodes))
-	for _, r := range prData.ApprovedReviews.Nodes {
-		logins = append(logins, r.Author.Login)
+func parseApproverSummary(prData *supplementalNodeData) ([]approverApproval, bool) {
+	incomplete := prData.ApprovedReviews.PageInfo.HasPreviousPage ||
+		connectionIncomplete(prData.ApprovedReviews.TotalCount, len(prData.ApprovedReviews.Nodes), false)
+	if incomplete {
+		return nil, true
 	}
-	return logins
+	return approverApprovals(prData), false
+}
+
+// approverApprovals returns only reviewers whose latest opinionated review is
+// approval. It defensively deduplicates logins even though GitHub's
+// latestOpinionatedReviews connection normally returns one review per user.
+func approverApprovals(prData *supplementalNodeData) []approverApproval {
+	latest := make(map[string]decisiveApprovalReview, len(prData.ApprovedReviews.Nodes))
+	for _, review := range prData.ApprovedReviews.Nodes {
+		login := strings.TrimSpace(review.Author.Login)
+		if login == "" {
+			continue
+		}
+		key := strings.ToLower(login)
+		candidate := decisiveApprovalReview{
+			approverApproval: approverApproval{Login: login, ApprovedAt: review.SubmittedAt},
+			State:            review.State,
+		}
+		current, found := latest[key]
+		if !found || preferApprovalDecision(candidate, current) {
+			latest[key] = candidate
+		}
+	}
+
+	approvers := make([]approverApproval, 0, len(latest))
+	for _, review := range latest {
+		if strings.EqualFold(review.State, "APPROVED") {
+			approvers = append(approvers, review.approverApproval)
+		}
+	}
+	sort.Slice(approvers, func(i, j int) bool {
+		if approvers[i].ApprovedAt.Equal(approvers[j].ApprovedAt) {
+			return strings.ToLower(approvers[i].Login) < strings.ToLower(approvers[j].Login)
+		}
+		return approvers[i].ApprovedAt.After(approvers[j].ApprovedAt)
+	})
+	return approvers
+}
+
+func preferApprovalDecision(candidate, current decisiveApprovalReview) bool {
+	if !candidate.ApprovedAt.Equal(current.ApprovedAt) {
+		return candidate.ApprovedAt.After(current.ApprovedAt)
+	}
+	candidateApproved := strings.EqualFold(candidate.State, "APPROVED")
+	currentApproved := strings.EqualFold(current.State, "APPROVED")
+	if candidateApproved != currentApproved {
+		return !candidateApproved
+	}
+	return strings.EqualFold(candidate.State, current.State) && candidate.Login < current.Login
 }
 
 // supplementalNodeData mirrors the supplemental GraphQL query's per-PR shape.
@@ -738,8 +801,14 @@ type supplementalNodeData struct {
 		} `json:"nodes"`
 	} `json:"reviews"`
 	ApprovedReviews struct {
+		TotalCount int `json:"totalCount"`
+		PageInfo   struct {
+			HasPreviousPage bool `json:"hasPreviousPage"`
+		} `json:"pageInfo"`
 		Nodes []struct {
-			Author struct {
+			State       string    `json:"state"`
+			SubmittedAt time.Time `json:"submittedAt"`
+			Author      struct {
 				Login    string `json:"login"`
 				Typename string `json:"__typename"`
 			} `json:"author"`

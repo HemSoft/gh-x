@@ -471,6 +471,27 @@ func TestRenderStatusNoColor(t *testing.T) {
 	}
 }
 
+func TestRenderStatusShowsOpenPullRequestApprovalDetails(t *testing.T) {
+	dashboard := sampleStatusDashboard()
+	dashboard.PullRequests[0].Approvals = 1
+	dashboard.PullRequests[0].Approvers = []displayApprover{{
+		Login:      "reviewer",
+		ApprovedAt: time.Date(2026, 9, 22, 14, 0, 0, 0, time.UTC),
+		Age:        "1h",
+	}}
+
+	savedLocal := time.Local
+	t.Cleanup(func() { time.Local = savedLocal })
+	time.Local = time.UTC
+	var buf bytes.Buffer
+	if err := renderStatus(&buf, dashboard, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "✓ @reviewer approved 2026-09-22 02:00 PM UTC (1h ago)") {
+		t.Fatalf("status output missing approval detail:\n%s", buf.String())
+	}
+}
+
 func TestRenderStatusLocalTime(t *testing.T) {
 	defer saveStatusFuncs()()
 	savedLocal := time.Local
