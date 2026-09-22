@@ -226,6 +226,8 @@ func runCLIWithGitHubTimeout(t *testing.T, workingDirectory, scenario, timeout s
 		"CLICOLOR":            "0",
 		"GH_FORCE_TTY":        "0",
 		"GH_PATH":             fakeGH,
+		"GH_CONFIG_DIR":       filepath.Join(workingDirectory, ".gh-config"),
+		"GH_TOKEN":            "behavior-fixture-token",
 		"GH_X_GITHUB_TIMEOUT": timeout,
 		"GH_REPO":             "HemSoft/gh-x",
 		"NO_COLOR":            "1",

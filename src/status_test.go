@@ -886,6 +886,7 @@ func saveStatusFuncs() func() {
 	savedNow := statusNowFunc
 	savedPathExists := statusPathExistsFunc
 	savedCacheDirectory := statusCacheDirectoryFunc
+	savedKeyringGet := statusKeyringGetFunc
 	statusCacheDirectoryFunc = func() (string, string, error) {
 		return "", "", errors.New("status cache disabled in unit test")
 	}
@@ -901,6 +902,7 @@ func saveStatusFuncs() func() {
 		statusNowFunc = savedNow
 		statusPathExistsFunc = savedPathExists
 		statusCacheDirectoryFunc = savedCacheDirectory
+		statusKeyringGetFunc = savedKeyringGet
 	}
 }
 

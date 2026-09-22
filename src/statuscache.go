@@ -12,6 +12,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/zalando/go-keyring"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -299,6 +302,29 @@ func statusTargetFingerprint(remoteConfig, authContext string) string {
 	}, "\x00"))
 }
 
+type statusAuthHost struct {
+	User  string `yaml:"user"`
+	Token string `yaml:"oauth_token"`
+}
+
+var statusKeyringGetFunc = func(service, user string) (string, error) {
+	type result struct {
+		token string
+		err   error
+	}
+	response := make(chan result, 1)
+	go func() {
+		token, err := keyring.Get(service, user)
+		response <- result{token, err}
+	}()
+	select {
+	case outcome := <-response:
+		return outcome.token, outcome.err
+	case <-time.After(2 * time.Second):
+		return "", errors.New("GitHub credential store timed out")
+	}
+}
+
 func statusAuthContext() (string, error) {
 	configDirectory := statusCLIConfigDir()
 	if configDirectory == "" {
@@ -311,7 +337,56 @@ func statusAuthContext() (string, error) {
 	if err != nil {
 		return "", err // Do not reuse a snapshot if the active account is unknown.
 	}
-	return statusRemoteFingerprint(string(content)), nil
+	var hosts map[string]statusAuthHost
+	if err := yaml.Unmarshal(content, &hosts); err != nil {
+		return "", err
+	}
+	keyringContext, err := statusKeyringContext(hosts)
+	if err != nil {
+		return "", err // Never reuse a snapshot if the effective token is unknown.
+	}
+	return statusRemoteFingerprint(string(content) + "\x00" + keyringContext), nil
+}
+
+func statusKeyringContext(hosts map[string]statusAuthHost) (string, error) {
+	hostnames := make([]string, 0, len(hosts))
+	for hostname := range hosts {
+		hostnames = append(hostnames, hostname)
+	}
+	sort.Strings(hostnames)
+	var identities []string
+	for _, hostname := range hostnames {
+		host := hosts[hostname]
+		if host.Token != "" || statusHasEnvironmentToken(hostname) {
+			continue
+		}
+		for _, user := range []string{host.User, ""} {
+			identity, err := statusKeyringTokenFingerprint("gh:"+hostname, user)
+			if err != nil {
+				return "", err
+			}
+			identities = append(identities, hostname+"/"+user+":"+identity)
+		}
+	}
+	return strings.Join(identities, "\x00"), nil
+}
+
+func statusKeyringTokenFingerprint(service, user string) (string, error) {
+	token, err := statusKeyringGetFunc(service, user)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return statusRemoteFingerprint(token), nil
+}
+
+func statusHasEnvironmentToken(host string) bool {
+	if strings.EqualFold(host, "github.com") {
+		return os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != ""
+	}
+	return os.Getenv("GH_ENTERPRISE_TOKEN") != "" || os.Getenv("GITHUB_ENTERPRISE_TOKEN") != ""
 }
 
 func statusCLIConfigDir() string {

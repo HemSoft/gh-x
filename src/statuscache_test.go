@@ -419,8 +419,15 @@ func TestStatusCacheDirectoryIsolatesAuthenticationContext(t *testing.T) {
 	configDirectory := t.TempDir()
 	t.Setenv("GH_CONFIG_DIR", configDirectory)
 	configPath := filepath.Join(configDirectory, "hosts.yml")
-	if err := os.WriteFile(configPath, []byte("github.com:\n  active_user: alice\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("github.com:\n  user: alice\n"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	keyringToken := "fake-keyring-token-a"
+	statusKeyringGetFunc = func(service, user string) (string, error) {
+		if service != "gh:github.com" {
+			t.Fatalf("unexpected credential service %q", service)
+		}
+		return keyringToken, nil
 	}
 	statusCommandFunc = func(name string, args ...string) (string, error) {
 		switch name + " " + strings.Join(args, " ") {
@@ -436,16 +443,25 @@ func TestStatusCacheDirectoryIsolatesAuthenticationContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(configPath, []byte("github.com:\n  active_user: bob\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("github.com:\n  user: bob\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, bob, err := statusCacheDirectory()
 	if err != nil || bob == alice {
 		t.Fatalf("switched account reused cache key: %q, err=%v", bob, err)
 	}
+	keyringToken = "fake-keyring-token-b"
+	_, rotated, err := statusCacheDirectory()
+	if err != nil || rotated == bob {
+		t.Fatalf("changed credential-store token reused cache key: %q, err=%v", rotated, err)
+	}
+	statusKeyringGetFunc = func(string, string) (string, error) { return "", errors.New("credential store unavailable") }
+	if _, _, err := statusCacheDirectory(); err == nil {
+		t.Fatal("unavailable credential store must disable cache reuse")
+	}
 	t.Setenv("GH_TOKEN", "test-token-a")
 	_, tokenA, err := statusCacheDirectory()
-	if err != nil || tokenA == bob {
+	if err != nil || tokenA == rotated {
 		t.Fatalf("environment token reused account key: %q, err=%v", tokenA, err)
 	}
 	t.Setenv("GH_TOKEN", "test-token-b")
