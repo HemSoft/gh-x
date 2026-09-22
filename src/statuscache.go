@@ -69,7 +69,7 @@ func loadStatusCache(options statusOptions, colorEnabled bool, now time.Time) (s
 	var newest statusCacheEntry
 	found := false
 	for _, file := range files {
-		if !file.Type().IsRegular() || !strings.HasPrefix(file.Name(), "status-") || !strings.HasSuffix(file.Name(), ".json") {
+		if !isStatusCacheFile(file) {
 			continue
 		}
 		entry, readErr := readStatusCacheEntry(filepath.Join(directory, file.Name()))
@@ -79,6 +79,10 @@ func loadStatusCache(options statusOptions, colorEnabled bool, now time.Time) (s
 		}
 	}
 	return newest, found
+}
+
+func isStatusCacheFile(file os.DirEntry) bool {
+	return file.Type().IsRegular() && strings.HasPrefix(file.Name(), "status-") && strings.HasSuffix(file.Name(), ".json")
 }
 
 func readStatusCacheEntry(path string) (statusCacheEntry, error) {
@@ -95,14 +99,17 @@ func readStatusCacheEntry(path string) (statusCacheEntry, error) {
 
 func validStatusCacheEntry(entry statusCacheEntry, expected statusCacheKey, now time.Time) bool {
 	if entry.Version != statusCacheSchemaVersion || entry.Key != expected || entry.FetchedAt.IsZero() ||
-		entry.Repository == "" || entry.Issues == nil || entry.PullRequests == nil ||
-		entry.PullRequestHeads == nil || entry.WorkflowRuns == nil ||
-		entry.ShowMergedPullRequests != (expected.MergedLimit > 0) ||
+		!statusCacheSectionsComplete(entry) || entry.ShowMergedPullRequests != (expected.MergedLimit > 0) ||
 		(entry.ShowMergedPullRequests && entry.MergedPullRequests == nil) {
 		return false
 	}
 	age := now.Sub(entry.FetchedAt)
 	return age >= 0 && age < statusCacheTTL
+}
+
+func statusCacheSectionsComplete(entry statusCacheEntry) bool {
+	return entry.Repository != "" && entry.Issues != nil && entry.PullRequests != nil &&
+		entry.PullRequestHeads != nil && entry.WorkflowRuns != nil
 }
 
 func saveStatusCache(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, pullRequestHeads map[string]bool, pullRequestsKnown bool) {
@@ -163,40 +170,47 @@ func writeStatusCacheEntry(directory string, entry statusCacheEntry, now time.Ti
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(directory, ".status-*.tmp")
+	temporaryPath, err := writeStatusCacheTemp(directory, data)
 	if err != nil {
 		return err
 	}
-	temporaryPath := file.Name()
-	removeTemporary := true
-	defer func() {
-		if removeTemporary {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
+	defer func() { _ = os.Remove(temporaryPath) }()
 	finalName := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(temporaryPath), ".tmp"), ".") + ".json"
 	finalPath := filepath.Join(directory, finalName)
 	if err := os.Rename(temporaryPath, finalPath); err != nil {
 		return err
 	}
-	removeTemporary = false
 	pruneStatusCacheFiles(directory, finalPath, now)
 	return nil
+}
+
+func writeStatusCacheTemp(directory string, data []byte) (string, error) {
+	file, err := os.CreateTemp(directory, ".status-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	complete := false
+	defer func() {
+		if !complete {
+			_ = file.Close()
+			_ = os.Remove(path)
+		}
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		return "", err
+	}
+	if _, err := file.Write(data); err != nil {
+		return "", err
+	}
+	if err := file.Sync(); err != nil {
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		return "", err
+	}
+	complete = true
+	return path, nil
 }
 
 func pruneStatusCacheFiles(directory, currentPath string, now time.Time) {
