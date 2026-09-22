@@ -531,10 +531,10 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			},
 			"approvedReviews": {
 				"nodes": [
-					{"submittedAt": "2026-09-22T13:00:00Z", "author": {"login": "alice", "__typename": "User"}},
-					{"submittedAt": "2026-09-22T15:00:00Z", "author": {"login": "Alice", "__typename": "User"}},
-					{"submittedAt": "2026-09-22T14:00:00Z", "author": {"login": "bob", "__typename": "User"}},
-					{"submittedAt": "2026-09-22T12:00:00Z", "author": {"login": "carol", "__typename": "User"}}
+					{"state": "APPROVED", "submittedAt": "2026-09-22T13:00:00Z", "author": {"login": "alice", "__typename": "User"}},
+					{"state": "APPROVED", "submittedAt": "2026-09-22T15:00:00Z", "author": {"login": "Alice", "__typename": "User"}},
+					{"state": "APPROVED", "submittedAt": "2026-09-22T14:00:00Z", "author": {"login": "bob", "__typename": "User"}},
+					{"state": "APPROVED", "submittedAt": "2026-09-22T12:00:00Z", "author": {"login": "carol", "__typename": "User"}}
 				]
 			}
 		}`)
@@ -1239,13 +1239,20 @@ func TestCountUniqueApprovers(t *testing.T) {
 	}
 }
 
-func TestApproverApprovalsKeepsLatestAndSortsNewestFirst(t *testing.T) {
+func TestApproverApprovalsKeepsLatestDecisionAndSortsApprovals(t *testing.T) {
 	var data supplementalNodeData
 	raw := []byte(`{"approvedReviews":{"nodes":[
-		{"submittedAt":"2026-09-22T13:00:00Z","author":{"login":"Alice"}},
-		{"submittedAt":"2026-09-22T14:00:00Z","author":{"login":"bob"}},
-		{"submittedAt":"2026-09-22T15:00:00Z","author":{"login":"alice"}},
-		{"submittedAt":"2026-09-22T16:00:00Z","author":{"login":""}}
+		{"state":"APPROVED","submittedAt":"2026-09-22T13:00:00Z","author":{"login":"Alice"}},
+		{"state":"CHANGES_REQUESTED","submittedAt":"2026-09-22T13:30:00Z","author":{"login":"carol"}},
+		{"state":"CHANGES_REQUESTED","submittedAt":"2026-09-22T14:00:00Z","author":{"login":"bob"}},
+		{"state":"DISMISSED","submittedAt":"2026-09-22T14:30:00Z","author":{"login":"dave"}},
+		{"state":"APPROVED","submittedAt":"2026-09-22T14:45:00Z","author":{"login":"eve"}},
+		{"state":"CHANGES_REQUESTED","submittedAt":"2026-09-22T14:45:00Z","author":{"login":"eve"}},
+		{"state":"APPROVED","submittedAt":"2026-09-22T15:00:00Z","author":{"login":"alice"}},
+		{"state":"APPROVED","submittedAt":"2026-09-22T16:00:00Z","author":{"login":"bob"}},
+		{"state":"APPROVED","submittedAt":"2026-09-22T17:00:00Z","author":{"login":"carol"}},
+		{"state":"CHANGES_REQUESTED","submittedAt":"2026-09-22T18:00:00Z","author":{"login":"carol"}},
+		{"state":"APPROVED","submittedAt":"2026-09-22T19:00:00Z","author":{"login":""}}
 	]}}`)
 	if err := json.Unmarshal(raw, &data); err != nil {
 		t.Fatal(err)
@@ -1253,13 +1260,13 @@ func TestApproverApprovalsKeepsLatestAndSortsNewestFirst(t *testing.T) {
 
 	got := approverApprovals(&data)
 	if len(got) != 2 {
-		t.Fatalf("approvers = %#v, want two unique logins", got)
+		t.Fatalf("approvers = %#v, want Alice and Bob only", got)
 	}
-	if got[0].Login != "alice" || !got[0].ApprovedAt.Equal(time.Date(2026, 9, 22, 15, 0, 0, 0, time.UTC)) {
-		t.Fatalf("latest Alice approval = %#v, want 15:00 UTC", got[0])
+	if got[0].Login != "bob" || !got[0].ApprovedAt.Equal(time.Date(2026, 9, 22, 16, 0, 0, 0, time.UTC)) {
+		t.Fatalf("latest Bob approval = %#v, want 16:00 UTC", got[0])
 	}
-	if got[1].Login != "bob" || !got[1].ApprovedAt.Equal(time.Date(2026, 9, 22, 14, 0, 0, 0, time.UTC)) {
-		t.Fatalf("Bob approval = %#v, want 14:00 UTC", got[1])
+	if got[1].Login != "alice" || !got[1].ApprovedAt.Equal(time.Date(2026, 9, 22, 15, 0, 0, 0, time.UTC)) {
+		t.Fatalf("latest Alice approval = %#v, want 15:00 UTC", got[1])
 	}
 }
 

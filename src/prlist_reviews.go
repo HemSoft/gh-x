@@ -21,6 +21,11 @@ type approverApproval struct {
 	ApprovedAt time.Time
 }
 
+type decisiveApprovalReview struct {
+	approverApproval
+	State string
+}
+
 type prSupplementalInfo struct {
 	Threads                reviewThreadInfo
 	ThreadsTruncated       bool
@@ -687,27 +692,32 @@ func parseReviewThreadStates(prData *supplementalNodeData) ([]aiReviewThread, bo
 	return aiThreads, unknownUnresolved
 }
 
-// approverApprovals returns one latest active approval per login, ordered from
-// newest to oldest and then by login when timestamps match.
+// approverApprovals keeps each reviewer's latest decisive review and returns
+// only reviewers whose latest decision is approval. A later changes request or
+// dismissal clears an older approval.
 func approverApprovals(prData *supplementalNodeData) []approverApproval {
-	latest := make(map[string]approverApproval, len(prData.ApprovedReviews.Nodes))
+	latest := make(map[string]decisiveApprovalReview, len(prData.ApprovedReviews.Nodes))
 	for _, review := range prData.ApprovedReviews.Nodes {
 		login := strings.TrimSpace(review.Author.Login)
 		if login == "" {
 			continue
 		}
 		key := strings.ToLower(login)
-		candidate := approverApproval{Login: login, ApprovedAt: review.SubmittedAt}
+		candidate := decisiveApprovalReview{
+			approverApproval: approverApproval{Login: login, ApprovedAt: review.SubmittedAt},
+			State:            review.State,
+		}
 		current, found := latest[key]
-		if !found || candidate.ApprovedAt.After(current.ApprovedAt) ||
-			(candidate.ApprovedAt.Equal(current.ApprovedAt) && candidate.Login < current.Login) {
+		if !found || preferApprovalDecision(candidate, current) {
 			latest[key] = candidate
 		}
 	}
 
 	approvers := make([]approverApproval, 0, len(latest))
-	for _, approval := range latest {
-		approvers = append(approvers, approval)
+	for _, review := range latest {
+		if strings.EqualFold(review.State, "APPROVED") {
+			approvers = append(approvers, review.approverApproval)
+		}
 	}
 	sort.Slice(approvers, func(i, j int) bool {
 		if approvers[i].ApprovedAt.Equal(approvers[j].ApprovedAt) {
@@ -716,6 +726,18 @@ func approverApprovals(prData *supplementalNodeData) []approverApproval {
 		return approvers[i].ApprovedAt.After(approvers[j].ApprovedAt)
 	})
 	return approvers
+}
+
+func preferApprovalDecision(candidate, current decisiveApprovalReview) bool {
+	if !candidate.ApprovedAt.Equal(current.ApprovedAt) {
+		return candidate.ApprovedAt.After(current.ApprovedAt)
+	}
+	candidateApproved := strings.EqualFold(candidate.State, "APPROVED")
+	currentApproved := strings.EqualFold(current.State, "APPROVED")
+	if candidateApproved != currentApproved {
+		return !candidateApproved
+	}
+	return strings.EqualFold(candidate.State, current.State) && candidate.Login < current.Login
 }
 
 // supplementalNodeData mirrors the supplemental GraphQL query's per-PR shape.
@@ -769,6 +791,7 @@ type supplementalNodeData struct {
 	} `json:"reviews"`
 	ApprovedReviews struct {
 		Nodes []struct {
+			State       string    `json:"state"`
 			SubmittedAt time.Time `json:"submittedAt"`
 			Author      struct {
 				Login    string `json:"login"`
