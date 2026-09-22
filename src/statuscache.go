@@ -124,13 +124,6 @@ func statusCacheSectionsComplete(entry statusCacheEntry) bool {
 		entry.PullRequests != nil && entry.PullRequestHeads != nil && entry.WorkflowRuns != nil
 }
 
-func saveStatusCache(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, pullRequestHeads map[string]bool, pullRequestsKnown bool) {
-	directory, fingerprint, err := statusCacheDirectoryFunc()
-	if err == nil {
-		saveStatusCacheAt(options, colorEnabled, now, dashboard, pullRequestHeads, pullRequestsKnown, directory, fingerprint)
-	}
-}
-
 func saveStatusCacheIfSameIdentity(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, pullRequestHeads map[string]bool, pullRequestsKnown bool, directory, fingerprint string) {
 	currentDirectory, currentFingerprint, err := statusCacheDirectoryFunc()
 	if err == nil && directory == currentDirectory && fingerprint == currentFingerprint {

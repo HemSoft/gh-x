@@ -629,6 +629,13 @@ func TestStatusCacheDirectoryWithGlobCharacters(t *testing.T) {
 	}
 }
 
+func saveStatusCache(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, heads map[string]bool, known bool) {
+	directory, fingerprint, err := statusCacheDirectoryFunc()
+	if err == nil {
+		saveStatusCacheAt(options, colorEnabled, now, dashboard, heads, known, directory, fingerprint)
+	}
+}
+
 func useStatusCacheDirectory(t *testing.T, directory, remoteURL string) {
 	t.Helper()
 	saved := statusCacheDirectoryFunc
