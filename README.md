@@ -160,7 +160,7 @@ gh x status --refresh    # bypass cached GitHub data
 ```
 
 Successful GitHub-backed status data is cached for 60 seconds under
-`$GIT_COMMON_DIR/gh-x/status-cache-v2`. Linked worktrees share that directory.
+`$GIT_COMMON_DIR/gh-x/status-cache-v3`. Linked worktrees share that directory.
 The cache is isolated by remote configuration (including `gh repo set-default`),
 GitHub authentication context, `GH_REPO`, `GH_HOST`, `--merged`, and terminal
 color mode. Tokens and authentication files are never stored in snapshots. Local branches,

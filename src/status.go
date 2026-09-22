@@ -210,7 +210,7 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 			dashboard.DefaultBranch = statusDefaultBranchFunc()
 		}
 		openHeads, pullRequestsKnown = fetchStatusRemoteData(&dashboard, options.mergedLimit, colorEnabled, now)
-		saveStatusCache(options, colorEnabled, now, dashboard, openHeads, pullRequestsKnown)
+		saveStatusCache(options, colorEnabled, statusNowFunc(), dashboard, openHeads, pullRequestsKnown)
 	}
 
 	dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(dashboard.DefaultBranch, branches)

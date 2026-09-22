@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	statusCacheSchemaVersion = 2
+	statusCacheSchemaVersion = 3
 	statusCacheTTL           = time.Minute
-	statusCacheDirectoryName = "status-cache-v2"
+	statusCacheDirectoryName = "status-cache-v3"
 )
 
 type statusCacheKey struct {
@@ -26,18 +26,24 @@ type statusCacheKey struct {
 	ColorEnabled      bool   `json:"colorEnabled"`
 }
 
+type statusCachedReference struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+	Text   string `json:"text,omitempty"`
+}
+
 type statusCachedIssue struct {
-	Display         displayIssue      `json:"display"`
-	PullRequestRefs []linkedReference `json:"pullRequestRefs,omitempty"`
-	ParentRefs      []linkedReference `json:"parentRefs,omitempty"`
+	Display         displayIssue            `json:"display"`
+	PullRequestRefs []statusCachedReference `json:"pullRequestRefs,omitempty"`
+	ParentRefs      []statusCachedReference `json:"parentRefs,omitempty"`
 }
 
 type statusCachedPullRequest struct {
-	Display          displayPullRequest `json:"display"`
-	ChecksDowngraded bool               `json:"checksDowngraded,omitempty"`
-	IssueRefs        []linkedReference  `json:"issueRefs,omitempty"`
-	UpdatedAt        time.Time          `json:"updatedAt"`
-	MergedAt         time.Time          `json:"mergedAt"`
+	Display          displayPullRequest      `json:"display"`
+	ChecksDowngraded bool                    `json:"checksDowngraded,omitempty"`
+	IssueRefs        []statusCachedReference `json:"issueRefs,omitempty"`
+	UpdatedAt        time.Time               `json:"updatedAt"`
+	MergedAt         time.Time               `json:"mergedAt"`
 }
 
 type statusCacheEntry struct {
@@ -325,13 +331,29 @@ func statusCLIConfigDir() string {
 	return filepath.Join(home, ".config", "gh")
 }
 
+func cacheStatusReferences(refs []linkedReference) []statusCachedReference {
+	cached := make([]statusCachedReference, len(refs))
+	for i, ref := range refs {
+		cached[i] = statusCachedReference(ref)
+	}
+	return cached
+}
+
+func restoreStatusReferences(cached []statusCachedReference) []linkedReference {
+	refs := make([]linkedReference, len(cached))
+	for i, ref := range cached {
+		refs[i] = linkedReference(ref)
+	}
+	return refs
+}
+
 func cacheStatusIssues(issues []displayIssue) []statusCachedIssue {
 	cached := make([]statusCachedIssue, len(issues))
 	for index, issue := range issues {
 		cached[index] = statusCachedIssue{
 			Display:         issue,
-			PullRequestRefs: issue.pullRequestRefs,
-			ParentRefs:      issue.parentRefs,
+			PullRequestRefs: cacheStatusReferences(issue.pullRequestRefs),
+			ParentRefs:      cacheStatusReferences(issue.parentRefs),
 		}
 	}
 	return cached
@@ -341,8 +363,8 @@ func restoreStatusIssues(cached []statusCachedIssue) []displayIssue {
 	issues := make([]displayIssue, len(cached))
 	for index, issue := range cached {
 		issues[index] = issue.Display
-		issues[index].pullRequestRefs = issue.PullRequestRefs
-		issues[index].parentRefs = issue.ParentRefs
+		issues[index].pullRequestRefs = restoreStatusReferences(issue.PullRequestRefs)
+		issues[index].parentRefs = restoreStatusReferences(issue.ParentRefs)
 	}
 	return issues
 }
@@ -353,7 +375,7 @@ func cacheStatusPullRequests(pullRequests []displayPullRequest) []statusCachedPu
 		cached[index] = statusCachedPullRequest{
 			Display:          pullRequest,
 			ChecksDowngraded: pullRequest.checksDowngraded,
-			IssueRefs:        pullRequest.issueRefs,
+			IssueRefs:        cacheStatusReferences(pullRequest.issueRefs),
 			UpdatedAt:        pullRequest.updatedAt,
 			MergedAt:         pullRequest.mergedAt,
 		}
@@ -366,7 +388,7 @@ func restoreStatusPullRequests(cached []statusCachedPullRequest) []displayPullRe
 	for index, pullRequest := range cached {
 		pullRequests[index] = pullRequest.Display
 		pullRequests[index].checksDowngraded = pullRequest.ChecksDowngraded
-		pullRequests[index].issueRefs = pullRequest.IssueRefs
+		pullRequests[index].issueRefs = restoreStatusReferences(pullRequest.IssueRefs)
 		pullRequests[index].updatedAt = pullRequest.UpdatedAt
 		pullRequests[index].mergedAt = pullRequest.MergedAt
 	}

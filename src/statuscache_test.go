@@ -71,8 +71,8 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 	useStatusCacheDirectory(t, directory, remoteURL)
 	now := time.Date(2026, 9, 21, 3, 30, 0, 0, time.UTC)
 	issueRef := linkedReference{Number: 42, URL: "https://github.com/owner/repo/pull/42"}
-	parentRef := linkedReference{Number: 7, URL: "https://github.com/owner/repo/issues/7"}
-	pullRequestRef := linkedReference{Number: 9, URL: "https://github.com/owner/repo/issues/9"}
+	parentRef := linkedReference{Number: 7, URL: "https://github.com/other/repo/issues/7", Text: "other/repo#7"}
+	pullRequestRef := linkedReference{Number: 9, URL: "https://github.com/other/repo/issues/9", Text: "other/repo#9"}
 	clean := true
 	dashboard := statusDashboard{
 		Repository:    "owner/repo",
@@ -105,10 +105,13 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 	if !known || !heads["feature/cache"] || cached.DefaultBranch != "trunk" {
 		t.Fatalf("cached pull request or branch metadata = %#v, known=%v, branch=%q", heads, known, cached.DefaultBranch)
 	}
-	if !reflect.DeepEqual(restored.Issues[0].pullRequestRefs, []linkedReference{issueRef}) || !reflect.DeepEqual(restored.Issues[0].parentRefs, []linkedReference{parentRef}) {
+	if !reflect.DeepEqual(restored.Issues[0].pullRequestRefs, []linkedReference{issueRef}) ||
+		!reflect.DeepEqual(restored.Issues[0].parentRefs, []linkedReference{parentRef}) ||
+		restored.Issues[0].parentRefs[0].displayText() != "other/repo#7" {
 		t.Fatalf("issue references were not restored: %#v", restored.Issues[0])
 	}
-	if !restored.PullRequests[0].checksDowngraded || !reflect.DeepEqual(restored.PullRequests[0].issueRefs, []linkedReference{pullRequestRef}) || !restored.PullRequests[0].updatedAt.Equal(now.Add(-time.Hour)) {
+	if !restored.PullRequests[0].checksDowngraded || !reflect.DeepEqual(restored.PullRequests[0].issueRefs, []linkedReference{pullRequestRef}) ||
+		restored.PullRequests[0].issueRefs[0].displayText() != "other/repo#9" || !restored.PullRequests[0].updatedAt.Equal(now.Add(-time.Hour)) {
 		t.Fatalf("pull request metadata was not restored: %#v", restored.PullRequests[0])
 	}
 	if !restored.MergedPullRequests[0].mergedAt.Equal(now.Add(-2*time.Hour)) || !restored.WorkflowRunsPerfect {
@@ -147,7 +150,8 @@ func TestStatusCacheReusesHostedDefaultBranchWithoutRemoteHEAD(t *testing.T) {
 	statusCacheDirectoryFunc = func() (string, string, error) {
 		return directory, statusRemoteFingerprint("owner/repo"), nil
 	}
-	statusNowFunc = func() time.Time { return time.Date(2026, 9, 21, 3, 30, 0, 0, time.UTC) }
+	now := time.Date(2026, 9, 21, 3, 30, 0, 0, time.UTC)
+	statusNowFunc = func() time.Time { return now }
 	statusRepoLabelFunc = func(string) string { return "owner/repo" }
 	branchCalls, remoteCalls := 0, 0
 	statusDefaultBranchFunc = func() string { branchCalls++; return "main" }
@@ -161,6 +165,7 @@ func TestStatusCacheReusesHostedDefaultBranchWithoutRemoteHEAD(t *testing.T) {
 	}
 	statusWorkflowRunListFunc = func(runListOptions, time.Time) (workflowRunListResult, error) {
 		remoteCalls++
+		now = now.Add(50 * time.Second) // Slow remote fetch must not consume the cache lifetime.
 		return workflowRunListResult{}, nil
 	}
 	for i := 0; i < 2; i++ {
@@ -169,8 +174,12 @@ func TestStatusCacheReusesHostedDefaultBranchWithoutRemoteHEAD(t *testing.T) {
 			t.Fatalf("status invocation %d: branch=%q, err=%v", i, dashboard.DefaultBranch, err)
 		}
 	}
+	now = now.Add(59 * time.Second)
+	if _, err := fetchStatusDashboard(false, statusOptions{mergedLimit: 0}); err != nil {
+		t.Fatal(err)
+	}
 	if branchCalls != 1 || remoteCalls != 3 {
-		t.Fatalf("warm snapshot made %d hosted branch and %d remote calls, want 1 and 3", branchCalls, remoteCalls)
+		t.Fatalf("snapshot within 60 seconds of fetch completion made %d hosted branch and %d remote calls, want 1 and 3", branchCalls, remoteCalls)
 	}
 }
 
