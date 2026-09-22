@@ -271,7 +271,7 @@ func statusCacheDirectory() (string, string, error) {
 }
 
 func statusRemoteConfig() (string, error) {
-	config, err := statusCommandFunc("git", "config", "--includes", "--null", "--get-regexp", `^remote\..*\.(url|gh-resolved)$`)
+	config, err := statusCommandFunc("git", "config", "--includes", "--null", "--get-regexp", `^(remote\..*\.(url|gh-resolved)|url\..*)$`)
 	if err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {

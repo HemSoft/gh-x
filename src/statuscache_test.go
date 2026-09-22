@@ -281,7 +281,7 @@ func TestStatusCacheDirectoryTracksConfiguredDefaultRemote(t *testing.T) {
 		switch name + " " + strings.Join(args, " ") {
 		case "git rev-parse --git-common-dir":
 			return commonDirectory, nil
-		case "git config --includes --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
+		case "git config --includes --null --get-regexp ^(remote\\..*\\.(url|gh-resolved)|url\\..*)$":
 			return remoteConfig, nil
 		default:
 			return "", errors.New("unexpected git command")
@@ -341,6 +341,38 @@ func TestStatusRemoteConfigHonorsIncludesAndWorktrees(t *testing.T) {
 	}
 }
 
+func TestStatusRemoteConfigTracksURLRewrites(t *testing.T) {
+	defer saveStatusFuncs()()
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		output, err := runStatusCommand("git", append([]string{"-C", repo}, args...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(output)
+	}
+	git("init", "-q")
+	git("remote", "add", "origin", "work:repo.git")
+	statusCommandFunc = func(name string, args ...string) (string, error) {
+		return runStatusCommand(name, append([]string{"-C", repo}, args...)...)
+	}
+	git("config", "--local", "url.https://github.com/one/.insteadOf", "work:")
+	firstURL := git("remote", "get-url", "origin")
+	first, err := statusRemoteConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	git("config", "--local", "--unset", "url.https://github.com/one/.insteadOf")
+	git("config", "--local", "url.https://github.com/two/.insteadOf", "work:")
+	secondURL := git("remote", "get-url", "origin")
+	second, err := statusRemoteConfig()
+	if err != nil || first == second || firstURL == secondURL ||
+		!strings.Contains(firstURL, "github.com/one/") || !strings.Contains(secondURL, "github.com/two/") {
+		t.Fatalf("effective URL rewrite was not isolated: %q to %q, err=%v", firstURL, secondURL, err)
+	}
+}
+
 func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 	defer saveStatusFuncs()()
 	commonDirectory := t.TempDir()
@@ -349,7 +381,7 @@ func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 		switch name + " " + strings.Join(args, " ") {
 		case "git rev-parse --git-common-dir":
 			return commonDirectory, nil
-		case "git config --includes --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
+		case "git config --includes --null --get-regexp ^(remote\\..*\\.(url|gh-resolved)|url\\..*)$":
 			return remoteConfig, nil
 		default:
 			return "", errors.New("unexpected git command")
@@ -394,7 +426,7 @@ func TestStatusCacheDirectoryIsolatesAuthenticationContext(t *testing.T) {
 		switch name + " " + strings.Join(args, " ") {
 		case "git rev-parse --git-common-dir":
 			return commonDirectory, nil
-		case "git config --includes --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
+		case "git config --includes --null --get-regexp ^(remote\\..*\\.(url|gh-resolved)|url\\..*)$":
 			return "remote.origin.url\nhttps://github.com/owner/repo.git\x00", nil
 		default:
 			return "", errors.New("unexpected git command")
