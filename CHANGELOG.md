@@ -10,7 +10,7 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
-See the comparison link below for changes since the latest published release.
+- Show approvers and approval times beneath open pull request rows (#149)
 
 ## [0.13.11] - 2026-09-21
 

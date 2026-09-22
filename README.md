@@ -177,6 +177,14 @@ Compared to `gh pr list`, this command keeps all existing filters but renders a 
 | **Branch**| Head branch name |
 | **Upd**  | Relative time: `12m`, `3h`, `2d`, `4mo` |
 
+An open or draft pull request with formal approvals adds one green detail line
+per unique approver beneath its table row. Each line shows the approver login,
+the latest active approval in local time with its time-zone label, and the
+relative age, for example `@octocat approved 2026-09-22 09:15 AM EDT (2h ago)`.
+The same details appear in the open pull request section of `gh x status`.
+`--json` returns these records in the `approvers` array with `login`,
+`approvedAt`, and `age` fields instead of adding formatted text to JSON output.
+
 ### Supported flags
 
 | Flag | Description |

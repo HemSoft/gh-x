@@ -42,6 +42,9 @@ func enrichPullRequests(prs []pullRequest, supplemental prSupplementalData, requ
 		info, found := supplemental.Info[pr.Number]
 		unavailable := supplemental.Unavailable[pr.Number] || !found
 		applySupplementalInfo(&dp, info, unavailable)
+		if strings.EqualFold(pr.State, "OPEN") && !unavailable && !info.ApprovalsIncomplete {
+			dp.Approvers = displayApprovers(info.Approvers, now)
+		}
 		dp.Issues, dp.issueRefs = relationshipDisplay(
 			info.ClosingIssues,
 			unavailable || !info.ClosingIssuesAvailable,
@@ -51,6 +54,21 @@ func enrichPullRequests(prs []pullRequest, supplemental prSupplementalData, requ
 		rendered = append(rendered, dp)
 	}
 	return rendered
+}
+
+func displayApprovers(approvers []approverApproval, now time.Time) []displayApprover {
+	if len(approvers) == 0 {
+		return nil
+	}
+	displayed := make([]displayApprover, 0, len(approvers))
+	for _, approver := range approvers {
+		displayed = append(displayed, displayApprover{
+			Login:      approver.Login,
+			ApprovedAt: approver.ApprovedAt,
+			Age:        formatRelativeTime(approver.ApprovedAt, now),
+		})
+	}
+	return displayed
 }
 
 func applySupplementalInfo(dp *displayPullRequest, info prSupplementalInfo, unavailable bool) {
@@ -71,6 +89,7 @@ func applySupplementalInfo(dp *displayPullRequest, info prSupplementalInfo, unav
 		dp.AIClean = &info.AIClean
 	}
 	dp.Approvals = info.Approvals
+	dp.ApprovalsIncomplete = info.ApprovalsIncomplete
 	if dp.AIReview == "" {
 		dp.AIReview = "-"
 	}

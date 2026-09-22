@@ -68,6 +68,25 @@ func (s tableStyler) approvalCell(count int) tableCell {
 	return s.dim(text)
 }
 
+func (s tableStyler) approvalSummaryCell(count int, incomplete bool) tableCell {
+	if incomplete {
+		return s.plain("?")
+	}
+	return s.approvalCell(count)
+}
+
+func (s tableStyler) approvalDetail(approver displayApprover) tableCell {
+	approvedAt := "time unavailable"
+	if !approver.ApprovedAt.IsZero() {
+		approvedAt = approver.ApprovedAt.Local().Format("2006-01-02 03:04 PM MST")
+	}
+	age := ""
+	if approver.Age != "" && approver.Age != "-" {
+		age = fmt.Sprintf(" (%s ago)", approver.Age)
+	}
+	return s.colored(fmt.Sprintf("    ✓ @%s approved %s%s", approver.Login, approvedAt, age), termenv.ANSIGreen)
+}
+
 func (s tableStyler) commentsCell(comments string, aiClean *bool) tableCell {
 	base := s.commentsCellBase(comments)
 	if aiClean == nil || !*aiClean {
@@ -207,7 +226,7 @@ func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, 
 			styler.stateCell(pr.State),
 			styler.reviewCell(pr.Review),
 			styler.aiReviewCell(pr.AIReview),
-			styler.approvalCell(pr.Approvals),
+			styler.approvalSummaryCell(pr.Approvals, pr.ApprovalsIncomplete),
 			styler.checksCell(pr.Checks),
 			styler.commentsCell(pr.Comments, pr.AIClean),
 			styler.branchCell(pr.Branch),
@@ -223,8 +242,11 @@ func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, 
 	rows = truncateCells(rows, colWidths, flexibleCols)
 
 	writeTableHeader(stdout, styler, headers, colWidths)
-	for _, row := range rows {
+	for i, row := range rows {
 		writeRow(stdout, row, colWidths)
+		for _, approver := range pullRequests[i].Approvers {
+			fmt.Fprintln(stdout, styler.approvalDetail(approver).styled)
+		}
 	}
 
 	return nil

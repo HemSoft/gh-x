@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func TestCountApprovals(t *testing.T) {
 func TestSupplementalApprovalsOverridesCountApprovals(t *testing.T) {
 	// buildDisplayPullRequest uses countApprovals as initial value.
 	// When supplemental data is available, it should override with the
-	// accurate count from reviews(states: [APPROVED]).
+	// accurate count from latestOpinionatedReviews.
 	now := time.Now()
 	pr := pullRequest{
 		Number:      28,
@@ -59,10 +60,15 @@ func TestSupplementalApprovalsOverridesCountApprovals(t *testing.T) {
 		t.Fatalf("expected countApprovals fallback = 0, got %d", dp.Approvals)
 	}
 
-	// Supplemental data says there IS an approval (from reviews(states: APPROVED)).
+	// Supplemental data says there is an active approval.
 	applySupplementalInfo(&dp, prSupplementalInfo{Approvals: 1}, false)
 	if dp.Approvals != 1 {
 		t.Fatalf("expected supplemental override = 1, got %d", dp.Approvals)
+	}
+
+	applySupplementalInfo(&dp, prSupplementalInfo{ApprovalsIncomplete: true}, false)
+	if !dp.ApprovalsIncomplete || dp.Approvals != 0 {
+		t.Fatalf("incomplete approval data = count %d, incomplete %v; want 0, true", dp.Approvals, dp.ApprovalsIncomplete)
 	}
 }
 
@@ -478,6 +484,37 @@ func TestEnrichPullRequests(t *testing.T) {
 	}
 }
 
+func TestEnrichPullRequestsShowsApproversOnlyForOpenGitHubState(t *testing.T) {
+	now := time.Date(2026, 9, 22, 16, 0, 0, 0, time.UTC)
+	approval := approverApproval{Login: "reviewer", ApprovedAt: now.Add(-2 * time.Hour)}
+	prs := []pullRequest{
+		{Number: 1, State: "OPEN", UpdatedAt: now},
+		{Number: 2, State: "OPEN", IsDraft: true, UpdatedAt: now},
+		{Number: 3, State: "CLOSED", UpdatedAt: now},
+		{Number: 4, State: "MERGED", UpdatedAt: now},
+	}
+	info := make(map[int]prSupplementalInfo, len(prs))
+	for _, pr := range prs {
+		info[pr.Number] = prSupplementalInfo{Approvals: 1, Approvers: []approverApproval{approval}}
+	}
+
+	got := enrichPullRequests(prs, prSupplementalData{Info: info}, nil, nil, now)
+	if len(got[0].Approvers) != 1 || got[0].Approvers[0].Age != "2h" {
+		t.Fatalf("open approvers = %#v, want one approval aged 2h", got[0].Approvers)
+	}
+	if len(got[1].Approvers) != 1 {
+		t.Fatalf("draft GitHub OPEN approvers = %#v, want one", got[1].Approvers)
+	}
+	if len(got[2].Approvers) != 0 || len(got[3].Approvers) != 0 {
+		t.Fatalf("non-open approvers must be hidden, closed=%#v merged=%#v", got[2].Approvers, got[3].Approvers)
+	}
+	for _, pr := range got {
+		if pr.Approvals != 1 {
+			t.Fatalf("PR #%d approval count = %d, want 1", pr.Number, pr.Approvals)
+		}
+	}
+}
+
 func TestParsePRSupplementalNode(t *testing.T) {
 	t.Run("valid JSON", func(t *testing.T) {
 		raw := []byte(`{
@@ -499,10 +536,10 @@ func TestParsePRSupplementalNode(t *testing.T) {
 			},
 			"approvedReviews": {
 				"nodes": [
-					{"author": {"login": "alice", "__typename": "User"}},
-					{"author": {"login": "Alice", "__typename": "User"}},
-					{"author": {"login": "bob", "__typename": "User"}},
-					{"author": {"login": "carol", "__typename": "User"}}
+					{"state": "APPROVED", "submittedAt": "2026-09-22T13:00:00Z", "author": {"login": "alice", "__typename": "User"}},
+					{"state": "APPROVED", "submittedAt": "2026-09-22T15:00:00Z", "author": {"login": "Alice", "__typename": "User"}},
+					{"state": "APPROVED", "submittedAt": "2026-09-22T14:00:00Z", "author": {"login": "bob", "__typename": "User"}},
+					{"state": "APPROVED", "submittedAt": "2026-09-22T12:00:00Z", "author": {"login": "carol", "__typename": "User"}}
 				]
 			}
 		}`)
@@ -519,8 +556,11 @@ func TestParsePRSupplementalNode(t *testing.T) {
 		if info.Threads.Resolved != 1 {
 			t.Fatalf("expected resolved 1, got %d", info.Threads.Resolved)
 		}
-		if info.Approvals != 3 {
-			t.Fatalf("expected 3 unique approvers, got %d", info.Approvals)
+		if info.Approvals != 3 || len(info.Approvers) != 3 {
+			t.Fatalf("expected 3 unique approvers, got count=%d details=%d", info.Approvals, len(info.Approvers))
+		}
+		if info.Approvers[0].Login != "Alice" || !info.Approvers[0].ApprovedAt.Equal(time.Date(2026, 9, 22, 15, 0, 0, 0, time.UTC)) {
+			t.Fatalf("latest Alice approval = %#v, want 15:00 UTC", info.Approvers[0])
 		}
 		if !info.AIClean {
 			t.Fatalf("expected AIClean=true for bot APPROVED with 0 comments")
@@ -1201,6 +1241,64 @@ func TestCountUniqueApprovers(t *testing.T) {
 	}
 	if got := countUniqueApprovers(nil); got != 0 {
 		t.Fatalf("expected 0 for nil, got %d", got)
+	}
+}
+
+func TestParsePRSupplementalNodeMarksTruncatedApprovalsIncomplete(t *testing.T) {
+	raw := []byte(`{
+		"number": 42,
+		"closingIssuesReferences": {"totalCount": 0, "nodes": []},
+		"comments": {"totalCount": 0, "nodes": []},
+		"reactions": {"totalCount": 0, "nodes": []},
+		"reviewThreads": {"totalCount": 0, "nodes": []},
+		"reviews": {"totalCount": 0, "nodes": []},
+		"approvedReviews": {
+			"totalCount": 101,
+			"pageInfo": {"hasPreviousPage": true},
+			"nodes": [{"state":"APPROVED","submittedAt":"2026-09-22T15:00:00Z","author":{"login":"alice"}}]
+		}
+	}`)
+
+	number, info, ok := parsePRSupplementalNode(raw)
+	if !ok || number != 42 {
+		t.Fatalf("parse result = number %d, ok %v; want 42, true", number, ok)
+	}
+	if !info.ApprovalsIncomplete || !info.Incomplete {
+		t.Fatalf("incomplete flags = approvals %v, supplemental %v; want both true", info.ApprovalsIncomplete, info.Incomplete)
+	}
+	if info.Approvals != 0 || len(info.Approvers) != 0 {
+		t.Fatalf("partial approvals must not render: count=%d details=%#v", info.Approvals, info.Approvers)
+	}
+}
+
+func TestApproverApprovalsKeepsLatestDecisionAndSortsApprovals(t *testing.T) {
+	var data supplementalNodeData
+	raw := []byte(`{"approvedReviews":{"nodes":[
+		{"state":"APPROVED","submittedAt":"2026-09-22T13:00:00Z","author":{"login":"Alice"}},
+		{"state":"CHANGES_REQUESTED","submittedAt":"2026-09-22T13:30:00Z","author":{"login":"carol"}},
+		{"state":"CHANGES_REQUESTED","submittedAt":"2026-09-22T14:00:00Z","author":{"login":"bob"}},
+		{"state":"DISMISSED","submittedAt":"2026-09-22T14:30:00Z","author":{"login":"dave"}},
+		{"state":"APPROVED","submittedAt":"2026-09-22T14:45:00Z","author":{"login":"eve"}},
+		{"state":"CHANGES_REQUESTED","submittedAt":"2026-09-22T14:45:00Z","author":{"login":"eve"}},
+		{"state":"APPROVED","submittedAt":"2026-09-22T15:00:00Z","author":{"login":"alice"}},
+		{"state":"APPROVED","submittedAt":"2026-09-22T16:00:00Z","author":{"login":"bob"}},
+		{"state":"APPROVED","submittedAt":"2026-09-22T17:00:00Z","author":{"login":"carol"}},
+		{"state":"CHANGES_REQUESTED","submittedAt":"2026-09-22T18:00:00Z","author":{"login":"carol"}},
+		{"state":"APPROVED","submittedAt":"2026-09-22T19:00:00Z","author":{"login":""}}
+	]}}`)
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+
+	got := approverApprovals(&data)
+	if len(got) != 2 {
+		t.Fatalf("approvers = %#v, want Alice and Bob only", got)
+	}
+	if got[0].Login != "bob" || !got[0].ApprovedAt.Equal(time.Date(2026, 9, 22, 16, 0, 0, 0, time.UTC)) {
+		t.Fatalf("latest Bob approval = %#v, want 16:00 UTC", got[0])
+	}
+	if got[1].Login != "alice" || !got[1].ApprovedAt.Equal(time.Date(2026, 9, 22, 15, 0, 0, 0, time.UTC)) {
+		t.Fatalf("latest Alice approval = %#v, want 15:00 UTC", got[1])
 	}
 }
 
