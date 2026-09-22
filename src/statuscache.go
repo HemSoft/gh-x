@@ -266,11 +266,15 @@ func statusCacheDirectory() (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	branchRemote, err := statusBranchRemote()
+	if err != nil {
+		return "", "", fmt.Errorf("active branch remote: %w", err)
+	}
 	authContext, err := statusAuthContext()
 	if err != nil {
 		return "", "", fmt.Errorf("GitHub authentication context: %w", err)
 	}
-	return filepath.Join(filepath.Clean(commonDirectory), "gh-x", statusCacheDirectoryName), statusTargetFingerprint(remoteConfig, authContext), nil
+	return filepath.Join(filepath.Clean(commonDirectory), "gh-x", statusCacheDirectoryName), statusTargetFingerprint(remoteConfig, branchRemote, authContext), nil
 }
 
 func statusRemoteConfig() (string, error) {
@@ -287,6 +291,30 @@ func statusRemoteConfig() (string, error) {
 	return config, nil
 }
 
+func statusBranchRemote() (string, error) {
+	branch, err := statusCommandFunc("git", "symbolic-ref", "-q", "--short", "HEAD")
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "", nil // Detached HEAD uses the repository's default remote.
+		}
+		return "", err
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return "", errors.New("active branch unavailable")
+	}
+	remote, err := statusCommandFunc("git", "config", "--includes", "--get", "branch."+branch+".remote")
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return "", nil // No branch-specific remote is configured.
+		}
+		return "", err
+	}
+	return strings.TrimSpace(remote), nil
+}
+
 func statusRemoteFingerprint(remoteURL string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(remoteURL)))
 }
@@ -294,9 +322,9 @@ func statusRemoteFingerprint(remoteURL string) string {
 // gh repo set-default writes remote.*.gh-resolved in local Git config.
 // Hash all remotes, the gh auth configuration, and environment overrides;
 // neither tokens nor authentication files are persisted in cache entries.
-func statusTargetFingerprint(remoteConfig, authContext string) string {
+func statusTargetFingerprint(remoteConfig, branchRemote, authContext string) string {
 	return statusRemoteFingerprint(strings.Join([]string{
-		remoteConfig, authContext, os.Getenv("GH_REPO"), os.Getenv("GH_HOST"),
+		remoteConfig, branchRemote, authContext, os.Getenv("GH_REPO"), os.Getenv("GH_HOST"),
 		os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN"),
 		os.Getenv("GH_ENTERPRISE_TOKEN"), os.Getenv("GITHUB_ENTERPRISE_TOKEN"),
 	}, "\x00"))
@@ -383,7 +411,8 @@ func statusKeyringTokenFingerprint(service, user string) (string, error) {
 }
 
 func statusHasEnvironmentToken(host string) bool {
-	if strings.EqualFold(host, "github.com") {
+	if strings.EqualFold(host, "github.com") || strings.EqualFold(host, "ghe.com") ||
+		strings.HasSuffix(strings.ToLower(host), ".ghe.com") {
 		return os.Getenv("GH_TOKEN") != "" || os.Getenv("GITHUB_TOKEN") != ""
 	}
 	return os.Getenv("GH_ENTERPRISE_TOKEN") != "" || os.Getenv("GITHUB_ENTERPRISE_TOKEN") != ""

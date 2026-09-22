@@ -253,7 +253,7 @@ func TestStatusTargetFingerprintSeparatesGitHubOverrides(t *testing.T) {
 	t.Setenv("GH_REPO", "owner/repo")
 	t.Setenv("GH_HOST", "github.com")
 	config := "remote.origin.url\n" + remoteURL + "\x00"
-	original := statusTargetFingerprint(config, "auth-context")
+	original := statusTargetFingerprint(config, "origin", "auth-context")
 	for _, test := range []struct {
 		name, repo, host string
 	}{
@@ -264,7 +264,7 @@ func TestStatusTargetFingerprintSeparatesGitHubOverrides(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("GH_REPO", test.repo)
 			t.Setenv("GH_HOST", test.host)
-			if got := statusTargetFingerprint(config, "auth-context"); got == original {
+			if got := statusTargetFingerprint(config, "origin", "auth-context"); got == original {
 				t.Fatal("changed GitHub target reused origin-only fingerprint")
 			}
 		})
@@ -283,6 +283,10 @@ func TestStatusCacheDirectoryTracksConfiguredDefaultRemote(t *testing.T) {
 			return commonDirectory, nil
 		case "git config --includes --null --get-regexp ^(remote\\..*\\.(url|gh-resolved)|url\\..*)$":
 			return remoteConfig, nil
+		case "git symbolic-ref -q --short HEAD":
+			return "main", nil
+		case "git config --includes --get branch.main.remote":
+			return "origin", nil
 		default:
 			return "", errors.New("unexpected git command")
 		}
@@ -341,6 +345,50 @@ func TestStatusRemoteConfigHonorsIncludesAndWorktrees(t *testing.T) {
 	}
 }
 
+func TestStatusBranchRemoteSeparatesTrackedRemotesAcrossBranches(t *testing.T) {
+	defer saveStatusFuncs()()
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		if _, err := runStatusCommand("git", append([]string{"-C", repo}, args...)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-q")
+	git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "initial")
+	git("remote", "add", "origin", "https://github.com/owner/one.git")
+	git("remote", "add", "upstream", "https://github.com/owner/two.git")
+	for _, name := range []string{"origin-work", "upstream-work", "another-origin-work"} {
+		git("branch", name)
+	}
+	git("config", "--local", "branch.origin-work.remote", "origin")
+	git("config", "--local", "branch.upstream-work.remote", "upstream")
+	git("config", "--local", "branch.another-origin-work.remote", "origin")
+	statusCommandFunc = func(name string, args ...string) (string, error) {
+		return runStatusCommand(name, append([]string{"-C", repo}, args...)...)
+	}
+	config, err := statusRemoteConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	git("checkout", "-q", "origin-work")
+	origin, err := statusBranchRemote()
+	if err != nil || origin != "origin" {
+		t.Fatalf("origin branch remote = %q, err=%v", origin, err)
+	}
+	git("checkout", "-q", "upstream-work")
+	upstream, err := statusBranchRemote()
+	if err != nil || upstream != "upstream" ||
+		statusTargetFingerprint(config, origin, "auth") == statusTargetFingerprint(config, upstream, "auth") {
+		t.Fatalf("upstream branch reused origin identity: %q, err=%v", upstream, err)
+	}
+	git("checkout", "-q", "another-origin-work")
+	otherOrigin, err := statusBranchRemote()
+	if err != nil || statusTargetFingerprint(config, origin, "auth") != statusTargetFingerprint(config, otherOrigin, "auth") {
+		t.Fatalf("same remote across linked branches lost shared identity: %q, err=%v", otherOrigin, err)
+	}
+}
+
 func TestStatusRemoteConfigTracksURLRewrites(t *testing.T) {
 	defer saveStatusFuncs()()
 	repo := t.TempDir()
@@ -383,6 +431,13 @@ func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 			return commonDirectory, nil
 		case "git config --includes --null --get-regexp ^(remote\\..*\\.(url|gh-resolved)|url\\..*)$":
 			return remoteConfig, nil
+		case "git symbolic-ref -q --short HEAD":
+			return "main", nil
+		case "git config --includes --get branch.main.remote":
+			if remoteConfig == "" {
+				return "", nil
+			}
+			return "upstream", nil
 		default:
 			return "", errors.New("unexpected git command")
 		}
@@ -392,7 +447,7 @@ func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, upstream, err := statusCacheDirectory()
-	if err != nil || upstream != statusTargetFingerprint(remoteConfig, authContext) {
+	if err != nil || upstream != statusTargetFingerprint(remoteConfig, "upstream", authContext) {
 		t.Fatalf("upstream-only checkout cache = %q, err=%v", upstream, err)
 	}
 	t.Setenv("GH_REPO", "owner/repo")
@@ -408,7 +463,7 @@ func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 		return previousCommand(name, args...)
 	}
 	_, override, err := statusCacheDirectory()
-	if err != nil || override != statusTargetFingerprint("", authContext) || override == upstream {
+	if err != nil || override != statusTargetFingerprint("", "", authContext) || override == upstream {
 		t.Fatalf("GH_REPO-only checkout cache = %q, err=%v", override, err)
 	}
 }
@@ -435,6 +490,10 @@ func TestStatusCacheDirectoryIsolatesAuthenticationContext(t *testing.T) {
 			return commonDirectory, nil
 		case "git config --includes --null --get-regexp ^(remote\\..*\\.(url|gh-resolved)|url\\..*)$":
 			return "remote.origin.url\nhttps://github.com/owner/repo.git\x00", nil
+		case "git symbolic-ref -q --short HEAD":
+			return "main", nil
+		case "git config --includes --get branch.main.remote":
+			return "origin", nil
 		default:
 			return "", errors.New("unexpected git command")
 		}
@@ -475,6 +534,42 @@ func TestStatusCacheDirectoryIsolatesAuthenticationContext(t *testing.T) {
 	_, tokenOnly, err := statusCacheDirectory()
 	if err != nil || tokenOnly == tokenB {
 		t.Fatalf("token-only authentication cache = %q, err=%v", tokenOnly, err)
+	}
+}
+
+func TestStatusAuthContextUsesGHECloudKeyringDespiteEnterpriseToken(t *testing.T) {
+	defer saveStatusFuncs()()
+	configDirectory := t.TempDir()
+	t.Setenv("GH_CONFIG_DIR", configDirectory)
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_ENTERPRISE_TOKEN", "unrelated-enterprise-token")
+	if err := os.WriteFile(filepath.Join(configDirectory, "hosts.yml"), []byte("tenant.ghe.com:\n  user: alice\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	token := "keyring-token-a"
+	statusKeyringGetFunc = func(service, user string) (string, error) {
+		if service != "gh:tenant.ghe.com" {
+			t.Fatalf("unexpected credential service %q", service)
+		}
+		return token, nil
+	}
+	first, err := statusAuthContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token = "keyring-token-b"
+	second, err := statusAuthContext()
+	if err != nil || first == second {
+		t.Fatalf("GHE Cloud token rotation retained old auth context: %q, err=%v", second, err)
+	}
+	t.Setenv("GH_TOKEN", "explicit-cloud-token")
+	statusKeyringGetFunc = func(string, string) (string, error) {
+		t.Fatal("GH_TOKEN must override GHE Cloud keyring")
+		return "", nil
+	}
+	if _, err := statusAuthContext(); err != nil {
+		t.Fatal(err)
 	}
 }
 
