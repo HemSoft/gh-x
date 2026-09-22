@@ -156,7 +156,16 @@ randomly selected perfection message from a workflow-specific pool.
 gh x status              # show the five most recently merged pull requests
 gh x status --merged=10  # show up to ten
 gh x status --merged=0   # hide recently merged pull requests
+gh x status --refresh    # bypass cached GitHub data
 ```
+
+Successful GitHub-backed status data is cached for 60 seconds under
+`$GIT_COMMON_DIR/gh-x/status-cache-v1`. Linked worktrees share that directory.
+The cache is isolated by origin URL, `--merged` value, and terminal color mode.
+Local branches, worktrees, cleanup candidates, and working-tree changes are
+always read again. `--refresh` bypasses a fresh cache entry and replaces it
+after every GitHub section succeeds. Expired, corrupt, incompatible, and failed
+snapshots are ignored.
 
 ## What `gh x pr list` adds
 

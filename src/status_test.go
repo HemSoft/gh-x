@@ -291,7 +291,7 @@ func TestFetchStatusDashboard(t *testing.T) {
 		}
 	}
 
-	got, err := fetchStatusDashboard(true, statusMergedDefaultLimit)
+	got, err := fetchStatusDashboard(true, statusOptions{mergedLimit: statusMergedDefaultLimit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestFetchStatusDashboardSkipsMergedPullRequestsWhenDisabled(t *testing.T) {
 	}
 	installStatusDashboardGitFixture()
 
-	dashboard, err := fetchStatusDashboard(false, 0)
+	dashboard, err := fetchStatusDashboard(false, statusOptions{mergedLimit: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestFetchStatusDashboardTreatsLimitedPRRowsAsIncomplete(t *testing.T) {
 	}
 	installStatusDashboardGitFixture()
 
-	dashboard, err := fetchStatusDashboard(true, 0)
+	dashboard, err := fetchStatusDashboard(true, statusOptions{mergedLimit: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestFetchStatusDashboardKeepsLocalHealthWhenGitHubFails(t *testing.T) {
 	installStatusDashboardGitFixture()
 	statusRepoURLFunc = func(string) (string, error) { return "", errors.New("repository URL offline") }
 
-	dashboard, err := fetchStatusDashboard(true, 0)
+	dashboard, err := fetchStatusDashboard(true, statusOptions{mergedLimit: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestFetchStatusDashboardSkipsRepositoryURLWithoutColor(t *testing.T) {
 		return "", nil
 	}
 
-	dashboard, err := fetchStatusDashboard(false, 0)
+	dashboard, err := fetchStatusDashboard(false, statusOptions{mergedLimit: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -740,15 +740,17 @@ func TestRenderStatusWorkflowRunSection(t *testing.T) {
 	}
 }
 
-func TestParseStatusMergedLimit(t *testing.T) {
+func TestParseStatusArgs(t *testing.T) {
 	tests := []struct {
-		name string
-		args []string
-		want int
+		name        string
+		args        []string
+		wantMerged  int
+		wantRefresh bool
 	}{
-		{name: "default", want: statusMergedDefaultLimit},
-		{name: "override", args: []string{"--merged=2"}, want: 2},
-		{name: "disabled", args: []string{"--merged=0"}, want: 0},
+		{name: "default", wantMerged: statusMergedDefaultLimit},
+		{name: "override", args: []string{"--merged=2"}, wantMerged: 2},
+		{name: "disabled", args: []string{"--merged=0"}, wantMerged: 0},
+		{name: "refresh", args: []string{"--refresh"}, wantMerged: statusMergedDefaultLimit, wantRefresh: true},
 	}
 
 	for _, tc := range tests {
@@ -758,8 +760,8 @@ func TestParseStatusMergedLimit(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got != tc.want {
-				t.Fatalf("merged limit = %d, want %d", got, tc.want)
+			if got.mergedLimit != tc.wantMerged || got.refresh != tc.wantRefresh {
+				t.Fatalf("status options = %#v, want merged=%d refresh=%v", got, tc.wantMerged, tc.wantRefresh)
 			}
 		})
 	}
@@ -767,7 +769,7 @@ func TestParseStatusMergedLimit(t *testing.T) {
 
 func TestRunStatusRejectsInvalidMergedLimitsBeforeFetching(t *testing.T) {
 	defer saveStatusFuncs()()
-	fetchStatusDashboardFunc = func(bool, int) (statusDashboard, error) {
+	fetchStatusDashboardFunc = func(bool, statusOptions) (statusDashboard, error) {
 		t.Fatal("invalid arguments must not fetch dashboard data")
 		return statusDashboard{}, nil
 	}
@@ -784,9 +786,9 @@ func TestRunStatusAliasesUseFetcher(t *testing.T) {
 	useBacklogPraiseIndex(t, 0)
 	defer saveStatusFuncs()()
 	statusNowFunc = func() time.Time { return time.Date(2026, 9, 5, 16, 32, 0, 0, time.UTC) }
-	fetchStatusDashboardFunc = func(_ bool, mergedLimit int) (statusDashboard, error) {
-		if mergedLimit != statusMergedDefaultLimit {
-			t.Fatalf("merged limit = %d, want %d", mergedLimit, statusMergedDefaultLimit)
+	fetchStatusDashboardFunc = func(_ bool, options statusOptions) (statusDashboard, error) {
+		if options.mergedLimit != statusMergedDefaultLimit || options.refresh {
+			t.Fatalf("status options = %#v, want default options", options)
 		}
 		return statusDashboard{Repository: "owner/repo"}, nil
 	}
@@ -843,7 +845,7 @@ func TestRunStatusHelp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"gh x status", "branches", "worktrees", "open issues", "open pull requests", "recently merged pull requests", "workflow runs", "--merged int", "0 hides the section", "default 5"} {
+	for _, want := range []string{"gh x status", "branches", "worktrees", "open issues", "open pull requests", "recently merged pull requests", "workflow runs", "--merged int", "0 hides the section", "default 5", "--refresh", "Bypass cached GitHub data"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Fatalf("expected %q in status usage, got %q", want, stderr.String())
 		}
@@ -883,6 +885,10 @@ func saveStatusFuncs() func() {
 	savedDefaultBranch := statusDefaultBranchFunc
 	savedNow := statusNowFunc
 	savedPathExists := statusPathExistsFunc
+	savedCacheDirectory := statusCacheDirectoryFunc
+	statusCacheDirectoryFunc = func() (string, string, error) {
+		return "", "", errors.New("status cache disabled in unit test")
+	}
 	return func() {
 		fetchStatusDashboardFunc = savedDashboard
 		statusCommandFunc = savedCommand
@@ -894,6 +900,7 @@ func saveStatusFuncs() func() {
 		statusDefaultBranchFunc = savedDefaultBranch
 		statusNowFunc = savedNow
 		statusPathExistsFunc = savedPathExists
+		statusCacheDirectoryFunc = savedCacheDirectory
 	}
 }
 
@@ -965,7 +972,7 @@ func TestFetchStatusDashboardKeepsSupplementalDiagnostics(t *testing.T) {
 	}
 	installStatusDashboardGitFixture()
 
-	dashboard, err := fetchStatusDashboard(true, 0)
+	dashboard, err := fetchStatusDashboard(true, statusOptions{mergedLimit: 0})
 	if err != nil {
 		t.Fatal(err)
 	}

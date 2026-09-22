@@ -128,6 +128,47 @@ func TestCLIBehaviorSuccess(t *testing.T) {
 	}
 }
 
+func TestCLIBehaviorStatusCache(t *testing.T) {
+	repository := newFixtureRepository(t)
+	cold := runCLI(t, repository, "success", "status", "--refresh")
+	if cold.exitCode != 0 || !strings.Contains(cold.calls, "issue list") || !strings.Contains(cold.calls, "pr list") || !strings.Contains(cold.calls, "run list") {
+		t.Fatalf("cold status did not fetch every GitHub section\nexit=%d\ncalls:\n%s\nstderr:\n%s", cold.exitCode, cold.calls, cold.stderr)
+	}
+
+	if err := os.WriteFile(filepath.Join(repository, "local-change.txt"), []byte("local change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	warm := runCLI(t, repository, "success", "status")
+	if warm.exitCode != 0 || warm.calls != "" {
+		t.Fatalf("warm status launched GitHub subprocesses\nexit=%d\ncalls:\n%s\nstderr:\n%s", warm.exitCode, warm.calls, warm.stderr)
+	}
+	if !strings.Contains(warm.stdout, "1 untracked file") || !strings.Contains(warm.stdout, "Open pull requests (1)") {
+		t.Fatalf("warm status did not combine live local state with cached GitHub rows:\n%s", warm.stdout)
+	}
+
+	refreshed := runCLI(t, repository, "success", "status", "--refresh")
+	if refreshed.exitCode != 0 || !strings.Contains(refreshed.calls, "issue list") || !strings.Contains(refreshed.calls, "run list") {
+		t.Fatalf("forced refresh did not bypass cache\nexit=%d\ncalls:\n%s\nstderr:\n%s", refreshed.exitCode, refreshed.calls, refreshed.stderr)
+	}
+
+	linkedWorktree := filepath.Join(t.TempDir(), "linked")
+	runGit(t, repository, "worktree", "add", "-b", "feature/cache-fixture", linkedWorktree, "HEAD")
+	linked := runCLI(t, linkedWorktree, "success", "status")
+	if linked.exitCode != 0 || linked.calls != "" {
+		t.Fatalf("linked worktree did not reuse the common cache\nexit=%d\ncalls:\n%s\nstderr:\n%s", linked.exitCode, linked.calls, linked.stderr)
+	}
+
+	disabledMerged := runCLI(t, repository, "success", "status", "--merged=0")
+	if disabledMerged.exitCode != 0 || disabledMerged.calls == "" || strings.Contains(disabledMerged.stdout, "Recently merged pull requests") || strings.Contains(disabledMerged.calls, "--state merged") {
+		t.Fatalf("changed merged option reused incompatible data or fetched merged rows\nexit=%d\ncalls:\n%s\nstdout:\n%s", disabledMerged.exitCode, disabledMerged.calls, disabledMerged.stdout)
+	}
+
+	unrelated := runCLI(t, newFixtureRepository(t), "success", "status")
+	if unrelated.exitCode != 0 || unrelated.calls == "" {
+		t.Fatalf("unrelated repository reused another repository cache\nexit=%d\ncalls:\n%s\nstderr:\n%s", unrelated.exitCode, unrelated.calls, unrelated.stderr)
+	}
+}
+
 func TestCLIBehaviorGitHubTimeout(t *testing.T) {
 	result := runCLIWithGitHubTimeout(t, newFixtureRepository(t), "gh-timeout", "150ms", "issue", "list", "--repo", "HemSoft/gh-x")
 

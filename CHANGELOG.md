@@ -10,6 +10,8 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+- Cache GitHub status data per repository for 60 seconds with a `--refresh` bypass (#142)
+
 ## [0.13.12] - 2026-09-22
 
 - Show approvers and approval times in open PR lists (#150)
