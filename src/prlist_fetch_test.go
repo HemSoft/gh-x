@@ -684,8 +684,8 @@ func TestFetchPRSupplementalBatchRecoversHealthyAliasesFromPartialError(t *testi
 		if !strings.Contains(query, "reactions(content: THUMBS_UP") || !strings.Contains(query, "createdAt user { login __typename }") {
 			t.Fatalf("supplemental query must request timestamped PR thumbs-up reactions, got %q", args)
 		}
-		if !strings.Contains(query, "approvedReviews: reviews(states: [APPROVED, CHANGES_REQUESTED, DISMISSED], last: 100) { nodes { state submittedAt author") {
-			t.Fatalf("supplemental query must request timestamped decisive review states, got %q", args)
+		if !strings.Contains(query, "approvedReviews: latestOpinionatedReviews(last: 100) { totalCount pageInfo { hasPreviousPage } nodes { state submittedAt author") {
+			t.Fatalf("supplemental query must request paginated latest opinionated reviews, got %q", args)
 		}
 		body := `{"data":{"repository":{"pr333":{"number":333,"headRefOid":"53b343204e072b22f6511ac68bf6284aa2c418c2","closingIssuesReferences":{"totalCount":1,"nodes":[{"number":332,"url":"https://github.com/HemSoft/codexbar-ios/issues/332"}]},"comments":{"totalCount":0,"nodes":[]},"reactions":{"totalCount":0,"nodes":[]},"reviewThreads":{"totalCount":0,"nodes":[]},"reviews":{"totalCount":0,"nodes":[]},"approvedReviews":{"nodes":[]}},"pr999":null}},"errors":[{"type":"NOT_FOUND","path":["repository","pr999"],"message":"Could not resolve to a PullRequest with the number of 999."}]}`
 		return *bytes.NewBufferString(body), *bytes.NewBufferString("gh: Could not resolve to a PullRequest with the number of 99999.\n"), errors.New("exit status 1")

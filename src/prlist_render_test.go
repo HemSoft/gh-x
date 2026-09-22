@@ -262,6 +262,11 @@ func TestApprovalCell(t *testing.T) {
 	if got1.text != "1" || got1.styled != green1.styled {
 		t.Fatalf("approvalCell(1): got styled=%q, want green=%q", got1.styled, green1.styled)
 	}
+
+	unknown := s.approvalSummaryCell(1, true)
+	if unknown.text != "?" || unknown.styled != "?" {
+		t.Fatalf("approvalSummaryCell(1, true) = %#v, want plain question mark", unknown)
+	}
 }
 
 func TestCommentsCell(t *testing.T) {

@@ -68,6 +68,13 @@ func (s tableStyler) approvalCell(count int) tableCell {
 	return s.dim(text)
 }
 
+func (s tableStyler) approvalSummaryCell(count int, incomplete bool) tableCell {
+	if incomplete {
+		return s.plain("?")
+	}
+	return s.approvalCell(count)
+}
+
 func (s tableStyler) approvalDetail(approver displayApprover) tableCell {
 	approvedAt := "time unavailable"
 	if !approver.ApprovedAt.IsZero() {
@@ -219,7 +226,7 @@ func renderPullRequestRows(stdout io.Writer, pullRequests []displayPullRequest, 
 			styler.stateCell(pr.State),
 			styler.reviewCell(pr.Review),
 			styler.aiReviewCell(pr.AIReview),
-			styler.approvalCell(pr.Approvals),
+			styler.approvalSummaryCell(pr.Approvals, pr.ApprovalsIncomplete),
 			styler.checksCell(pr.Checks),
 			styler.commentsCell(pr.Comments, pr.AIClean),
 			styler.branchCell(pr.Branch),

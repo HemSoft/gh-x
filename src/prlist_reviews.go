@@ -36,6 +36,7 @@ type prSupplementalInfo struct {
 	HasUnresolvedAIThreads bool
 	Approvals              int
 	Approvers              []approverApproval
+	ApprovalsIncomplete    bool
 	Incomplete             bool
 	EvidenceAmbiguous      bool
 	UnattributableEvidence bool
@@ -579,9 +580,10 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		hasCurrentHeadCodexReview,
 	)
 	closingIssuesAvailable := closingIssuesConnectionPresent(raw) && prData.ClosingIssuesReferences.complete()
+	approvers, approvalsIncomplete := parseApproverSummary(&prData)
 	incomplete := supplementalConnectionsIncomplete(
 		closingIssuesAvailable,
-		commentsIncomplete, threadsTruncated, reviewsIncomplete, reactionsIncomplete,
+		commentsIncomplete, threadsTruncated, reviewsIncomplete, reactionsIncomplete, approvalsIncomplete,
 	)
 	aiReview, aiClean := summarizeSupplementalReviews(
 		aiNodes,
@@ -590,7 +592,6 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		anyConnectionTruncated(commentsIncomplete, threadsTruncated, reviewsIncomplete, reactionsIncomplete, evidenceOrderAmbiguous) || unknownUnresolved || unattributableReview,
 	)
 
-	approvers := approverApprovals(&prData)
 	return prData.Number, prSupplementalInfo{
 		Threads: reviewThreadInfo{
 			Total:    prData.ReviewThreads.TotalCount,
@@ -604,6 +605,7 @@ func parsePRSupplementalNode(raw json.RawMessage) (int, prSupplementalInfo, bool
 		HasUnresolvedAIThreads: hasUnresolvedAIThreads(aiThreads),
 		Approvals:              len(approvers),
 		Approvers:              approvers,
+		ApprovalsIncomplete:    approvalsIncomplete,
 		Incomplete:             incomplete,
 		EvidenceAmbiguous:      evidenceOrderAmbiguous,
 		UnattributableEvidence: unknownUnresolved || unattributableReview,
@@ -692,9 +694,18 @@ func parseReviewThreadStates(prData *supplementalNodeData) ([]aiReviewThread, bo
 	return aiThreads, unknownUnresolved
 }
 
-// approverApprovals keeps each reviewer's latest decisive review and returns
-// only reviewers whose latest decision is approval. A later changes request or
-// dismissal clears an older approval.
+func parseApproverSummary(prData *supplementalNodeData) ([]approverApproval, bool) {
+	incomplete := prData.ApprovedReviews.PageInfo.HasPreviousPage ||
+		connectionIncomplete(prData.ApprovedReviews.TotalCount, len(prData.ApprovedReviews.Nodes), false)
+	if incomplete {
+		return nil, true
+	}
+	return approverApprovals(prData), false
+}
+
+// approverApprovals returns only reviewers whose latest opinionated review is
+// approval. It defensively deduplicates logins even though GitHub's
+// latestOpinionatedReviews connection normally returns one review per user.
 func approverApprovals(prData *supplementalNodeData) []approverApproval {
 	latest := make(map[string]decisiveApprovalReview, len(prData.ApprovedReviews.Nodes))
 	for _, review := range prData.ApprovedReviews.Nodes {
@@ -790,6 +801,10 @@ type supplementalNodeData struct {
 		} `json:"nodes"`
 	} `json:"reviews"`
 	ApprovedReviews struct {
+		TotalCount int `json:"totalCount"`
+		PageInfo   struct {
+			HasPreviousPage bool `json:"hasPreviousPage"`
+		} `json:"pageInfo"`
 		Nodes []struct {
 			State       string    `json:"state"`
 			SubmittedAt time.Time `json:"submittedAt"`

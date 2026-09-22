@@ -40,7 +40,7 @@ func TestCountApprovals(t *testing.T) {
 func TestSupplementalApprovalsOverridesCountApprovals(t *testing.T) {
 	// buildDisplayPullRequest uses countApprovals as initial value.
 	// When supplemental data is available, it should override with the
-	// accurate count from reviews(states: [APPROVED]).
+	// accurate count from latestOpinionatedReviews.
 	now := time.Now()
 	pr := pullRequest{
 		Number:      28,
@@ -60,10 +60,15 @@ func TestSupplementalApprovalsOverridesCountApprovals(t *testing.T) {
 		t.Fatalf("expected countApprovals fallback = 0, got %d", dp.Approvals)
 	}
 
-	// Supplemental data says there IS an approval (from reviews(states: APPROVED)).
+	// Supplemental data says there is an active approval.
 	applySupplementalInfo(&dp, prSupplementalInfo{Approvals: 1}, false)
 	if dp.Approvals != 1 {
 		t.Fatalf("expected supplemental override = 1, got %d", dp.Approvals)
+	}
+
+	applySupplementalInfo(&dp, prSupplementalInfo{ApprovalsIncomplete: true}, false)
+	if !dp.ApprovalsIncomplete || dp.Approvals != 0 {
+		t.Fatalf("incomplete approval data = count %d, incomplete %v; want 0, true", dp.Approvals, dp.ApprovalsIncomplete)
 	}
 }
 
@@ -1236,6 +1241,33 @@ func TestCountUniqueApprovers(t *testing.T) {
 	}
 	if got := countUniqueApprovers(nil); got != 0 {
 		t.Fatalf("expected 0 for nil, got %d", got)
+	}
+}
+
+func TestParsePRSupplementalNodeMarksTruncatedApprovalsIncomplete(t *testing.T) {
+	raw := []byte(`{
+		"number": 42,
+		"closingIssuesReferences": {"totalCount": 0, "nodes": []},
+		"comments": {"totalCount": 0, "nodes": []},
+		"reactions": {"totalCount": 0, "nodes": []},
+		"reviewThreads": {"totalCount": 0, "nodes": []},
+		"reviews": {"totalCount": 0, "nodes": []},
+		"approvedReviews": {
+			"totalCount": 101,
+			"pageInfo": {"hasPreviousPage": true},
+			"nodes": [{"state":"APPROVED","submittedAt":"2026-09-22T15:00:00Z","author":{"login":"alice"}}]
+		}
+	}`)
+
+	number, info, ok := parsePRSupplementalNode(raw)
+	if !ok || number != 42 {
+		t.Fatalf("parse result = number %d, ok %v; want 42, true", number, ok)
+	}
+	if !info.ApprovalsIncomplete || !info.Incomplete {
+		t.Fatalf("incomplete flags = approvals %v, supplemental %v; want both true", info.ApprovalsIncomplete, info.Incomplete)
+	}
+	if info.Approvals != 0 || len(info.Approvers) != 0 {
+		t.Fatalf("partial approvals must not render: count=%d details=%#v", info.Approvals, info.Approvers)
 	}
 }
 

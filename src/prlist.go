@@ -94,22 +94,23 @@ type displayApprover struct {
 }
 
 type displayPullRequest struct {
-	Number    int               `json:"number"`
-	Issues    string            `json:"issues,omitempty"`
-	Title     string            `json:"title"`
-	Author    string            `json:"author"`
-	State     string            `json:"state"`
-	Review    string            `json:"review"`
-	Approvals int               `json:"approvals"`
-	Approvers []displayApprover `json:"approvers,omitempty"`
-	Checks    string            `json:"checks"`
-	Comments  string            `json:"comments"`
-	AIReview  string            `json:"aiReview"`
-	AIClean   *bool             `json:"aiClean,omitempty"`
-	Branch    string            `json:"branch,omitempty"`
-	Updated   string            `json:"updated"`
-	URL       string            `json:"url"`
-	Repo      string            `json:"repo,omitempty"`
+	Number              int               `json:"number"`
+	Issues              string            `json:"issues,omitempty"`
+	Title               string            `json:"title"`
+	Author              string            `json:"author"`
+	State               string            `json:"state"`
+	Review              string            `json:"review"`
+	Approvals           int               `json:"approvals"`
+	Approvers           []displayApprover `json:"approvers,omitempty"`
+	ApprovalsIncomplete bool              `json:"approvalsIncomplete,omitempty"`
+	Checks              string            `json:"checks"`
+	Comments            string            `json:"comments"`
+	AIReview            string            `json:"aiReview"`
+	AIClean             *bool             `json:"aiClean,omitempty"`
+	Branch              string            `json:"branch,omitempty"`
+	Updated             string            `json:"updated"`
+	URL                 string            `json:"url"`
+	Repo                string            `json:"repo,omitempty"`
 
 	checksDowngraded bool // unexported; required-check rules downgraded a pass
 	issueRefs        []linkedReference
