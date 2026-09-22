@@ -334,8 +334,8 @@ func statusTargetFingerprint(remoteConfig, branchRemote, authContext string) str
 }
 
 type statusAuthHost struct {
-	User  string `yaml:"user"`
-	Token string `yaml:"oauth_token"`
+	User  string         `yaml:"user"`
+	Users map[string]any `yaml:"users"`
 }
 
 var statusKeyringGetFunc = func(service, user string) (string, error) {
@@ -387,11 +387,10 @@ func statusKeyringContext(hosts map[string]statusAuthHost) (string, error) {
 	sort.Strings(hostnames)
 	var identities []string
 	for _, hostname := range hostnames {
-		host := hosts[hostname]
-		if host.Token != "" || statusHasEnvironmentToken(hostname) {
-			continue
+		if statusHasEnvironmentToken(hostname) {
+			continue // An explicit token also prevents fallback-account retries.
 		}
-		for _, user := range []string{host.User, ""} {
+		for _, user := range statusAuthUsernames(hosts[hostname]) {
 			identity, err := statusKeyringTokenFingerprint("gh:"+hostname, user)
 			if err != nil {
 				return "", err
@@ -400,6 +399,19 @@ func statusKeyringContext(hosts map[string]statusAuthHost) (string, error) {
 		}
 	}
 	return strings.Join(identities, "\x00"), nil
+}
+
+func statusAuthUsernames(host statusAuthHost) []string {
+	users := map[string]bool{"": true, host.User: true}
+	for user := range host.Users {
+		users[user] = true
+	}
+	names := make([]string, 0, len(users))
+	for user := range users {
+		names = append(names, user)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func statusKeyringTokenFingerprint(service, user string) (string, error) {

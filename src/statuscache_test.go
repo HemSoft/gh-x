@@ -568,6 +568,37 @@ func TestStatusCacheDirectoryIsolatesAuthenticationContext(t *testing.T) {
 	}
 }
 
+func TestStatusAuthContextTracksFallbackAccountToken(t *testing.T) {
+	defer saveStatusFuncs()()
+	configDirectory := t.TempDir()
+	t.Setenv("GH_CONFIG_DIR", configDirectory)
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	content := "github.com:\n  user: alice\n  users:\n    alice: {}\n    bob: {}\n"
+	if err := os.WriteFile(filepath.Join(configDirectory, "hosts.yml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fallbackToken := "fallback-token-a"
+	statusKeyringGetFunc = func(service, user string) (string, error) {
+		if service != "gh:github.com" {
+			t.Fatalf("unexpected credential service %q", service)
+		}
+		if user == "bob" {
+			return fallbackToken, nil
+		}
+		return "active-token", nil
+	}
+	first, err := statusAuthContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallbackToken = "fallback-token-b"
+	second, err := statusAuthContext()
+	if err != nil || first == second {
+		t.Fatalf("fallback account token rotation reused cache identity: %q, err=%v", second, err)
+	}
+}
+
 func TestStatusAuthContextUsesGHECloudKeyringDespiteEnterpriseToken(t *testing.T) {
 	defer saveStatusFuncs()()
 	configDirectory := t.TempDir()
