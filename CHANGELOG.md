@@ -12,6 +12,11 @@ and this project uses semantic versioning.
 
 - Show approvers and approval times beneath open pull request rows (#149)
 
+## [0.13.12] - 2026-09-22
+
+- Show approvers and approval times in open PR lists (#150)
+- docs: record v0.13.11 release (#148)
+
 ## [0.13.11] - 2026-09-21
 
 - fix: retry empty private repository searches (#146)
@@ -217,7 +222,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.13.11...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.13.12...HEAD
+[0.13.12]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.12
 [0.13.11]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.11
 [0.13.10]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.10
 [0.13.9]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.9
