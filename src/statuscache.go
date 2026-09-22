@@ -125,17 +125,27 @@ func statusCacheSectionsComplete(entry statusCacheEntry) bool {
 }
 
 func saveStatusCache(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, pullRequestHeads map[string]bool, pullRequestsKnown bool) {
-	if !statusDashboardCacheable(dashboard) {
-		return
+	directory, fingerprint, err := statusCacheDirectoryFunc()
+	if err == nil {
+		saveStatusCacheAt(options, colorEnabled, now, dashboard, pullRequestHeads, pullRequestsKnown, directory, fingerprint)
 	}
-	directory, remoteFingerprint, err := statusCacheDirectoryFunc()
-	if err != nil {
+}
+
+func saveStatusCacheIfSameIdentity(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, pullRequestHeads map[string]bool, pullRequestsKnown bool, directory, fingerprint string) {
+	currentDirectory, currentFingerprint, err := statusCacheDirectoryFunc()
+	if err == nil && directory == currentDirectory && fingerprint == currentFingerprint {
+		saveStatusCacheAt(options, colorEnabled, now, dashboard, pullRequestHeads, pullRequestsKnown, directory, fingerprint)
+	}
+}
+
+func saveStatusCacheAt(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, pullRequestHeads map[string]bool, pullRequestsKnown bool, directory, fingerprint string) {
+	if !statusDashboardCacheable(dashboard) {
 		return
 	}
 	entry := statusCacheEntry{
 		Version:                statusCacheSchemaVersion,
 		FetchedAt:              now,
-		Key:                    statusCacheKey{RemoteFingerprint: remoteFingerprint, MergedLimit: options.mergedLimit, ColorEnabled: colorEnabled},
+		Key:                    statusCacheKey{RemoteFingerprint: fingerprint, MergedLimit: options.mergedLimit, ColorEnabled: colorEnabled},
 		Repository:             dashboard.Repository,
 		RepositoryURL:          dashboard.RepositoryURL,
 		DefaultBranch:          dashboard.DefaultBranch,

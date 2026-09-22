@@ -206,11 +206,16 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 		}
 		openHeads, pullRequestsKnown = applyStatusCache(&dashboard, cached)
 	} else {
+		// Keep the target seen before GitHub fetching. A concurrent branch switch
+		// must not publish the old repository's rows under the new target's key.
+		cacheDirectory, cacheFingerprint, cacheErr := statusCacheDirectoryFunc()
 		if dashboard.DefaultBranch == "" {
 			dashboard.DefaultBranch = statusDefaultBranchFunc()
 		}
 		openHeads, pullRequestsKnown = fetchStatusRemoteData(&dashboard, options.mergedLimit, colorEnabled, now)
-		saveStatusCache(options, colorEnabled, statusNowFunc(), dashboard, openHeads, pullRequestsKnown)
+		if cacheErr == nil {
+			saveStatusCacheIfSameIdentity(options, colorEnabled, statusNowFunc(), dashboard, openHeads, pullRequestsKnown, cacheDirectory, cacheFingerprint)
+		}
 	}
 
 	dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(dashboard.DefaultBranch, branches)

@@ -183,6 +183,37 @@ func TestStatusCacheReusesHostedDefaultBranchWithoutRemoteHEAD(t *testing.T) {
 	}
 }
 
+func TestStatusCacheDoesNotPublishAcrossConcurrentBranchSwitch(t *testing.T) {
+	defer saveStatusFuncs()()
+	installStatusDashboardGitFixture()
+	directory := t.TempDir()
+	fingerprint := "origin-identity"
+	statusCacheDirectoryFunc = func() (string, string, error) {
+		return directory, fingerprint, nil
+	}
+	statusRepoLabelFunc = func(string) string { return "owner/origin" }
+	statusIssueListFunc = func(issueListOptions, time.Time) (issueListResult, error) {
+		return issueListResult{}, nil
+	}
+	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
+		return pullRequestListResult{}, nil
+	}
+	statusWorkflowRunListFunc = func(runListOptions, time.Time) (workflowRunListResult, error) {
+		fingerprint = "upstream-identity" // Another process changed the active branch mid-fetch.
+		return workflowRunListResult{}, nil
+	}
+	if _, err := fetchStatusDashboard(false, statusOptions{mergedLimit: 0, refresh: true}); err != nil {
+		t.Fatal(err)
+	}
+	files, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("old repository data published under new branch remote: %#v", files)
+	}
+}
+
 func TestLoadStatusCacheIgnoresCorruptAndIncompatibleFiles(t *testing.T) {
 	directory := t.TempDir()
 	remoteURL := "https://github.com/owner/repo.git"
