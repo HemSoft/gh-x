@@ -281,7 +281,7 @@ func TestStatusCacheDirectoryTracksConfiguredDefaultRemote(t *testing.T) {
 		switch name + " " + strings.Join(args, " ") {
 		case "git rev-parse --git-common-dir":
 			return commonDirectory, nil
-		case "git config --local --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
+		case "git config --includes --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
 			return remoteConfig, nil
 		default:
 			return "", errors.New("unexpected git command")
@@ -301,6 +301,46 @@ func TestStatusCacheDirectoryTracksConfiguredDefaultRemote(t *testing.T) {
 	}
 }
 
+func TestStatusRemoteConfigHonorsIncludesAndWorktrees(t *testing.T) {
+	defer saveStatusFuncs()()
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		if _, err := runStatusCommand("git", append([]string{"-C", repo}, args...)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-q")
+	git("remote", "add", "origin", "https://github.com/owner/repo.git")
+	git("remote", "add", "other", "https://github.com/owner/other.git")
+	include := filepath.Join(t.TempDir(), "remote.conf")
+	if err := os.WriteFile(include, []byte("[remote \"other\"]\n  gh-resolved = base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("config", "--local", "include.path", include)
+	statusCommandFunc = func(name string, args ...string) (string, error) {
+		return runStatusCommand(name, append([]string{"-C", repo}, args...)...)
+	}
+	included, err := statusRemoteConfig()
+	if err != nil || !strings.Contains(included, "remote.other.gh-resolved\nbase") {
+		t.Fatalf("included remote selector missing: %q, err=%v", included, err)
+	}
+	if err := os.WriteFile(include, []byte("[remote \"origin\"]\n  gh-resolved = base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := statusRemoteConfig()
+	if err != nil || changed == included {
+		t.Fatalf("changed include reused remote fingerprint input: %q, err=%v", changed, err)
+	}
+	git("config", "--local", "--unset", "include.path")
+	git("config", "--local", "extensions.worktreeConfig", "true")
+	git("config", "--worktree", "remote.other.gh-resolved", "base")
+	worktree, err := statusRemoteConfig()
+	if err != nil || !strings.Contains(worktree, "remote.other.gh-resolved\nbase") {
+		t.Fatalf("worktree remote selector missing: %q, err=%v", worktree, err)
+	}
+}
+
 func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 	defer saveStatusFuncs()()
 	commonDirectory := t.TempDir()
@@ -309,7 +349,7 @@ func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 		switch name + " " + strings.Join(args, " ") {
 		case "git rev-parse --git-common-dir":
 			return commonDirectory, nil
-		case "git config --local --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
+		case "git config --includes --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
 			return remoteConfig, nil
 		default:
 			return "", errors.New("unexpected git command")
@@ -354,7 +394,7 @@ func TestStatusCacheDirectoryIsolatesAuthenticationContext(t *testing.T) {
 		switch name + " " + strings.Join(args, " ") {
 		case "git rev-parse --git-common-dir":
 			return commonDirectory, nil
-		case "git config --local --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
+		case "git config --includes --null --get-regexp ^remote\\..*\\.(url|gh-resolved)$":
 			return "remote.origin.url\nhttps://github.com/owner/repo.git\x00", nil
 		default:
 			return "", errors.New("unexpected git command")
