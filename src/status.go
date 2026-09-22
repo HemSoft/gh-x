@@ -200,8 +200,8 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 	dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(defaultBranch, branches)
 
 	now := statusNowFunc()
-	openHeads := map[string]bool{}
-	pullRequestsKnown := false
+	var openHeads map[string]bool
+	var pullRequestsKnown bool
 	cached, cacheHit := statusCacheEntry{}, false
 	if !options.refresh {
 		cached, cacheHit = loadStatusCache(options, colorEnabled, now)
