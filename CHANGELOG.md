@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-09-23
+
+- chore: align gh-aw CLI with GitHub Actions update (#153)
+- docs: record v0.14.1 release (#157)
+
 ## [0.14.1] - 2026-09-23
 
 - chore(deps): bump github.com/cli/go-gh/v2 in the go-modules group (#143)
@@ -230,7 +235,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.14.1...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.2
 [0.14.1]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.1
 [0.14.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.0
 [0.13.12]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.12
