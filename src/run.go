@@ -49,6 +49,11 @@ type displayWorkflowRun struct {
 	URL      string
 	Elapsed  string
 	Age      string
+
+	rawStatus string
+	createdAt time.Time
+	startedAt time.Time
+	updatedAt time.Time
 }
 
 type workflowRunListResult struct {
@@ -180,15 +185,19 @@ func fetchWorkflowRunList(options runListOptions, now time.Time) (workflowRunLis
 
 func buildDisplayWorkflowRun(r workflowRun, now time.Time) displayWorkflowRun {
 	return displayWorkflowRun{
-		Status:   resolveRunStatus(r.Status, r.Conclusion),
-		Title:    trimTitle(r.DisplayTitle, 40),
-		Workflow: trimTitle(r.WorkflowName, 20),
-		Branch:   trimTitle(r.HeadBranch, 24),
-		Event:    r.Event,
-		ID:       strconv.Itoa(r.DatabaseID),
-		URL:      r.URL,
-		Elapsed:  formatElapsed(r.Status, r.StartedAt, r.UpdatedAt, now),
-		Age:      formatRelativeTime(r.CreatedAt, now),
+		Status:    resolveRunStatus(r.Status, r.Conclusion),
+		Title:     trimTitle(r.DisplayTitle, 40),
+		Workflow:  trimTitle(r.WorkflowName, 20),
+		Branch:    trimTitle(r.HeadBranch, 24),
+		Event:     r.Event,
+		ID:        strconv.Itoa(r.DatabaseID),
+		URL:       r.URL,
+		Elapsed:   formatElapsed(r.Status, r.StartedAt, r.UpdatedAt, now),
+		Age:       formatRelativeTime(r.CreatedAt, now),
+		rawStatus: r.Status,
+		createdAt: r.CreatedAt,
+		startedAt: r.StartedAt,
+		updatedAt: r.UpdatedAt,
 	}
 }
 

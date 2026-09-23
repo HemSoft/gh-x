@@ -101,8 +101,13 @@ const (
 	statusBranchFormat       = "%(refname)%09%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(symref)"
 )
 
+type statusOptions struct {
+	mergedLimit int
+	refresh     bool
+}
+
 func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
-	mergedLimit, err := parseStatusArgs(args, stderr)
+	options, err := parseStatusArgs(args, stderr)
 	if err != nil {
 		if errors.Is(err, errHelpDisplayed) {
 			return nil
@@ -111,7 +116,7 @@ func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 
 	colorEnabled := term.FromEnv().IsColorEnabled()
-	dashboard, err := fetchStatusDashboardFunc(colorEnabled, mergedLimit)
+	dashboard, err := fetchStatusDashboardFunc(colorEnabled, options)
 	if err != nil {
 		return err
 	}
@@ -119,29 +124,31 @@ func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 	return renderStatus(stdout, dashboard, colorEnabled)
 }
 
-func parseStatusArgs(args []string, stderr io.Writer) (int, error) {
+func parseStatusArgs(args []string, stderr io.Writer) (statusOptions, error) {
+	options := statusOptions{mergedLimit: statusMergedDefaultLimit}
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
 		writeStatusUsage(stderr)
 	}
-	mergedLimit := flags.Int("merged", statusMergedDefaultLimit, "number of recently merged pull requests to show; 0 hides the section")
+	flags.IntVar(&options.mergedLimit, "merged", statusMergedDefaultLimit, "number of recently merged pull requests to show; 0 hides the section")
+	flags.BoolVar(&options.refresh, "refresh", false, "bypass cached GitHub data and refresh it")
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return 0, errHelpDisplayed
+			return statusOptions{}, errHelpDisplayed
 		}
-		return 0, err
+		return statusOptions{}, err
 	}
 
 	if flags.NArg() > 0 {
-		return 0, fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), ", "))
+		return statusOptions{}, fmt.Errorf("unexpected arguments: %s", strings.Join(flags.Args(), ", "))
 	}
-	if *mergedLimit < 0 {
-		return 0, fmt.Errorf("--merged must be 0 or greater")
+	if options.mergedLimit < 0 {
+		return statusOptions{}, fmt.Errorf("--merged must be 0 or greater")
 	}
 
-	return *mergedLimit, nil
+	return options, nil
 }
 
 var (
@@ -156,7 +163,7 @@ var (
 	statusPathExistsFunc      = statusPathExists
 )
 
-func fetchStatusDashboard(colorEnabled bool, mergedLimit int) (statusDashboard, error) {
+func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashboard, error) {
 	output, err := statusCommandFunc("git", "status", "--porcelain=v2", "--branch")
 	if err != nil {
 		return statusDashboard{}, fmt.Errorf("git status: %w", err)
@@ -180,22 +187,42 @@ func fetchStatusDashboard(colorEnabled bool, mergedLimit int) (statusDashboard, 
 		return statusDashboard{}, fmt.Errorf("git repository root: %w", err)
 	}
 	currentRoot := strings.TrimRight(root, "\r\n")
-	defaultBranch := resolveStatusDefaultBranch(branches)
-	if defaultBranch == "" {
-		defaultBranch = statusDefaultBranchFunc()
-	}
-
-	repository, repositoryURL := resolveStatusRepository(colorEnabled)
 	dashboard := statusDashboard{
-		Repository:    repository,
-		RepositoryURL: repositoryURL,
-		DefaultBranch: defaultBranch,
+		DefaultBranch: resolveStatusDefaultBranch(branches),
 		CurrentStatus: parseGitStatus(output),
 		Branches:      branches,
 	}
-	dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(defaultBranch, branches)
 
 	now := statusNowFunc()
+	cacheDirectory, cacheFingerprint, cacheErr := statusCacheDirectoryFunc()
+	var openHeads map[string]bool
+	var pullRequestsKnown bool
+	cached, cacheHit := lookupStatusCache(options, colorEnabled, now, cacheDirectory, cacheFingerprint, cacheErr)
+	if cacheHit {
+		if dashboard.DefaultBranch == "" {
+			dashboard.DefaultBranch = cached.DefaultBranch
+		}
+		openHeads, pullRequestsKnown = applyStatusCache(&dashboard, cached, now)
+	} else {
+		// Keep the lookup's target. A concurrent branch switch must not
+		// publish the old repository's rows under the new target's key.
+		if dashboard.DefaultBranch == "" {
+			dashboard.DefaultBranch = statusDefaultBranchFunc()
+		}
+		openHeads, pullRequestsKnown = fetchStatusRemoteData(&dashboard, options.mergedLimit, colorEnabled, now)
+		if cacheErr == nil {
+			saveStatusCacheIfSameIdentity(options, colorEnabled, statusNowFunc(), dashboard, openHeads, pullRequestsKnown, cacheDirectory, cacheFingerprint)
+		}
+	}
+
+	dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(dashboard.DefaultBranch, branches)
+	merged, mergedKnown := fetchMergedStatusBranches(dashboard.DefaultBranch)
+	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, dashboard.DefaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
+	return dashboard, nil
+}
+
+func fetchStatusRemoteData(dashboard *statusDashboard, mergedLimit int, colorEnabled bool, now time.Time) (map[string]bool, bool) {
+	dashboard.Repository, dashboard.RepositoryURL = resolveStatusRepository(colorEnabled)
 	issueOptions := issueListOptions{limit: statusListLimit, state: "open"}
 	issueResult, issueErr := statusIssueListFunc(issueOptions, now)
 	dashboard.IssuesErr = issueErr
@@ -216,7 +243,7 @@ func fetchStatusDashboard(colorEnabled bool, mergedLimit int) (statusDashboard, 
 		dashboard.RequiredChecksErr = prResult.RequiredChecksErr
 	}
 
-	fetchStatusMergedPullRequests(&dashboard, mergedLimit, now)
+	fetchStatusMergedPullRequests(dashboard, mergedLimit, now)
 
 	runOptions := runListOptions{limit: statusWorkflowRunLimit}
 	runResult, runErr := statusWorkflowRunListFunc(runOptions, now)
@@ -226,11 +253,19 @@ func fetchStatusDashboard(colorEnabled bool, mergedLimit int) (statusDashboard, 
 		dashboard.WorkflowRunsPerfect = isPerfectWorkflowRunStreak(runResult.Entries)
 	}
 
-	merged, mergedKnown := fetchMergedStatusBranches(defaultBranch)
-	openHeads := openPullRequestHeads(prResult.Entries)
-	pullRequestsKnown := prErr == nil && len(prResult.Entries) < prOptions.limit
-	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, defaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
-	return dashboard, nil
+	return openPullRequestHeads(prResult.Entries), prErr == nil && len(prResult.Entries) < prOptions.limit
+}
+
+func applyStatusCache(dashboard *statusDashboard, cached statusCacheEntry, now time.Time) (map[string]bool, bool) {
+	dashboard.Repository = cached.Repository
+	dashboard.RepositoryURL = cached.RepositoryURL
+	dashboard.Issues = restoreStatusIssues(cached.Issues, now)
+	dashboard.PullRequests = restoreStatusPullRequests(cached.PullRequests, now)
+	dashboard.ShowMergedPullRequests = cached.ShowMergedPullRequests
+	dashboard.MergedPullRequests = restoreStatusPullRequests(cached.MergedPullRequests, now)
+	dashboard.WorkflowRuns = restoreStatusWorkflowRuns(cached.WorkflowRuns, now)
+	dashboard.WorkflowRunsPerfect = cached.WorkflowRunsPerfect
+	return statusStringSet(cached.PullRequestHeads), cached.PullRequestsKnown
 }
 
 func fetchStatusMergedPullRequests(dashboard *statusDashboard, limit int, now time.Time) {
@@ -1009,4 +1044,5 @@ recently merged pull requests, and the five most recent workflow runs.
 
 Flags:
       --merged int   Number of recently merged pull requests to show; 0 hides the section (default 5)
+      --refresh      Bypass cached GitHub data and refresh it
 `
