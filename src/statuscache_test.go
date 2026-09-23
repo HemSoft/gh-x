@@ -17,7 +17,7 @@ func TestStatusCacheEntryValidation(t *testing.T) {
 		return statusCacheEntry{
 			Version: version, FetchedAt: at, Key: cacheKey, Repository: "owner/repo", DefaultBranch: "main",
 			Issues: []statusCachedIssue{}, PullRequests: []statusCachedPullRequest{},
-			PullRequestHeads: []string{}, WorkflowRuns: []displayWorkflowRun{},
+			PullRequestHeads: []string{}, WorkflowRuns: []statusCachedWorkflowRun{},
 			ShowMergedPullRequests: true, MergedPullRequests: []statusCachedPullRequest{},
 		}
 	}
@@ -79,18 +79,22 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 		RepositoryURL: "https://github.com/owner/repo",
 		DefaultBranch: "trunk",
 		Issues: []displayIssue{{
-			Number: 8, PullRequests: "#42", Parent: "#7", Title: "Cached issue",
-			pullRequestRefs: []linkedReference{issueRef}, parentRefs: []linkedReference{parentRef},
+			Number: 8, PullRequests: "#42", Parent: "#7", Title: "Cached issue", Updated: "59s",
+			pullRequestRefs: []linkedReference{issueRef}, parentRefs: []linkedReference{parentRef}, updatedAt: now.Add(-59 * time.Second),
 		}},
 		PullRequests: []displayPullRequest{{
-			Number: 42, Issues: "#9", Title: "Cached PR", AIClean: &clean,
-			checksDowngraded: true, issueRefs: []linkedReference{pullRequestRef}, updatedAt: now.Add(-time.Hour),
+			Number: 42, Issues: "#9", Title: "Cached PR", AIClean: &clean, Updated: "59s",
+			Approvers:        []displayApprover{{Login: "reviewer", ApprovedAt: now.Add(-59 * time.Second), Age: "59s"}},
+			checksDowngraded: true, issueRefs: []linkedReference{pullRequestRef}, updatedAt: now.Add(-59 * time.Second),
 		}},
 		ShowMergedPullRequests: true,
 		MergedPullRequests: []displayPullRequest{{
 			Number: 41, Title: "Merged PR", mergedAt: now.Add(-2 * time.Hour),
 		}},
-		WorkflowRuns:        []displayWorkflowRun{{ID: "100", Title: "CI"}},
+		WorkflowRuns: []displayWorkflowRun{{
+			ID: "100", Title: "CI", Age: "59s", Elapsed: "59s", rawStatus: "in_progress",
+			createdAt: now.Add(-59 * time.Second), startedAt: now.Add(-59 * time.Second), updatedAt: now,
+		}},
 		WorkflowRunsPerfect: true,
 	}
 	options := statusOptions{mergedLimit: 5}
@@ -101,7 +105,7 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 		t.Fatal("fresh cache was not loaded")
 	}
 	var restored statusDashboard
-	heads, known := applyStatusCache(&restored, cached)
+	heads, known := applyStatusCache(&restored, cached, now.Add(10*time.Second))
 	if !known || !heads["feature/cache"] || cached.DefaultBranch != "trunk" {
 		t.Fatalf("cached pull request or branch metadata = %#v, known=%v, branch=%q", heads, known, cached.DefaultBranch)
 	}
@@ -111,8 +115,15 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 		t.Fatalf("issue references were not restored: %#v", restored.Issues[0])
 	}
 	if !restored.PullRequests[0].checksDowngraded || !reflect.DeepEqual(restored.PullRequests[0].issueRefs, []linkedReference{pullRequestRef}) ||
-		restored.PullRequests[0].issueRefs[0].displayText() != "other/repo#9" || !restored.PullRequests[0].updatedAt.Equal(now.Add(-time.Hour)) {
+		restored.PullRequests[0].issueRefs[0].displayText() != "other/repo#9" || !restored.PullRequests[0].updatedAt.Equal(now.Add(-59*time.Second)) {
 		t.Fatalf("pull request metadata was not restored: %#v", restored.PullRequests[0])
+	}
+	if restored.Issues[0].Updated != "1m" || restored.PullRequests[0].Updated != "1m" ||
+		restored.PullRequests[0].Approvers[0].Age != "1m" || restored.WorkflowRuns[0].Age != "1m" ||
+		restored.WorkflowRuns[0].Elapsed != "1m9s" {
+		t.Fatalf("warm relative times did not advance: issue=%q, PR=%q, approval=%q, run=%#v",
+			restored.Issues[0].Updated, restored.PullRequests[0].Updated,
+			restored.PullRequests[0].Approvers[0].Age, restored.WorkflowRuns[0])
 	}
 	if !restored.MergedPullRequests[0].mergedAt.Equal(now.Add(-2*time.Hour)) || !restored.WorkflowRunsPerfect {
 		t.Fatalf("merged or workflow metadata was not restored: %#v", restored)
@@ -188,7 +199,9 @@ func TestStatusCacheDoesNotPublishAcrossConcurrentBranchSwitch(t *testing.T) {
 	installStatusDashboardGitFixture()
 	directory := t.TempDir()
 	fingerprint := "origin-identity"
+	identityCalls := 0
 	statusCacheDirectoryFunc = func() (string, string, error) {
+		identityCalls++
 		return directory, fingerprint, nil
 	}
 	statusRepoLabelFunc = func(string) string { return "owner/origin" }
@@ -202,8 +215,11 @@ func TestStatusCacheDoesNotPublishAcrossConcurrentBranchSwitch(t *testing.T) {
 		fingerprint = "upstream-identity" // Another process changed the active branch mid-fetch.
 		return workflowRunListResult{}, nil
 	}
-	if _, err := fetchStatusDashboard(false, statusOptions{mergedLimit: 0, refresh: true}); err != nil {
+	if _, err := fetchStatusDashboard(false, statusOptions{mergedLimit: 0}); err != nil {
 		t.Fatal(err)
+	}
+	if identityCalls != 2 {
+		t.Fatalf("cold lookup and post-fetch validation made %d identity calls, want 2", identityCalls)
 	}
 	files, err := os.ReadDir(directory)
 	if err != nil {
@@ -658,6 +674,14 @@ func TestStatusCacheDirectoryWithGlobCharacters(t *testing.T) {
 	if cached, ok := loadStatusCache(options, false, now.Add(time.Second)); !ok || cached.Repository != "owner/repo" {
 		t.Fatalf("literal cache directory with glob characters did not load: %#v, hit=%v", cached, ok)
 	}
+}
+
+func loadStatusCache(options statusOptions, colorEnabled bool, now time.Time) (statusCacheEntry, bool) {
+	directory, fingerprint, err := statusCacheDirectoryFunc()
+	if err != nil {
+		return statusCacheEntry{}, false
+	}
+	return loadStatusCacheAt(options, colorEnabled, now, directory, fingerprint)
 }
 
 func saveStatusCache(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, heads map[string]bool, known bool) {

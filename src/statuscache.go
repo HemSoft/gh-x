@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	statusCacheSchemaVersion = 3
+	statusCacheSchemaVersion = 4
 	statusCacheTTL           = time.Minute
-	statusCacheDirectoryName = "status-cache-v3"
+	statusCacheDirectoryName = "status-cache-v4"
 )
 
 type statusCacheKey struct {
@@ -39,6 +39,7 @@ type statusCachedIssue struct {
 	Display         displayIssue            `json:"display"`
 	PullRequestRefs []statusCachedReference `json:"pullRequestRefs,omitempty"`
 	ParentRefs      []statusCachedReference `json:"parentRefs,omitempty"`
+	UpdatedAt       time.Time               `json:"updatedAt"`
 }
 
 type statusCachedPullRequest struct {
@@ -47,6 +48,14 @@ type statusCachedPullRequest struct {
 	IssueRefs        []statusCachedReference `json:"issueRefs,omitempty"`
 	UpdatedAt        time.Time               `json:"updatedAt"`
 	MergedAt         time.Time               `json:"mergedAt"`
+}
+
+type statusCachedWorkflowRun struct {
+	Display   displayWorkflowRun `json:"display"`
+	Status    string             `json:"status"`
+	CreatedAt time.Time          `json:"createdAt"`
+	StartedAt time.Time          `json:"startedAt"`
+	UpdatedAt time.Time          `json:"updatedAt"`
 }
 
 type statusCacheEntry struct {
@@ -62,18 +71,21 @@ type statusCacheEntry struct {
 	PullRequestsKnown      bool                      `json:"pullRequestsKnown"`
 	ShowMergedPullRequests bool                      `json:"showMergedPullRequests"`
 	MergedPullRequests     []statusCachedPullRequest `json:"mergedPullRequests"`
-	WorkflowRuns           []displayWorkflowRun      `json:"workflowRuns"`
+	WorkflowRuns           []statusCachedWorkflowRun `json:"workflowRuns"`
 	WorkflowRunsPerfect    bool                      `json:"workflowRunsPerfect"`
 }
 
 var statusCacheDirectoryFunc = statusCacheDirectory
 
-func loadStatusCache(options statusOptions, colorEnabled bool, now time.Time) (statusCacheEntry, bool) {
-	directory, remoteFingerprint, err := statusCacheDirectoryFunc()
-	if err != nil {
+func lookupStatusCache(options statusOptions, colorEnabled bool, now time.Time, directory, fingerprint string, identityErr error) (statusCacheEntry, bool) {
+	if options.refresh || identityErr != nil {
 		return statusCacheEntry{}, false
 	}
-	matches := statusCacheKey{RemoteFingerprint: remoteFingerprint, MergedLimit: options.mergedLimit, ColorEnabled: colorEnabled}
+	return loadStatusCacheAt(options, colorEnabled, now, directory, fingerprint)
+}
+
+func loadStatusCacheAt(options statusOptions, colorEnabled bool, now time.Time, directory, fingerprint string) (statusCacheEntry, bool) {
+	matches := statusCacheKey{RemoteFingerprint: fingerprint, MergedLimit: options.mergedLimit, ColorEnabled: colorEnabled}
 	files, err := os.ReadDir(directory)
 	if err != nil {
 		return statusCacheEntry{}, false
@@ -148,7 +160,7 @@ func saveStatusCacheAt(options statusOptions, colorEnabled bool, now time.Time, 
 		PullRequestsKnown:      pullRequestsKnown,
 		ShowMergedPullRequests: dashboard.ShowMergedPullRequests,
 		MergedPullRequests:     cacheStatusPullRequests(dashboard.MergedPullRequests),
-		WorkflowRuns:           append([]displayWorkflowRun{}, dashboard.WorkflowRuns...),
+		WorkflowRuns:           cacheStatusWorkflowRuns(dashboard.WorkflowRuns),
 		WorkflowRunsPerfect:    dashboard.WorkflowRunsPerfect,
 	}
 	_ = writeStatusCacheEntry(directory, entry, now)
@@ -473,17 +485,22 @@ func cacheStatusIssues(issues []displayIssue) []statusCachedIssue {
 			Display:         issue,
 			PullRequestRefs: cacheStatusReferences(issue.pullRequestRefs),
 			ParentRefs:      cacheStatusReferences(issue.parentRefs),
+			UpdatedAt:       issue.updatedAt,
 		}
 	}
 	return cached
 }
 
-func restoreStatusIssues(cached []statusCachedIssue) []displayIssue {
+func restoreStatusIssues(cached []statusCachedIssue, now time.Time) []displayIssue {
 	issues := make([]displayIssue, len(cached))
 	for index, issue := range cached {
 		issues[index] = issue.Display
 		issues[index].pullRequestRefs = restoreStatusReferences(issue.PullRequestRefs)
 		issues[index].parentRefs = restoreStatusReferences(issue.ParentRefs)
+		issues[index].updatedAt = issue.UpdatedAt
+		if !issue.UpdatedAt.IsZero() {
+			issues[index].Updated = formatRelativeTime(issue.UpdatedAt, now)
+		}
 	}
 	return issues
 }
@@ -502,7 +519,7 @@ func cacheStatusPullRequests(pullRequests []displayPullRequest) []statusCachedPu
 	return cached
 }
 
-func restoreStatusPullRequests(cached []statusCachedPullRequest) []displayPullRequest {
+func restoreStatusPullRequests(cached []statusCachedPullRequest, now time.Time) []displayPullRequest {
 	pullRequests := make([]displayPullRequest, len(cached))
 	for index, pullRequest := range cached {
 		pullRequests[index] = pullRequest.Display
@@ -510,8 +527,46 @@ func restoreStatusPullRequests(cached []statusCachedPullRequest) []displayPullRe
 		pullRequests[index].issueRefs = restoreStatusReferences(pullRequest.IssueRefs)
 		pullRequests[index].updatedAt = pullRequest.UpdatedAt
 		pullRequests[index].mergedAt = pullRequest.MergedAt
+		if !pullRequest.UpdatedAt.IsZero() {
+			pullRequests[index].Updated = formatRelativeTime(pullRequest.UpdatedAt, now)
+		}
+		for i := range pullRequests[index].Approvers {
+			approver := &pullRequests[index].Approvers[i]
+			if !approver.ApprovedAt.IsZero() {
+				approver.Age = formatRelativeTime(approver.ApprovedAt, now)
+			}
+		}
 	}
 	return pullRequests
+}
+
+func cacheStatusWorkflowRuns(runs []displayWorkflowRun) []statusCachedWorkflowRun {
+	cached := make([]statusCachedWorkflowRun, len(runs))
+	for i, run := range runs {
+		cached[i] = statusCachedWorkflowRun{
+			Display: run, Status: run.rawStatus, CreatedAt: run.createdAt,
+			StartedAt: run.startedAt, UpdatedAt: run.updatedAt,
+		}
+	}
+	return cached
+}
+
+func restoreStatusWorkflowRuns(cached []statusCachedWorkflowRun, now time.Time) []displayWorkflowRun {
+	runs := make([]displayWorkflowRun, len(cached))
+	for i, run := range cached {
+		runs[i] = run.Display
+		runs[i].rawStatus = run.Status
+		runs[i].createdAt = run.CreatedAt
+		runs[i].startedAt = run.StartedAt
+		runs[i].updatedAt = run.UpdatedAt
+		if !run.CreatedAt.IsZero() {
+			runs[i].Age = formatRelativeTime(run.CreatedAt, now)
+		}
+		if !run.StartedAt.IsZero() {
+			runs[i].Elapsed = formatElapsed(run.Status, run.StartedAt, run.UpdatedAt, now)
+		}
+	}
+	return runs
 }
 
 func sortedStatusMapKeys(values map[string]bool) []string {

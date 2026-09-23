@@ -62,6 +62,7 @@ type displayIssue struct {
 
 	pullRequestRefs []linkedReference
 	parentRefs      []linkedReference
+	updatedAt       time.Time
 }
 
 const issueJSONFields = "number,title,author,state,labels,assignees,updatedAt,url"
@@ -332,6 +333,7 @@ func buildDisplayIssue(entry issueEntry, now time.Time) displayIssue {
 		Assignees:    joinAssignees(entry.Assignees),
 		Updated:      formatRelativeTime(entry.UpdatedAt, now),
 		URL:          entry.URL,
+		updatedAt:    entry.UpdatedAt,
 	}
 }
 

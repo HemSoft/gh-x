@@ -194,21 +194,18 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 	}
 
 	now := statusNowFunc()
+	cacheDirectory, cacheFingerprint, cacheErr := statusCacheDirectoryFunc()
 	var openHeads map[string]bool
 	var pullRequestsKnown bool
-	cached, cacheHit := statusCacheEntry{}, false
-	if !options.refresh {
-		cached, cacheHit = loadStatusCache(options, colorEnabled, now)
-	}
+	cached, cacheHit := lookupStatusCache(options, colorEnabled, now, cacheDirectory, cacheFingerprint, cacheErr)
 	if cacheHit {
 		if dashboard.DefaultBranch == "" {
 			dashboard.DefaultBranch = cached.DefaultBranch
 		}
-		openHeads, pullRequestsKnown = applyStatusCache(&dashboard, cached)
+		openHeads, pullRequestsKnown = applyStatusCache(&dashboard, cached, now)
 	} else {
-		// Keep the target seen before GitHub fetching. A concurrent branch switch
-		// must not publish the old repository's rows under the new target's key.
-		cacheDirectory, cacheFingerprint, cacheErr := statusCacheDirectoryFunc()
+		// Keep the lookup's target. A concurrent branch switch must not
+		// publish the old repository's rows under the new target's key.
 		if dashboard.DefaultBranch == "" {
 			dashboard.DefaultBranch = statusDefaultBranchFunc()
 		}
@@ -259,14 +256,14 @@ func fetchStatusRemoteData(dashboard *statusDashboard, mergedLimit int, colorEna
 	return openPullRequestHeads(prResult.Entries), prErr == nil && len(prResult.Entries) < prOptions.limit
 }
 
-func applyStatusCache(dashboard *statusDashboard, cached statusCacheEntry) (map[string]bool, bool) {
+func applyStatusCache(dashboard *statusDashboard, cached statusCacheEntry, now time.Time) (map[string]bool, bool) {
 	dashboard.Repository = cached.Repository
 	dashboard.RepositoryURL = cached.RepositoryURL
-	dashboard.Issues = restoreStatusIssues(cached.Issues)
-	dashboard.PullRequests = restoreStatusPullRequests(cached.PullRequests)
+	dashboard.Issues = restoreStatusIssues(cached.Issues, now)
+	dashboard.PullRequests = restoreStatusPullRequests(cached.PullRequests, now)
 	dashboard.ShowMergedPullRequests = cached.ShowMergedPullRequests
-	dashboard.MergedPullRequests = restoreStatusPullRequests(cached.MergedPullRequests)
-	dashboard.WorkflowRuns = cached.WorkflowRuns
+	dashboard.MergedPullRequests = restoreStatusPullRequests(cached.MergedPullRequests, now)
+	dashboard.WorkflowRuns = restoreStatusWorkflowRuns(cached.WorkflowRuns, now)
 	dashboard.WorkflowRunsPerfect = cached.WorkflowRunsPerfect
 	return statusStringSet(cached.PullRequestHeads), cached.PullRequestsKnown
 }
