@@ -10,7 +10,10 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
-- Cache GitHub status data per repository for 60 seconds with a `--refresh` bypass (#142)
+## [0.14.0] - 2026-09-23
+
+- feat: cache GitHub status data per repository (#152)
+- docs: record v0.13.12 release without duplicate entry (#151) (#154)
 
 ## [0.13.12] - 2026-09-22
 
@@ -222,7 +225,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.13.12...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.0
 [0.13.12]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.12
 [0.13.11]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.11
 [0.13.10]: https://github.com/HemSoft/gh-x/releases/tag/v0.13.10
