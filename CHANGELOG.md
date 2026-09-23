@@ -10,8 +10,6 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
-- Cache GitHub status data per repository for 60 seconds with a `--refresh` bypass (#142)
-
 ## [0.14.0] - 2026-09-23
 
 - feat: cache GitHub status data per repository (#152)
