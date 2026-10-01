@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-10-01
+
+- chore(deps): bump charm.land/bubbletea/v2 in the go-modules group (#159)
+- docs: record v0.14.2 release (#158)
+
 ## [0.14.2] - 2026-09-23
 
 - chore: align gh-aw CLI with GitHub Actions update (#153)
@@ -235,7 +240,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.14.3...HEAD
+[0.14.3]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.3
 [0.14.2]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.2
 [0.14.1]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.1
 [0.14.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.0
