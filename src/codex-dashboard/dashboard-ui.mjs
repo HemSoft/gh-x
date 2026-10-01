@@ -118,8 +118,14 @@ export async function startDashboard({
         Number(readCookie(documentRef.cookie, "codex-zoom", "100")),
     );
     let refreshTimer;
+    let refreshGeneration = 0;
+    let stopped = false;
 
     const refresh = async () => {
+        if (stopped) {
+            return;
+        }
+        const generation = ++refreshGeneration;
         try {
             const response = await fetchImpl(buildUsageApiUrl(apiUrl, recentWindow), {
                 cache: "no-store",
@@ -127,15 +133,20 @@ export async function startDashboard({
             if (!response.ok) {
                 throw new Error(`Dashboard request failed with HTTP ${response.status}.`);
             }
-            renderDashboard(documentRef, await response.json());
+            const snapshot = await response.json();
+            if (!stopped && generation === refreshGeneration) {
+                renderDashboard(documentRef, snapshot);
+            }
         } catch (error) {
-            renderDashboard(documentRef, {
-                available: false,
-                diagnostics: {
-                    code: "dashboard_request_failed",
-                    message: error.message,
-                },
-            });
+            if (!stopped && generation === refreshGeneration) {
+                renderDashboard(documentRef, {
+                    available: false,
+                    diagnostics: {
+                        code: "dashboard_request_failed",
+                        message: error.message,
+                    },
+                });
+            }
         }
     };
 
@@ -199,6 +210,7 @@ export async function startDashboard({
     return {
         refresh,
         stop() {
+            stopped = true;
             clearInterval(refreshTimer);
         },
     };
