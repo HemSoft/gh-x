@@ -343,16 +343,16 @@ for (const failure of [false, true]) {
 
 test("startDashboard orders Refresh button and timer requests identically", async (t) => {
     const fixture = await startRefreshFixture(t);
-    fixture.element("refresh").dispatch("click");
     t.mock.timers.tick(5_000);
+    fixture.element("refresh").dispatch("click");
     assert.equal(fixture.requests.length, 3);
-    fixture.respond(2, refreshSnapshot("timer", 300));
+    fixture.respond(2, refreshSnapshot("button", 300));
     await flushRefresh();
     const current = fixture.view();
-    fixture.respond(1, refreshSnapshot("button", 200, 60_000));
+    fixture.respond(1, refreshSnapshot("timer", 200, 60_000));
     await flushRefresh();
     assert.deepEqual(fixture.view(), current);
-    assert.equal(current.sessionId, "timer");
+    assert.equal(current.sessionId, "button");
     t.mock.timers.tick(5_000);
     assert.equal(fixture.requests.length, 4);
     fixture.respond(3, refreshSnapshot("next-timer", 400));
@@ -381,6 +381,56 @@ for (const failure of [false, true]) {
         assert.equal(fixture.requests.length, 2);
     });
 }
+
+test("startDashboard skips busy timer ticks so a slow response can render", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 2);
+    t.mock.timers.tick(15_000);
+    assert.equal(fixture.requests.length, 2);
+    fixture.respond(1, refreshSnapshot("slow-timer", 200));
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "slow-timer");
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 3);
+    fixture.respond(2, refreshSnapshot("next-timer", 300));
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "next-timer");
+});
+
+test("startDashboard stale completion cannot clear the current pending refresh", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    t.mock.timers.tick(5_000);
+    const manual = fixture.dashboard.refresh();
+    fixture.respond(1, refreshSnapshot("obsolete-timer", 200));
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "initial");
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 3);
+    fixture.respond(2, refreshSnapshot("current-manual", 300));
+    await manual;
+    assert.equal(fixture.view().sessionId, "current-manual");
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 4);
+});
+
+test("startDashboard skips timer ticks during body parsing and resumes after failure", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const body = Promise.withResolvers();
+    t.mock.timers.tick(5_000);
+    fixture.requests[1].resolve({ ok: true, json: () => body.promise });
+    await flushRefresh();
+    t.mock.timers.tick(10_000);
+    assert.equal(fixture.requests.length, 2);
+    body.reject(new Error("Slow JSON failure"));
+    await flushRefresh();
+    assert.equal(fixture.view().freshness, "Refresh unavailable");
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 3);
+    fixture.respond(2, refreshSnapshot("timer-recovered", 300));
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "timer-recovered");
+});
 
 test("startDashboard preserves theme, zoom and filter controls", async (t) => {
     const fixture = await startRefreshFixture(t);

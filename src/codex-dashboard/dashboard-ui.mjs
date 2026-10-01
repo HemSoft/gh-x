@@ -119,6 +119,7 @@ export async function startDashboard({
     );
     let refreshTimer;
     let refreshGeneration = 0;
+    let refreshPending = false;
     let stopped = false;
 
     const refresh = async () => {
@@ -126,6 +127,7 @@ export async function startDashboard({
             return;
         }
         const generation = ++refreshGeneration;
+        refreshPending = true;
         try {
             const response = await fetchImpl(buildUsageApiUrl(apiUrl, recentWindow), {
                 cache: "no-store",
@@ -146,6 +148,10 @@ export async function startDashboard({
                         message: error.message,
                     },
                 });
+            }
+        } finally {
+            if (generation === refreshGeneration) {
+                refreshPending = false;
             }
         }
     };
@@ -205,7 +211,11 @@ export async function startDashboard({
     });
 
     await refresh();
-    refreshTimer = setInterval(refresh, refreshIntervalMs);
+    refreshTimer = setInterval(() => {
+        if (!refreshPending) {
+            refresh();
+        }
+    }, refreshIntervalMs);
     refreshTimer.unref?.();
     return {
         refresh,
