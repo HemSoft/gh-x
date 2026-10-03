@@ -603,6 +603,15 @@ window. Later launches reuse the running local server. Both dashboard servers
 reject malformed HTTP request targets with a 400 response and keep serving
 healthy requests.
 
+The standalone Codex server and dashboard hub run snapshot readers in child
+processes, with at most two readers per provider. Healthy readers stay warm to
+reuse their caches. A disconnected request or 30-second read deadline stops its
+reader process; capacity is released only after that process exits. New
+refreshes can then start even if an older reader ignored cancellation or
+blocked its event loop. Server shutdown also stops active and idle readers.
+Injected readers used by tests must honor the supplied `AbortSignal`; merely
+abandoning their promise does not free capacity.
+
 For phone access over Tailscale, install the persistent loopback-only hub once:
 
 ```powershell

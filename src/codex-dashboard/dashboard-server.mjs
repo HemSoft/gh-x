@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 
-import { createSnapshotWorker, SnapshotBusyError } from "./snapshot-worker.mjs";
+import { createSnapshotWorker, SnapshotBusyError, SnapshotTimeoutError } from "./snapshot-worker.mjs";
 
 const dashboardPath = fileURLToPath(new URL("./dashboard.html", import.meta.url));
 const dashboardUiPath = fileURLToPath(new URL("./dashboard-ui.mjs", import.meta.url));
@@ -24,12 +24,13 @@ export async function createDashboardServer({
     token = randomBytes(24).toString("base64url"),
     readFileImpl = readFile,
     createServerImpl = createServer,
+    snapshotTimeoutMs = 30_000,
 } = {}) {
     if (typeof getSnapshot !== "function") {
         throw new TypeError("getSnapshot is required.");
     }
 
-    const readSnapshot = createSnapshotWorker(getSnapshot);
+    const readSnapshot = createSnapshotWorker(getSnapshot, { timeoutMs: snapshotTimeoutMs });
     const basePath = `/${token}`;
     const apiPath = `${basePath}/api/usage`;
     const [htmlTemplate, dashboardUi, dashboardEntry, codexIcon] = await Promise.all([
@@ -82,14 +83,15 @@ export async function createDashboardServer({
                     sendJson(response, 400, { error: filter.error });
                     return;
                 }
-                sendJson(response, 200, await readSnapshot(filter.value));
+                sendJson(response, 200, await readSnapshot.serve(response, filter.value));
             } catch (error) {
                 sendJson(response, error instanceof SnapshotBusyError ? 503 : 500, {
                     available: false,
                     source: "codex-local",
                     lastRefreshAt: new Date().toISOString(),
                     diagnostics: {
-                        code: error instanceof SnapshotBusyError ? error.code : "dashboard_snapshot_failed",
+                        code: error instanceof SnapshotBusyError || error instanceof SnapshotTimeoutError
+                            ? error.code : "dashboard_snapshot_failed",
                         message: error?.message || "Unable to refresh Codex usage.",
                     },
                 });
@@ -105,18 +107,20 @@ export async function createDashboardServer({
     });
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
-    let closed = false;
+    let closing;
     return {
         token,
         url: `http://127.0.0.1:${port}${basePath}/`,
-        async close() {
-            if (closed) {
-                return;
+        close() {
+            if (!closing) {
+                const readsClosed = readSnapshot.close();
+                const httpClosed = new Promise((resolve, reject) => {
+                    server.close((error) => error ? reject(error) : resolve());
+                });
+                server.closeAllConnections();
+                closing = Promise.all([readsClosed, httpClosed]);
             }
-            closed = true;
-            await new Promise((resolve, reject) => {
-                server.close((error) => error ? reject(error) : resolve());
-            });
+            return closing;
         },
     };
 }
@@ -164,6 +168,7 @@ function sendJson(response, statusCode, body) {
 }
 
 function send(response, statusCode, contentType, body) {
+    if (response.destroyed) return;
     response.writeHead(statusCode, {
         "Cache-Control": "no-store",
         "Content-Security-Policy": "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'",

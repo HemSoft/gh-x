@@ -1,0 +1,242 @@
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
+import test from "node:test";
+
+import { createIsolatedSnapshotReader } from "./isolated-snapshot-reader.mjs";
+import { createSnapshotWorker, SnapshotBusyError } from "./snapshot-worker.mjs";
+import { createDashboardServer } from "./dashboard-server.mjs";
+import { createDashboardHub } from "../dashboard-hub/hub-server.mjs";
+
+async function fixture(t) {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "snapshot-cancellation-"));
+    const modulePath = path.join(directory, "adapter.mjs");
+    await writeFile(modulePath, `
+        import { writeFileSync } from "node:fs";
+        export function createAdapter({ directory }) {
+            let reads = 0;
+            return { getSnapshot(filter) {
+                reads++;
+                if ([3600000, 86400000].includes(filter.recentWindowMs)) {
+                    writeFileSync(directory + "/" + filter.recentWindowMs + ".json", JSON.stringify({ pid: process.pid }));
+                    // A blocked loop cannot observe AbortSignal or IPC messages.
+                    while (true) {}
+                }
+                if (filter.recentWindowMs === 259200000) process.exit(7);
+                if (filter.recentWindowMs === 604800000) throw Object.assign(new Error("fixture failure"), { code: "fixture_error" });
+                return { available: true, filter, pid: process.pid, reads };
+            }};
+        }
+    `);
+    const reader = createIsolatedSnapshotReader({
+        moduleUrl: pathToFileURL(modulePath).href, factoryName: "createAdapter", options: { directory },
+    });
+    t.after(async () => { await reader.close(); await rm(directory, { recursive: true, force: true }); });
+    return { reader, directory };
+}
+
+async function started(directory, filter) {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+        try { return JSON.parse(await readFile(path.join(directory, `${filter}.json`), "utf8")); }
+        catch (error) { if (error.code !== "ENOENT") throw error; }
+        await delay(10);
+    }
+    throw new Error("Fixture read did not start.");
+}
+
+function assertExited(pid) {
+    assert.throws(() => process.kill(pid, 0), error => error.code === "ESRCH", `reader ${pid} must have exited`);
+}
+
+test("isolated reads reuse a warm adapter and propagate provider errors", async t => {
+    const { reader } = await fixture(t);
+    const first = await reader({ recentWindowMs: 21_600_000 });
+    const next = await reader({ recentWindowMs: 43_200_000 });
+    assert.equal(first.pid, next.pid);
+    assert.equal(next.reads, 2);
+    assert.deepEqual(next.filter, { recentWindowMs: 43_200_000 });
+    await assert.rejects(reader({ recentWindowMs: 604_800_000 }), error => error.code === "fixture_error");
+    assert.equal((await reader({})).reads, 4);
+});
+
+test("isolated reads kill two non-cooperative computations before releasing capacity", { timeout: 10_000 }, async t => {
+    const { reader, directory } = await fixture(t);
+    const controllers = [new AbortController(), new AbortController()];
+    const reads = [3_600_000, 86_400_000].map((recentWindowMs, i) => reader({ recentWindowMs }, {
+        signal: controllers[i].signal,
+    }).catch(error => error));
+    const pids = await Promise.all([3_600_000, 86_400_000].map(filter => started(directory, filter)));
+    await assert.rejects(reader({}), SnapshotBusyError);
+    controllers.forEach(controller => controller.abort(new Error("fixture abandoned")));
+    // Synchronous abort does not prematurely free slots while processes still live.
+    await assert.rejects(reader({}), SnapshotBusyError);
+    assert.deepEqual((await Promise.all(reads)).map(error => error.message), ["fixture abandoned", "fixture abandoned"]);
+    pids.forEach(({ pid }) => assertExited(pid));
+    assert.deepEqual((await reader({ recentWindowMs: 21_600_000 })).filter, { recentWindowMs: 21_600_000 });
+});
+
+test("isolated Codex adapter reads a synthetic SQLite store and preserves filter semantics", async t => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "codex-isolated-store-"));
+    const { DatabaseSync } = await import("node:sqlite");
+    const database = new DatabaseSync(path.join(directory, "state_5.sqlite"));
+    database.exec(`CREATE TABLE threads (
+        id TEXT, rollout_path TEXT, created_at_ms INTEGER, updated_at_ms INTEGER,
+        cwd TEXT, title TEXT, tokens_used INTEGER, model TEXT, git_branch TEXT, archived INTEGER
+    )`);
+    const rollout = path.join(directory, "rollout.jsonl");
+    await writeFile(rollout, "");
+    const now = Date.now();
+    database.prepare("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+        "synthetic-session", rollout, now - 60_000, now, directory, "Synthetic session", 200_000, "fixture-model", "fixture-branch", 0,
+    );
+    database.close();
+    const reader = createIsolatedSnapshotReader({
+        moduleUrl: new URL("./codex-adapter.mjs", import.meta.url).href,
+        factoryName: "createCodexAdapter", options: { codexHome: directory },
+    });
+    t.after(async () => { await reader.close(); await rm(directory, { recursive: true, force: true }); });
+    const snapshot = await reader({ recentWindowMs: 3_600_000 });
+    assert.equal(snapshot.available, true);
+    assert.equal(snapshot.totals.totalTokens, 200_000);
+    assert.equal(snapshot.windows.recentMs, 3_600_000);
+    assert.equal(snapshot.sessions[0].sessionId, "synthetic-session");
+});
+
+test("IPC serialization failure retires its process instead of leaking a slot", async t => {
+    const { reader } = await fixture(t);
+    const invalid = {}; invalid.self = invalid;
+    await assert.rejects(reader(invalid), /circular/i);
+    assert.equal((await reader({})).available, true);
+});
+
+test("cancellation during reader startup releases capacity after exit", async t => {
+    const { reader } = await fixture(t);
+    const controller = new AbortController();
+    const pending = reader({}, { signal: controller.signal }).catch(error => error);
+    controller.abort(new Error("cancel startup"));
+    assert.equal((await pending).message, "cancel startup");
+    assert.equal((await reader({})).available, true);
+});
+
+test("pre-aborted and closed readers do not start work", async t => {
+    const { reader } = await fixture(t);
+    const controller = new AbortController();
+    controller.abort(new Error("already cancelled"));
+    assert.throws(() => reader({}, { signal: controller.signal }), /already cancelled/);
+    await reader.close();
+    await reader.close();
+    await assert.rejects(reader({}), /closed/);
+});
+
+test("unexpected reader exit releases its slot and a later read recovers", async t => {
+    const { reader } = await fixture(t);
+    await assert.rejects(reader({ recentWindowMs: 259_200_000 }), /exited|disconnected/);
+    assert.equal((await reader({})).available, true);
+});
+
+test("worker shutdown stops active and idle processes and rejects later reads", async t => {
+    const { reader, directory } = await fixture(t);
+    const worker = createSnapshotWorker(reader);
+    const busy = worker({ recentWindowMs: 3_600_000 }).catch(error => error);
+    const active = await started(directory, 3_600_000);
+    const idle = await worker({});
+    assert.notEqual(active.pid, idle.pid);
+    await worker.close();
+    await worker.close();
+    assert.match((await busy).message, /stopped/);
+    assertExited(active.pid);
+    assertExited(idle.pid);
+    await assert.rejects(worker({}), /closed/);
+});
+
+test("opaque installed Copilot reads are terminated without changing the extension", { timeout: 10_000 }, async t => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "copilot-isolated-fixture-"));
+    const modules = {
+        "session-store.mjs": `import { writeFileSync } from "node:fs";
+            export async function readSessionStoreSnapshot(filter) {
+                if ([3600000, 86400000].includes(filter.recentWindowMs)) {
+                    writeFileSync(${JSON.stringify(directory)} + "/" + filter.recentWindowMs + ".json", JSON.stringify({ pid: process.pid }));
+                    await new Promise(() => {});
+                }
+                return { available: true, filter: { recentWindowMs: filter.recentWindowMs }, billingPeriod: {} };
+            }`,
+        "session-activity.mjs": "export const createSessionActivityRegistry = () => ({ overlay: async snapshot => snapshot });",
+        "plan-usage.mjs": "export const buildPlanUsage = () => ({ available: true });",
+        "account-quota-cache.mjs": "export const createAccountQuotaCache = () => ({ read: async () => ({}) });",
+    };
+    await Promise.all(Object.entries(modules).map(([name, source]) => writeFile(path.join(directory, name), source)));
+    const reader = createIsolatedSnapshotReader({
+        moduleUrl: new URL("../dashboard-hub/copilot-adapter.mjs", import.meta.url).href,
+        factoryName: "createCopilotAdapter", options: { extensionDirectory: directory },
+    });
+    t.after(async () => { await reader.close(); await rm(directory, { recursive: true, force: true }); });
+    const controllers = [new AbortController(), new AbortController()];
+    const reads = [3_600_000, 86_400_000].map((recentWindowMs, i) => reader({ recentWindowMs }, {
+        signal: controllers[i].signal,
+    }).catch(error => error));
+    const pids = await Promise.all([3_600_000, 86_400_000].map(filter => started(directory, filter)));
+    controllers.forEach(controller => controller.abort(new Error("cancel Copilot")));
+    await Promise.all(reads);
+    pids.forEach(({ pid }) => assertExited(pid));
+    const recovered = await reader({ recentWindowMs: 21_600_000 });
+    assert.equal(recovered.available, true);
+    assert.deepEqual(recovered.filter, { recentWindowMs: 21_600_000 });
+});
+
+for (const mode of ["standalone", "hub"]) {
+    test(`${mode} aborts blocked processes on disconnect and recovers the current filter`, { timeout: 10_000 }, async t => {
+        const { reader, directory } = await fixture(t);
+        const server = mode === "standalone"
+            ? await createDashboardServer({ token: "isolated-fixture", getSnapshot: reader })
+            : await createDashboardHub({
+                codexAdapter: { getSnapshot: reader },
+                copilotAdapter: { extensionDirectory: "fixture", getSnapshot: async () => ({ available: true, provider: "copilot" }) },
+                readFileImpl: async () => "<html><head></head><body>fixture</body></html>", port: 0,
+            });
+        t.after(() => server.close());
+        const api = mode === "standalone" ? `${server.url}api/usage` : `${server.url}dashboards/codex/api/usage`;
+        const controllers = [new AbortController(), new AbortController()];
+        const requests = [3_600_000, 86_400_000].map((recentWindowMs, i) => fetch(`${api}?recentWindowMs=${recentWindowMs}`, {
+            signal: controllers[i].signal,
+        }).catch(error => error));
+        const pids = await Promise.all([3_600_000, 86_400_000].map(filter => started(directory, filter)));
+        controllers.forEach(controller => controller.abort());
+        await Promise.all(requests);
+        const deadline = Date.now() + 3_000;
+        let recovered;
+        do {
+            recovered = await fetch(`${api}?recentWindowMs=21600000`);
+            if (recovered.status === 503) { await recovered.arrayBuffer(); await delay(10); }
+        } while (recovered.status === 503 && Date.now() < deadline);
+        assert.equal(recovered.status, 200);
+        assert.deepEqual((await recovered.json()).filter, { recentWindowMs: 21_600_000 });
+        pids.forEach(({ pid }) => assertExited(pid));
+        assert.equal((await fetch(`${server.url}api/health`)).status, 200);
+        if (mode === "hub") assert.equal((await (await fetch(`${server.url}copilot/api/usage`)).json()).provider, "copilot");
+    });
+
+    test(`${mode} read deadline stops the process even when the client remains connected`, { timeout: 10_000 }, async t => {
+        const { reader, directory } = await fixture(t);
+        const server = mode === "standalone"
+            ? await createDashboardServer({ token: "deadline-fixture", getSnapshot: reader, snapshotTimeoutMs: 1_000 })
+            : await createDashboardHub({
+                codexAdapter: { getSnapshot: reader }, copilotAdapter: { extensionDirectory: "fixture", getSnapshot: async () => ({ available: true }) },
+                readFileImpl: async () => "<html><head></head><body>fixture</body></html>", port: 0, snapshotTimeoutMs: 1_000,
+            });
+        t.after(() => server.close());
+        const api = mode === "standalone" ? `${server.url}api/usage` : `${server.url}codex/api/usage`;
+        const pending = fetch(`${api}?recentWindowMs=3600000`);
+        const { pid } = await started(directory, 3_600_000);
+        const failed = await pending;
+        assert.equal(failed.status, 500);
+        assert.equal((await failed.json()).diagnostics.code, "dashboard_snapshot_timeout");
+        assertExited(pid);
+        const recovered = await fetch(`${api}?recentWindowMs=21600000`);
+        assert.equal(recovered.status, 200);
+        assert.deepEqual((await recovered.json()).filter, { recentWindowMs: 21_600_000 });
+    });
+}

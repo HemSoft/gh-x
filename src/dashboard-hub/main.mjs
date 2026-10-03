@@ -1,8 +1,9 @@
 import path from "node:path";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 
-import { createCodexAdapter, resolveCodexHome } from "../codex-dashboard/codex-adapter.mjs";
-import { createCopilotAdapter } from "./copilot-adapter.mjs";
+import { resolveCodexHome } from "../codex-dashboard/codex-adapter.mjs";
+import { createIsolatedSnapshotReader } from "../codex-dashboard/isolated-snapshot-reader.mjs";
+import { resolveCopilotDashboardDirectory } from "./copilot-adapter.mjs";
 import { createDashboardHub } from "./hub-server.mjs";
 
 const args = process.argv.slice(2);
@@ -10,8 +11,19 @@ const port = Number(readOption(args, "--port") || 4765);
 const controlPath = readOption(args, "--control")
     || path.join(resolveCodexHome(), "dashboard-hub", "control.json");
 const hub = await createDashboardHub({
-    codexAdapter: createCodexAdapter(),
-    copilotAdapter: createCopilotAdapter(),
+    codexAdapter: {
+        getSnapshot: createIsolatedSnapshotReader({
+            moduleUrl: new URL("../codex-dashboard/codex-adapter.mjs", import.meta.url).href,
+            factoryName: "createCodexAdapter",
+        }),
+    },
+    copilotAdapter: {
+        extensionDirectory: resolveCopilotDashboardDirectory(),
+        getSnapshot: createIsolatedSnapshotReader({
+            moduleUrl: new URL("./copilot-adapter.mjs", import.meta.url).href,
+            factoryName: "createCopilotAdapter",
+        }),
+    },
     port,
 });
 

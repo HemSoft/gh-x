@@ -7,6 +7,52 @@ import { createDashboardHub } from "../dashboard-hub/hub-server.mjs";
 
 const flush = () => new Promise(setImmediate);
 
+for (const mode of ["standalone", "hub"]) {
+    test(`${mode} stops abandoned reads before serving the current filter`, { timeout: 5_000 }, async (t) => {
+        const reads = Array.from({ length: 2 }, () => Promise.withResolvers());
+        const entered = Array.from({ length: 2 }, () => Promise.withResolvers());
+        let started = 0;
+        let stopped = 0;
+        const getSnapshot = (filter, { signal } = {}) => {
+            const index = started++;
+            if (index >= 2) return { available: true, filter };
+            entered[index].resolve();
+            signal?.addEventListener("abort", () => {
+                stopped++;
+                reads[index].reject(signal.reason);
+            }, { once: true });
+            return reads[index].promise;
+        };
+        const server = mode === "standalone"
+            ? await createDashboardServer({ token: "cancelled-read-fixture", getSnapshot })
+            : await createDashboardHub({
+                codexAdapter: { getSnapshot },
+                copilotAdapter: { extensionDirectory: "fixture-only", getSnapshot: async () => ({ available: true }) },
+                readFileImpl: async () => "<html><head></head><body>fixture-only</body></html>", port: 0,
+            });
+        const controllers = Array.from({ length: 2 }, () => new AbortController());
+        t.after(async () => {
+            controllers.forEach(controller => controller.abort());
+            reads.forEach(read => read.resolve({ available: true }));
+            await flush();
+            await server.close();
+        });
+        const api = mode === "standalone" ? `${server.url}api/usage` : `${server.url}codex/api/usage`;
+        const pending = controllers.map((controller, i) => fetch(`${api}?recentWindowMs=${i ? 86400000 : 3600000}`, {
+            signal: controller.signal,
+        }).catch(error => error));
+        await Promise.all(entered.map(item => item.promise));
+        controllers.forEach(controller => controller.abort());
+        await Promise.all(pending);
+        // Health round trip lets the server observe transport closure without sleeps.
+        await fetch(`${server.url}api/health`);
+        const recovered = await fetch(`${api}?recentWindowMs=21600000`);
+        assert.equal(recovered.status, 200, "abandoned reads must not leave the new filter stuck at 503");
+        assert.deepEqual((await recovered.json()).filter, { recentWindowMs: 21_600_000 });
+        assert.equal(stopped, 2, "both underlying reads must stop, not merely release accounting slots");
+    });
+}
+
 test("snapshot workers bound unfinished reads and release capacity only on settlement", async (t) => {
     const reads = Array.from({ length: 3 }, () => Promise.withResolvers());
     t.after(() => reads.forEach(read => read.resolve("cleanup")));

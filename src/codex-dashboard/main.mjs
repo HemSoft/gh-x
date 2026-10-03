@@ -1,14 +1,17 @@
 import path from "node:path";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 
-import { createCodexAdapter, resolveCodexHome } from "./codex-adapter.mjs";
+import { resolveCodexHome } from "./codex-adapter.mjs";
+import { createIsolatedSnapshotReader } from "./isolated-snapshot-reader.mjs";
 import { createDashboardServer } from "./dashboard-server.mjs";
 
 const controlPath = readOption(process.argv.slice(2), "--control")
     || path.join(resolveCodexHome(), "dashboard", "control.json");
-const adapter = createCodexAdapter();
 const server = await createDashboardServer({
-    getSnapshot: (filter) => adapter.getSnapshot(filter),
+    getSnapshot: createIsolatedSnapshotReader({
+        moduleUrl: new URL("./codex-adapter.mjs", import.meta.url).href,
+        factoryName: "createCodexAdapter",
+    }),
 });
 
 await writeControl(controlPath, {
