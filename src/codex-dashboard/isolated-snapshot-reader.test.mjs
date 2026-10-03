@@ -117,7 +117,7 @@ test("IPC serialization failure retires its process instead of leaking a slot", 
     assert.equal((await reader({})).available, true);
 });
 
-test("idle shutdown keeps the process alive until reader cleanup completes", async t => {
+test("idle shutdown keeps the process alive until reader cleanup completes", { timeout: 10_000 }, async t => {
     let child;
     let childClosed;
     t.after(async () => {

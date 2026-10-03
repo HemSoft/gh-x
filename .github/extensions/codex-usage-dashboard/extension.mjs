@@ -16,8 +16,10 @@ let closed = false;
 function closeInstance(instanceId, entry) {
     if (!entry.closing) {
         entry.closing = Promise.resolve().then(async () => {
-            const server = await entry.opening;
-            await server.close();
+            // Failed startup never created a usable server or reader process.
+            // Its original open still rejects; retirement can safely finish.
+            const server = await entry.opening.catch(() => null);
+            if (server) await server.close();
         }).finally(() => {
             if (servers.get(instanceId) === entry) servers.delete(instanceId);
         });
