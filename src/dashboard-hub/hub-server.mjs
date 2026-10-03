@@ -186,7 +186,7 @@ export async function createDashboardHub({
                 const httpClosed = new Promise((resolve, reject) => {
                     server.close((error) => error ? reject(error) : resolve());
                 });
-                server.closeAllConnections();
+                server.closeAllConnections?.();
                 closing = Promise.all([readsClosed, httpClosed]);
             }
             return closing;

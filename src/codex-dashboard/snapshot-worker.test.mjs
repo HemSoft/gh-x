@@ -7,6 +7,54 @@ import { createDashboardHub } from "../dashboard-hub/hub-server.mjs";
 
 const flush = () => new Promise(setImmediate);
 
+async function createFixture(t, mode, getSnapshot, reads) {
+    const server = mode === "standalone"
+        ? await createDashboardServer({ token: "bounded-work-fixture", getSnapshot })
+        : await createDashboardHub({
+            codexAdapter: { getSnapshot },
+            copilotAdapter: { extensionDirectory: "fixture-only", getSnapshot: async () => ({ available: true, provider: "copilot" }) },
+            readFileImpl: async () => "<html><head></head><body>fixture-only</body></html>", port: 0,
+        });
+    const controllers = Array.from({ length: 2 }, () => new AbortController());
+    t.after(async () => {
+        controllers.forEach(controller => controller.abort());
+        reads.forEach(read => read.resolve({ available: true }));
+        await flush();
+        await server.close();
+    });
+    return { server, controllers };
+}
+
+for (const mode of ["standalone", "hub"]) {
+    test(`${mode} permits injected servers without closeAllConnections`, async () => {
+        let closed = false;
+        const createServerImpl = () => ({
+            once() {}, listen(_port, _host, ready) { ready(); }, address: () => ({ port: 0 }),
+            close(done) { closed = true; done(); },
+        });
+        const getSnapshot = async () => ({ available: true });
+        const readFileImpl = async () => "<html><head></head></html>";
+        const server = mode === "standalone"
+            ? await createDashboardServer({ getSnapshot, readFileImpl, createServerImpl })
+            : await createDashboardHub({ codexAdapter: { getSnapshot }, copilotAdapter: {
+                extensionDirectory: "fixture", getSnapshot,
+            }, readFileImpl, createServerImpl, port: 0 });
+        await server.close();
+        assert.equal(closed, true);
+    });
+}
+
+test("pre-aborted worker reads reject asynchronously without starting work", async () => {
+    let started = 0;
+    const worker = createSnapshotWorker(() => { started++; return {}; });
+    const controller = new AbortController();
+    controller.abort(new Error("pre-cancelled"));
+    let result;
+    assert.doesNotThrow(() => { result = worker({}, { signal: controller.signal }); });
+    await assert.rejects(result, /pre-cancelled/);
+    assert.equal(started, 0);
+});
+
 for (const mode of ["standalone", "hub"]) {
     test(`${mode} stops abandoned reads before serving the current filter`, { timeout: 5_000 }, async (t) => {
         const reads = Array.from({ length: 2 }, () => Promise.withResolvers());
@@ -23,20 +71,7 @@ for (const mode of ["standalone", "hub"]) {
             }, { once: true });
             return reads[index].promise;
         };
-        const server = mode === "standalone"
-            ? await createDashboardServer({ token: "cancelled-read-fixture", getSnapshot })
-            : await createDashboardHub({
-                codexAdapter: { getSnapshot },
-                copilotAdapter: { extensionDirectory: "fixture-only", getSnapshot: async () => ({ available: true }) },
-                readFileImpl: async () => "<html><head></head><body>fixture-only</body></html>", port: 0,
-            });
-        const controllers = Array.from({ length: 2 }, () => new AbortController());
-        t.after(async () => {
-            controllers.forEach(controller => controller.abort());
-            reads.forEach(read => read.resolve({ available: true }));
-            await flush();
-            await server.close();
-        });
+        const { server, controllers } = await createFixture(t, mode, getSnapshot, reads);
         const api = mode === "standalone" ? `${server.url}api/usage` : `${server.url}codex/api/usage`;
         const pending = controllers.map((controller, i) => fetch(`${api}?recentWindowMs=${i ? 86400000 : 3600000}`, {
             signal: controller.signal,
@@ -117,24 +152,7 @@ for (const mode of ["standalone", "hub"]) {
             }
             return { available: true, filter };
         };
-        const server = mode === "standalone"
-            ? await createDashboardServer({ token: "bounded-work-fixture", getSnapshot })
-            : await createDashboardHub({
-                codexAdapter: { getSnapshot },
-                copilotAdapter: {
-                    extensionDirectory: "fixture-only",
-                    getSnapshot: async () => ({ available: true, provider: "copilot" }),
-                },
-                readFileImpl: async () => "<html><head></head><body>fixture-only</body></html>",
-                port: 0,
-            });
-        const controllers = Array.from({ length: 2 }, () => new AbortController());
-        t.after(async () => {
-            controllers.forEach(controller => controller.abort());
-            reads.forEach(read => read.resolve({ available: true }));
-            await flush();
-            await server.close();
-        });
+        const { server, controllers } = await createFixture(t, mode, getSnapshot, reads);
         const api = mode === "standalone" ? `${server.url}api/usage` : `${server.url}dashboards/codex/api/usage`;
         const first = fetch(`${api}?recentWindowMs=3600000`, { signal: controllers[0].signal }).catch(error => error);
         await entered[0].promise;

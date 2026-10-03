@@ -603,8 +603,8 @@ window. Later launches reuse the running local server. Both dashboard servers
 reject malformed HTTP request targets with a 400 response and keep serving
 healthy requests.
 
-The standalone Codex server and dashboard hub run snapshot readers in child
-processes, with at most two readers per provider. Healthy readers stay warm to
+The Codex Canvas, standalone server and dashboard hub run snapshot readers in
+child processes, with at most two readers per provider or Canvas instance. Healthy readers stay warm to
 reuse their caches. A disconnected request or 30-second read deadline stops its
 reader process; capacity is released only after that process exits. New
 refreshes can then start even if an older reader ignored cancellation or

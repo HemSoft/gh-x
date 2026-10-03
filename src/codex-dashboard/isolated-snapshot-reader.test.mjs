@@ -15,13 +15,15 @@ async function fixture(t) {
     const directory = await mkdtemp(path.join(os.tmpdir(), "snapshot-cancellation-"));
     const modulePath = path.join(directory, "adapter.mjs");
     await writeFile(modulePath, `
-        import { writeFileSync } from "node:fs";
+        import { writeFileSync, renameSync } from "node:fs";
         export function createAdapter({ directory }) {
             let reads = 0;
             return { getSnapshot(filter) {
                 reads++;
                 if ([3600000, 86400000].includes(filter.recentWindowMs)) {
-                    writeFileSync(directory + "/" + filter.recentWindowMs + ".json", JSON.stringify({ pid: process.pid }));
+                    const marker = directory + "/" + filter.recentWindowMs + ".json";
+                    writeFileSync(marker + ".tmp", JSON.stringify({ pid: process.pid }));
+                    renameSync(marker + ".tmp", marker);
                     // A blocked loop cannot observe AbortSignal or IPC messages.
                     while (true) {}
                 }
@@ -126,7 +128,7 @@ test("pre-aborted and closed readers do not start work", async t => {
     const { reader } = await fixture(t);
     const controller = new AbortController();
     controller.abort(new Error("already cancelled"));
-    assert.throws(() => reader({}, { signal: controller.signal }), /already cancelled/);
+    await assert.rejects(reader({}, { signal: controller.signal }), /already cancelled/);
     await reader.close();
     await reader.close();
     await assert.rejects(reader({}), /closed/);
@@ -156,10 +158,12 @@ test("worker shutdown stops active and idle processes and rejects later reads", 
 test("opaque installed Copilot reads are terminated without changing the extension", { timeout: 10_000 }, async t => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "copilot-isolated-fixture-"));
     const modules = {
-        "session-store.mjs": `import { writeFileSync } from "node:fs";
+        "session-store.mjs": `import { writeFileSync, renameSync } from "node:fs";
             export async function readSessionStoreSnapshot(filter) {
                 if ([3600000, 86400000].includes(filter.recentWindowMs)) {
-                    writeFileSync(${JSON.stringify(directory)} + "/" + filter.recentWindowMs + ".json", JSON.stringify({ pid: process.pid }));
+                    const marker = ${JSON.stringify(directory)} + "/" + filter.recentWindowMs + ".json";
+                    writeFileSync(marker + ".tmp", JSON.stringify({ pid: process.pid }));
+                    renameSync(marker + ".tmp", marker);
                     await new Promise(() => {});
                 }
                 return { available: true, filter: { recentWindowMs: filter.recentWindowMs }, billingPeriod: {} };

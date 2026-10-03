@@ -51,7 +51,7 @@ export function createIsolatedSnapshotReader({ moduleUrl, factoryName, options =
 
     const readSnapshot = (filter, { signal } = {}) => {
         if (closed) return Promise.reject(new Error("Snapshot reader has closed."));
-        signal?.throwIfAborted();
+        if (signal?.aborted) return Promise.reject(signal.reason);
         let slot = [...slots].find(candidate => !candidate.job && !candidate.stopping);
         if (!slot) {
             if (slots.size >= 2) return Promise.reject(new SnapshotBusyError());

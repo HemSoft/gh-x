@@ -1,0 +1,93 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+// Run the real Canvas caller and server/reader modules, with only the external
+// SDK and local-data adapter substituted. No signed-in Canvas session needed.
+test("Canvas closes an unsettled read and leaves a sibling instance healthy", { timeout: 15_000 }, async t => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "codex-canvas-shutdown-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const source = fileURLToPath(new URL(".", import.meta.url));
+    const target = path.join(directory, "src", "codex-dashboard");
+    await mkdir(target, { recursive: true });
+    for (const file of ["canvas-control.mjs", "dashboard-server.mjs", "snapshot-worker.mjs", "isolated-snapshot-reader.mjs", "snapshot-reader-process.mjs", "dashboard.html", "dashboard-ui.mjs", "dashboard-entry.mjs", "codex-icon.svg"]) {
+        await cp(path.join(source, file), path.join(target, file));
+    }
+    await writeFile(path.join(target, "codex-adapter.mjs"), `
+        import { writeFileSync, renameSync } from "node:fs";
+        export const resolveCodexHome = () => process.env.CODEX_HOME;
+        export const createCodexAdapter = () => ({ async getSnapshot(filter) {
+            if (filter.recentWindowMs === 3600000) {
+                const marker = process.env.CODEX_HOME + "/reader.json";
+                writeFileSync(marker + ".tmp", JSON.stringify({ pid: process.pid }));
+                renameSync(marker + ".tmp", marker);
+                await new Promise(() => {});
+            }
+            return { available: true, pid: process.pid };
+        }});
+    `);
+    const extensionDirectory = path.join(directory, ".github", "extensions", "codex-usage-dashboard");
+    await mkdir(extensionDirectory, { recursive: true });
+    await cp(new URL("../../.github/extensions/codex-usage-dashboard/extension.mjs", import.meta.url), path.join(extensionDirectory, "extension.mjs"));
+    const sdk = path.join(directory, "node_modules", "@github", "copilot-sdk");
+    await mkdir(sdk, { recursive: true });
+    await writeFile(path.join(sdk, "package.json"), JSON.stringify({ type: "module", exports: { "./extension": "./extension.mjs" } }));
+    await writeFile(path.join(sdk, "extension.mjs"), `
+        export const createCanvas = config => { globalThis.fixtureCanvas = config; return config; };
+        export const joinSession = async () => ({ on: (_event, handler) => { globalThis.fixtureShutdown = handler; } });
+    `);
+    await writeFile(path.join(directory, "driver.mjs"), `
+        import assert from "node:assert/strict";
+        import { readFile } from "node:fs/promises";
+        import { setTimeout as delay } from "node:timers/promises";
+        await import("./.github/extensions/codex-usage-dashboard/extension.mjs");
+        const canvas = globalThis.fixtureCanvas;
+        const [first, sameInstance] = await Promise.all([
+            canvas.open({ instanceId: "first" }), canvas.open({ instanceId: "first" }),
+        ]);
+        assert.equal(first.url, sameInstance.url, "Concurrent opens must share one owned server");
+        const second = await canvas.open({ instanceId: "second" });
+        const sibling = await (await fetch(second.url + "api/usage")).json();
+        const pending = fetch(first.url + "api/usage?recentWindowMs=3600000").catch(error => error);
+        let marker;
+        const deadline = Date.now() + 3000;
+        while (!marker && Date.now() < deadline) {
+            try { marker = JSON.parse(await readFile(process.env.CODEX_HOME + "/reader.json", "utf8")); }
+            catch (error) { if (error.code !== "ENOENT") throw error; await delay(10); }
+        }
+        assert.ok(marker, "Canvas read did not start");
+        const closed = await Promise.race([
+            canvas.onClose({ instanceId: "first" }).then(() => true), delay(1000).then(() => false),
+        ]);
+        assert.equal(closed, true, "Canvas shutdown must not wait forever for its abandoned read");
+        await pending;
+        assert.throws(() => process.kill(marker.pid, 0), error => error.code === "ESRCH");
+        const recoveredSibling = await (await fetch(second.url + "api/usage")).json();
+        assert.equal(recoveredSibling.available, true);
+        assert.equal(recoveredSibling.pid, sibling.pid);
+        await globalThis.fixtureShutdown();
+        assert.throws(() => process.kill(sibling.pid, 0), error => error.code === "ESRCH");
+        console.log("canvas shutdown and sibling isolation verified");
+    `);
+    const child = spawn(process.execPath, [path.join(directory, "driver.mjs")], {
+        cwd: directory, env: { ...process.env, CODEX_HOME: directory, CODEX_USAGE_DASHBOARD_AUTO_OPEN: "0" },
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", chunk => { output += chunk; });
+    child.stderr.on("data", chunk => { output += chunk; });
+    const closed = once(child, "close");
+    closed.catch(() => {});
+    t.after(async () => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await closed;
+    });
+    const [code] = await closed;
+    assert.equal(code, 0, output);
+    assert.match(output, /canvas shutdown and sibling isolation verified/);
+});

@@ -24,7 +24,7 @@ export function createSnapshotWorker(readSnapshot, {
     let closing;
     const worker = (filter, { signal } = {}) => {
         if (closed) return Promise.reject(new Error("Snapshot worker has closed."));
-        signal?.throwIfAborted();
+        if (signal?.aborted) return Promise.reject(signal.reason);
         if (jobs.size >= 2) return Promise.reject(new SnapshotBusyError());
         const controller = new AbortController();
         const onAbort = () => controller.abort(signal.reason);
