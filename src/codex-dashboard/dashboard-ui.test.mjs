@@ -432,6 +432,98 @@ test("startDashboard skips timer ticks during body parsing and resumes after fai
     assert.equal(fixture.view().sessionId, "timer-recovered");
 });
 
+for (const phase of ["fetch", "body"]) {
+    test(`startDashboard bounds an unsettled ${phase} and resumes polling`, async (t) => {
+        const fixture = await startRefreshFixture(t);
+        const pending = fixture.dashboard.refresh();
+        if (phase === "body") {
+            fixture.requests[1].resolve({ ok: true, json: () => new Promise(() => {}) });
+            await flushRefresh();
+        }
+        t.mock.timers.tick(30_000);
+        await flushRefresh();
+        assert.equal(fixture.view().freshness, "Refresh unavailable");
+        assert.equal(fixture.requests[1].options.signal?.aborted, true);
+        await pending;
+        t.mock.timers.tick(5_000);
+        assert.equal(fixture.requests.length, 3);
+        fixture.respond(2, refreshSnapshot("timeout-recovered", 300));
+        await flushRefresh();
+        assert.equal(fixture.view().sessionId, "timeout-recovered");
+        assert.equal(fixture.view().totalTokens, "300");
+    });
+}
+
+test("startDashboard an obsolete deadline cannot render or clear newer pending work", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const older = fixture.dashboard.refresh();
+    t.mock.timers.tick(20_000);
+    const newer = fixture.dashboard.refresh();
+    const current = fixture.view();
+    t.mock.timers.tick(10_000);
+    await flushRefresh();
+    assert.equal(fixture.requests[1].options.signal?.aborted, true);
+    await older;
+    assert.deepEqual(fixture.view(), current);
+    assert.equal(fixture.requests[2].options.signal.aborted, false);
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 3);
+    fixture.respond(2, refreshSnapshot("current-after-old-timeout", 300));
+    await newer;
+    assert.equal(fixture.view().sessionId, "current-after-old-timeout");
+});
+
+test("startDashboard removes a completed request deadline", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const completed = fixture.dashboard.refresh();
+    fixture.respond(1, refreshSnapshot("completed", 300));
+    await completed;
+    t.mock.timers.tick(30_000);
+    await flushRefresh();
+    assert.equal(fixture.requests[1].options.signal?.aborted, false);
+    assert.equal(fixture.view().sessionId, "completed");
+});
+
+test("startDashboard stop settles and cancels all outstanding requests", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const older = fixture.dashboard.refresh();
+    const newer = fixture.dashboard.refresh();
+    const current = fixture.view();
+    fixture.dashboard.stop();
+    await flushRefresh();
+    assert.equal(fixture.requests[1].options.signal?.aborted, true);
+    assert.equal(fixture.requests[2].options.signal?.aborted, true);
+    await Promise.all([older, newer]);
+    t.mock.timers.tick(30_000);
+    await flushRefresh();
+    assert.deepEqual(fixture.view(), current);
+    assert.equal(fixture.requests.length, 3);
+});
+
+test("startDashboard bounds the initial request and starts recovery polling", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    fixture.dashboard.stop();
+    const requests = [];
+    const started = startDashboard({
+        documentRef: fixture.documentRef,
+        fetchImpl: (url, options) => {
+            const request = Promise.withResolvers();
+            requests.push({ ...request, options });
+            return request.promise;
+        },
+    });
+    t.mock.timers.tick(30_000);
+    await flushRefresh();
+    assert.equal(fixture.view().freshness, "Refresh unavailable");
+    const dashboard = await started;
+    t.after(() => dashboard.stop());
+    t.mock.timers.tick(5_000);
+    assert.equal(requests.length, 2);
+    requests[1].resolve({ ok: true, json: async () => refreshSnapshot("startup-recovered", 300) });
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "startup-recovered");
+});
+
 test("startDashboard preserves theme, zoom and filter controls", async (t) => {
     const fixture = await startRefreshFixture(t);
     assert.equal(fixture.element("theme").value, "system");
@@ -449,7 +541,7 @@ test("startDashboard preserves theme, zoom and filter controls", async (t) => {
 });
 
 async function startRefreshFixture(t) {
-    t.mock.timers.enable({ apis: ["setInterval", "Date"], now: Date.parse("2026-09-30T22:00:00Z") });
+    t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"], now: Date.parse("2026-09-30T22:00:00Z") });
     const elements = new Map();
     const element = (id) => {
         if (!elements.has(id)) {

@@ -117,6 +117,7 @@ export async function startDashboard({
         documentRef,
         Number(readCookie(documentRef.cookie, "codex-zoom", "100")),
     );
+    const pendingRequests = new Set();
     let refreshTimer;
     let refreshGeneration = 0;
     let refreshPending = false;
@@ -129,13 +130,11 @@ export async function startDashboard({
         const generation = ++refreshGeneration;
         refreshPending = true;
         try {
-            const response = await fetchImpl(buildUsageApiUrl(apiUrl, recentWindow), {
-                cache: "no-store",
-            });
-            if (!response.ok) {
-                throw new Error(`Dashboard request failed with HTTP ${response.status}.`);
-            }
-            const snapshot = await response.json();
+            const snapshot = await fetchDashboardSnapshot(
+                fetchImpl,
+                buildUsageApiUrl(apiUrl, recentWindow),
+                pendingRequests,
+            );
             if (!stopped && generation === refreshGeneration) {
                 renderDashboard(documentRef, snapshot);
             }
@@ -222,8 +221,41 @@ export async function startDashboard({
         stop() {
             stopped = true;
             clearInterval(refreshTimer);
+            for (const request of pendingRequests) {
+                request.abort(new Error("Dashboard has stopped."));
+            }
         },
     };
+}
+
+async function fetchDashboardSnapshot(fetchImpl, apiUrl, pendingRequests) {
+    const controller = new AbortController();
+    pendingRequests.add(controller);
+    let onAbort;
+    const aborted = new Promise((_, reject) => {
+        onAbort = () => reject(controller.signal.reason);
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    const timeout = setTimeout(() => {
+        controller.abort(new Error("Dashboard request timed out after 30 seconds."));
+    }, 30_000);
+    try {
+        const request = async () => {
+            const response = await fetchImpl(apiUrl, {
+                cache: "no-store",
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                throw new Error(`Dashboard request failed with HTTP ${response.status}.`);
+            }
+            return response.json();
+        };
+        return await Promise.race([request(), aborted]);
+    } finally {
+        clearTimeout(timeout);
+        controller.signal.removeEventListener("abort", onAbort);
+        pendingRequests.delete(controller);
+    }
 }
 
 export function renderDashboard(documentRef, snapshot) {
