@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { isProcessRunning } from "./test-process-liveness.mjs";
 import test from "node:test";
 
 // Run the real Canvas caller and server/readers with SDK/data doubles and a
@@ -151,8 +152,8 @@ test("Canvas closes an unsettled read and leaves a sibling instance healthy", { 
             const deadline = Date.now() + 3_000;
             let alive = true;
             do {
-                try { process.kill(pid, 0); await delay(10); }
-                catch (error) { if (error.code !== "ESRCH") throw error; alive = false; }
+                alive = await isProcessRunning(pid);
+                if (alive) await delay(10);
             } while (alive && Date.now() < deadline);
             assert.equal(alive, false, `fixture reader ${pid} survived ${failure} exit`);
         }

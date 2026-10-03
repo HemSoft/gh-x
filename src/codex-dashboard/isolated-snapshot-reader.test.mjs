@@ -9,6 +9,15 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
 import { createIsolatedSnapshotReader } from "./isolated-snapshot-reader.mjs";
+import { hasRunningProcessState, isProcessRunning } from "./test-process-liveness.mjs";
+
+test("process liveness treats Linux zombies and dead states as terminated", async () => {
+    assert.equal(hasRunningProcessState("123 (node worker) R 1 0"), true);
+    assert.equal(hasRunningProcessState("123 (node (worker)) Z 1 0"), false);
+    assert.equal(hasRunningProcessState("123 (node) X 1 0"), false);
+    assert.throws(() => hasRunningProcessState("invalid"), /process state/);
+    assert.equal(await isProcessRunning(process.pid), true);
+});
 import { createSnapshotWorker, SnapshotBusyError } from "./snapshot-worker.mjs";
 import { createDashboardServer } from "./dashboard-server.mjs";
 import { createDashboardHub } from "../dashboard-hub/hub-server.mjs";
@@ -131,24 +140,25 @@ test("abrupt parent exit stops a reader whose computation blocks its event loop"
         return originalKill(pid, signal);
     };
     t.after(async () => {
-        if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-        await childClosed?.catch(() => {});
-        if (readerExited) return;
-        if (!readerPid && markerPath) {
-            try { readerPid = JSON.parse(await readFile(markerPath, "utf8")).pid; }
-            catch (error) { if (error.code !== "ENOENT") throw error; }
-        }
-        if (readerPid) {
-            try { process.kill(readerPid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
-            const deadline = Date.now() + 2_000;
-            while (Date.now() < deadline) {
-                try { process.kill(readerPid, 0); await delay(10); }
-                catch (error) { if (error.code !== "ESRCH") throw error; return; }
+        try {
+            if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+            await childClosed?.catch(() => {});
+            if (readerExited) return;
+            if (!readerPid && markerPath) {
+                try { readerPid = JSON.parse(await readFile(markerPath, "utf8")).pid; }
+                catch (error) { if (error.code !== "ENOENT") throw error; }
             }
-            assert.fail("Test-owned blocked reader did not terminate during cleanup.");
-        }
+            if (readerPid && await isProcessRunning(readerPid)) {
+                try { process.kill(readerPid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+                const deadline = Date.now() + 2_000;
+                while (Date.now() < deadline) {
+                    if (!await isProcessRunning(readerPid)) return;
+                    await delay(10);
+                }
+                assert.fail("Test-owned blocked reader did not terminate during cleanup.");
+            }
+        } finally { process.kill = originalKill; }
     });
-    t.after(() => { process.kill = originalKill; });
     const { directory } = await fixture(t);
     markerPath = path.join(directory, "3600000.json");
     const driver = path.join(directory, "abrupt-parent.mjs");
@@ -179,8 +189,8 @@ test("abrupt parent exit stops a reader whose computation blocks its event loop"
     const deadline = Date.now() + 1_000;
     let alive = true;
     do {
-        try { process.kill(readerPid, 0); await delay(10); }
-        catch (error) { if (error.code !== "ESRCH") throw error; alive = false; }
+        alive = await isProcessRunning(readerPid);
+        if (alive) await delay(10);
     } while (alive && Date.now() < deadline);
     assert.equal(alive, false, "Blocked reader survived abrupt parent exit");
     readerExited = true;
