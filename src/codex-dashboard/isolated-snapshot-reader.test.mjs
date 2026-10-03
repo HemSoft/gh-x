@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -113,6 +115,39 @@ test("IPC serialization failure retires its process instead of leaking a slot", 
     const invalid = {}; invalid.self = invalid;
     await assert.rejects(reader(invalid), /circular/i);
     assert.equal((await reader({})).available, true);
+});
+
+test("idle shutdown keeps the process alive until reader cleanup completes", async t => {
+    let child;
+    let childClosed;
+    t.after(async () => {
+        if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await childClosed?.catch(() => {});
+    });
+    const { directory } = await fixture(t);
+    const driver = path.join(directory, "idle-shutdown.mjs");
+    const marker = path.join(directory, "shutdown-completed.json");
+    await writeFile(driver, `
+        import { writeFile } from "node:fs/promises";
+        import { createIsolatedSnapshotReader } from ${JSON.stringify(new URL("./isolated-snapshot-reader.mjs", import.meta.url).href)};
+        const reader = createIsolatedSnapshotReader({
+            moduleUrl: ${JSON.stringify(pathToFileURL(path.join(directory, "adapter.mjs")).href)},
+            factoryName: "createAdapter", options: { directory: ${JSON.stringify(directory)} },
+        });
+        const snapshot = await reader({});
+        await reader.close();
+        await writeFile(${JSON.stringify(marker)}, JSON.stringify({ pid: snapshot.pid, closed: true }));
+    `);
+    child = spawn(process.execPath, [driver], { stdio: ["ignore", "ignore", "pipe"] });
+    let output = "";
+    child.stderr.on("data", chunk => { output += chunk; });
+    childClosed = once(child, "close");
+    childClosed.catch(() => {});
+    const [code] = await childClosed;
+    assert.equal(code, 0, output);
+    const completed = JSON.parse(await readFile(marker, "utf8"));
+    assert.equal(completed.closed, true);
+    assertExited(completed.pid);
 });
 
 test("cancellation during reader startup releases capacity after exit", async t => {

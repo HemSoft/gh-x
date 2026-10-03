@@ -11,7 +11,13 @@ import test from "node:test";
 // SDK and local-data adapter substituted. No signed-in Canvas session needed.
 test("Canvas closes an unsettled read and leaves a sibling instance healthy", { timeout: 15_000 }, async t => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "codex-canvas-shutdown-"));
-    t.after(() => rm(directory, { recursive: true, force: true }));
+    let child;
+    let childClosed;
+    t.after(async () => {
+        if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await childClosed?.catch(() => {});
+        await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 });
+    });
     const source = fileURLToPath(new URL(".", import.meta.url));
     const target = path.join(directory, "src", "codex-dashboard");
     await mkdir(target, { recursive: true });
@@ -61,33 +67,40 @@ test("Canvas closes an unsettled read and leaves a sibling instance healthy", { 
             catch (error) { if (error.code !== "ENOENT") throw error; await delay(10); }
         }
         assert.ok(marker, "Canvas read did not start");
+        const closeFirst = canvas.onClose({ instanceId: "first" });
+        const reopening = canvas.open({ instanceId: "first" });
         const closed = await Promise.race([
-            canvas.onClose({ instanceId: "first" }).then(() => true), delay(1000).then(() => false),
+            closeFirst.then(() => true), delay(1000).then(() => false),
         ]);
         assert.equal(closed, true, "Canvas shutdown must not wait forever for its abandoned read");
         await pending;
+        const reopened = await reopening;
+        assert.notEqual(reopened.url, first.url, "Reopening must not return the closing server");
+        const reopenedSnapshot = await (await fetch(reopened.url + "api/usage")).json();
+        assert.equal(reopenedSnapshot.available, true);
+        const startup = canvas.open({ instanceId: "startup" });
+        const closeStartup = canvas.onClose({ instanceId: "startup" });
+        await assert.rejects(startup, /closed/);
+        await closeStartup;
         assert.throws(() => process.kill(marker.pid, 0), error => error.code === "ESRCH");
         const recoveredSibling = await (await fetch(second.url + "api/usage")).json();
         assert.equal(recoveredSibling.available, true);
         assert.equal(recoveredSibling.pid, sibling.pid);
         await globalThis.fixtureShutdown();
         assert.throws(() => process.kill(sibling.pid, 0), error => error.code === "ESRCH");
+        assert.throws(() => process.kill(reopenedSnapshot.pid, 0), error => error.code === "ESRCH");
         console.log("canvas shutdown and sibling isolation verified");
     `);
-    const child = spawn(process.execPath, [path.join(directory, "driver.mjs")], {
+    child = spawn(process.execPath, [path.join(directory, "driver.mjs")], {
         cwd: directory, env: { ...process.env, CODEX_HOME: directory, CODEX_USAGE_DASHBOARD_AUTO_OPEN: "0" },
         stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
     child.stdout.on("data", chunk => { output += chunk; });
     child.stderr.on("data", chunk => { output += chunk; });
-    const closed = once(child, "close");
-    closed.catch(() => {});
-    t.after(async () => {
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-        await closed;
-    });
-    const [code] = await closed;
+    childClosed = once(child, "close");
+    childClosed.catch(() => {});
+    const [code] = await childClosed;
     assert.equal(code, 0, output);
     assert.match(output, /canvas shutdown and sibling isolation verified/);
 });

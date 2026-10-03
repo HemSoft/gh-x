@@ -13,6 +13,10 @@ export function createIsolatedSnapshotReader({ moduleUrl, factoryName, options =
         if (slot.stopping) return;
         slot.stopping = true;
         slot.failure = error;
+        // Idle readers are unreferenced. Shutdown must keep the event loop
+        // alive until close fires and the caller finishes its own cleanup.
+        slot.child.ref();
+        slot.child.channel?.ref();
         if (slot.child.exitCode === null && slot.child.signalCode === null) {
             slot.child.kill("SIGKILL");
         }

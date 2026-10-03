@@ -13,48 +13,61 @@ const CANVAS_ID = "codex-usage-dashboard";
 const servers = new Map();
 let closed = false;
 
-const canvas = createCanvas({
-    id: CANVAS_ID,
-    displayName: "Codex Usage Dashboard",
-    description: "Shows local Codex CLI sessions, tokens, context, and rate limits.",
-    open: async ({ instanceId }) => {
-        if (closed) throw new Error("Codex Canvas has stopped.");
-        let opening = servers.get(instanceId);
-        if (!opening) {
-            opening = createDashboardServer({
+function closeInstance(instanceId, entry) {
+    if (!entry.closing) {
+        entry.closing = Promise.resolve().then(async () => {
+            const server = await entry.opening;
+            await server.close();
+        }).finally(() => {
+            if (servers.get(instanceId) === entry) servers.delete(instanceId);
+        });
+    }
+    return entry.closing;
+}
+
+async function openServer(instanceId) {
+    if (closed) throw new Error("Codex Canvas has stopped.");
+    let entry = servers.get(instanceId);
+    if (entry?.closing) {
+        await entry.closing;
+        return openServer(instanceId);
+    }
+    if (!entry) {
+        entry = {
+            opening: createDashboardServer({
                 getSnapshot: createIsolatedSnapshotReader({
                     moduleUrl: new URL("../../../src/codex-dashboard/codex-adapter.mjs", import.meta.url).href,
                     factoryName: "createCodexAdapter",
                 }),
-            });
-            // Track startup immediately so concurrent opens cannot orphan a server.
-            servers.set(instanceId, opening);
-            opening.catch(() => {
-                if (servers.get(instanceId) === opening) servers.delete(instanceId);
-            });
-        }
-        const server = await opening;
-        if (closed) throw new Error("Codex Canvas has stopped.");
-        return {
-            title: "Codex usage",
-            url: server.url,
+            }),
+            closing: null,
         };
-    },
-    onClose: async ({ instanceId }) => {
-        const opening = servers.get(instanceId);
-        if (!opening) return;
-        const server = await opening;
-        await server.close();
-        if (servers.get(instanceId) === opening) servers.delete(instanceId);
+        // Own startup immediately; concurrent opens share the same server.
+        servers.set(instanceId, entry);
+        entry.opening.catch(() => {
+            if (servers.get(instanceId) === entry) servers.delete(instanceId);
+        });
+    }
+    const server = await entry.opening;
+    if (closed || entry.closing) throw new Error("Codex Canvas closed during startup.");
+    return server;
+}
+
+const canvas = createCanvas({
+    id: CANVAS_ID,
+    displayName: "Codex Usage Dashboard",
+    description: "Shows local Codex CLI sessions, tokens, context, and rate limits.",
+    open: async ({ instanceId }) => ({
+        title: "Codex usage",
+        url: (await openServer(instanceId)).url,
+    }),
+    onClose: ({ instanceId }) => {
+        const entry = servers.get(instanceId);
+        return entry ? closeInstance(instanceId, entry) : Promise.resolve();
     },
 });
 
-const session = await joinSession({
-    canvases: [
-        canvas,
-    ],
-});
-
+const session = await joinSession({ canvases: [canvas] });
 const openRegisteredCanvas = () => openCanvasInstance(session, {
     canvasId: CANVAS_ID,
     instanceId: randomUUID(),
@@ -84,7 +97,7 @@ const close = () => {
         closed = true;
         closing = Promise.allSettled([
             canvasControl.close(),
-            ...[...servers.values()].map(async opening => (await opening).close()),
+            ...[...servers.entries()].map(([instanceId, entry]) => closeInstance(instanceId, entry)),
         ]).then(() => servers.clear());
     }
     return closing;
