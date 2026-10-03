@@ -23,7 +23,7 @@ test("Canvas closes an unsettled read and leaves a sibling instance healthy", { 
     const source = fileURLToPath(new URL(".", import.meta.url));
     const target = path.join(directory, "src", "codex-dashboard");
     await mkdir(target, { recursive: true });
-    for (const file of ["canvas-control.mjs", "dashboard-server.mjs", "snapshot-worker.mjs", "isolated-snapshot-reader.mjs", "snapshot-reader-process.mjs", "snapshot-reader-thread.mjs", "dashboard.html", "dashboard-ui.mjs", "dashboard-entry.mjs", "codex-icon.svg"]) {
+    for (const file of ["canvas-control.mjs", "dashboard-server.mjs", "snapshot-worker.mjs", "isolated-snapshot-reader.mjs", "snapshot-reader-process.mjs", "snapshot-reader-thread.mjs", "test-process-liveness.mjs", "dashboard.html", "dashboard-ui.mjs", "dashboard-entry.mjs", "codex-icon.svg"]) {
         await cp(path.join(source, file), path.join(target, file));
     }
     await cp(path.join(target, "dashboard-server.mjs"), path.join(target, "dashboard-server-real.mjs"));
@@ -39,15 +39,17 @@ test("Canvas closes an unsettled read and leaves a sibling instance healthy", { 
     `);
     await writeFile(path.join(target, "codex-adapter.mjs"), `
         import { writeFileSync, renameSync } from "node:fs";
+        import { readProcessStartTime } from "./test-process-liveness.mjs";
         export const resolveCodexHome = () => process.env.CODEX_HOME;
         export const createCodexAdapter = () => ({ async getSnapshot(filter) {
+            const processStartTime = await readProcessStartTime(process.pid);
             if (filter.recentWindowMs === 3600000) {
                 const marker = process.env.CODEX_HOME + "/reader.json";
-                writeFileSync(marker + ".tmp", JSON.stringify({ pid: process.pid }));
+                writeFileSync(marker + ".tmp", JSON.stringify({ pid: process.pid, processStartTime }));
                 renameSync(marker + ".tmp", marker);
                 await new Promise(() => {});
             }
-            return { available: true, pid: process.pid };
+            return { available: true, pid: process.pid, processStartTime };
         }});
     `);
     const extensionDirectory = path.join(directory, ".github", "extensions", "codex-usage-dashboard");
@@ -83,7 +85,7 @@ test("Canvas closes an unsettled read and leaves a sibling instance healthy", { 
         }
         assert.ok(marker, "Canvas read did not start");
         if (process.env.CANVAS_FIXTURE_FAILURE) {
-            console.log("owned-readers:" + JSON.stringify([marker.pid, sibling.pid]));
+            console.log("owned-readers:" + JSON.stringify([marker, { pid: sibling.pid, processStartTime: sibling.processStartTime }]));
             if (process.env.CANVAS_FIXTURE_FAILURE === "abrupt") process.exit(42);
             throw new Error("expected fixture assertion failure");
         }
@@ -146,13 +148,13 @@ test("Canvas closes an unsettled read and leaves a sibling instance healthy", { 
         childClosed.catch(() => {});
         const [failedCode] = await childClosed;
         assert.equal(failedCode, failure === "abrupt" ? 42 : 1, output);
-        const marker = output.match(/owned-readers:(\[[0-9,]+\])/);
+        const marker = output.match(/owned-readers:(\[[^\r\n]+\])/);
         assert.ok(marker, output);
-        for (const pid of JSON.parse(marker[1])) {
+        for (const { pid, processStartTime } of JSON.parse(marker[1])) {
             const deadline = Date.now() + 3_000;
             let alive = true;
             do {
-                alive = await isProcessRunning(pid);
+                alive = await isProcessRunning(pid, processStartTime);
                 if (alive) await delay(10);
             } while (alive && Date.now() < deadline);
             assert.equal(alive, false, `fixture reader ${pid} survived ${failure} exit`);

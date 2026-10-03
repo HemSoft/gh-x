@@ -9,18 +9,21 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
 import { createIsolatedSnapshotReader } from "./isolated-snapshot-reader.mjs";
-import { hasRunningProcessState, isProcessRunning } from "./test-process-liveness.mjs";
+import { hasRunningProcessState, isProcessRunning, readProcessStartTime } from "./test-process-liveness.mjs";
+import { createSnapshotWorker, SnapshotBusyError } from "./snapshot-worker.mjs";
+import { createDashboardServer } from "./dashboard-server.mjs";
+import { createDashboardHub } from "../dashboard-hub/hub-server.mjs";
 
 test("process liveness treats Linux zombies and dead states as terminated", async () => {
     assert.equal(hasRunningProcessState("123 (node worker) R 1 0"), true);
     assert.equal(hasRunningProcessState("123 (node (worker)) Z 1 0"), false);
     assert.equal(hasRunningProcessState("123 (node) X 1 0"), false);
     assert.throws(() => hasRunningProcessState("invalid"), /process state/);
-    assert.equal(await isProcessRunning(process.pid), true);
+    const stat = "123 (node worker) R " + Array(18).fill("0").join(" ") + " 1234";
+    assert.equal(hasRunningProcessState(stat, "1234"), true);
+    assert.equal(hasRunningProcessState(stat, "5678"), false, "A recycled PID is not the original reader");
+    assert.equal(await isProcessRunning(process.pid, await readProcessStartTime(process.pid)), true);
 });
-import { createSnapshotWorker, SnapshotBusyError } from "./snapshot-worker.mjs";
-import { createDashboardServer } from "./dashboard-server.mjs";
-import { createDashboardHub } from "../dashboard-hub/hub-server.mjs";
 
 async function fixture(t) {
     const directory = await mkdtemp(path.join(os.tmpdir(), "snapshot-cancellation-"));
@@ -28,13 +31,15 @@ async function fixture(t) {
     await writeFile(modulePath, `
         import { writeFileSync, renameSync } from "node:fs";
         import { isMainThread } from "node:worker_threads";
+        import { readProcessStartTime } from ${JSON.stringify(new URL("./test-process-liveness.mjs", import.meta.url).href)};
         export function createAdapter({ directory }) {
             let reads = 0;
-            return { getSnapshot(filter) {
+            return { async getSnapshot(filter) {
+                const processStartTime = await readProcessStartTime(process.pid);
                 reads++;
                 if ([3600000, 86400000].includes(filter.recentWindowMs)) {
                     const marker = directory + "/" + filter.recentWindowMs + ".json";
-                    writeFileSync(marker + ".tmp", JSON.stringify({ pid: process.pid, computationOnMainThread: isMainThread }));
+                    writeFileSync(marker + ".tmp", JSON.stringify({ pid: process.pid, processStartTime, computationOnMainThread: isMainThread }));
                     renameSync(marker + ".tmp", marker);
                     // A blocked loop cannot observe AbortSignal or IPC messages.
                     while (true) {}
@@ -131,6 +136,7 @@ test("abrupt parent exit stops a reader whose computation blocks its event loop"
     let child;
     let childClosed;
     let readerPid;
+    let readerStartTime;
     let markerPath;
     let readerExited = false;
     let observedExitedPid;
@@ -145,14 +151,18 @@ test("abrupt parent exit stops a reader whose computation blocks its event loop"
             await childClosed?.catch(() => {});
             if (readerExited) return;
             if (!readerPid && markerPath) {
-                try { readerPid = JSON.parse(await readFile(markerPath, "utf8")).pid; }
+                try {
+                    const marker = JSON.parse(await readFile(markerPath, "utf8"));
+                    readerPid = marker.pid;
+                    readerStartTime = marker.processStartTime;
+                }
                 catch (error) { if (error.code !== "ENOENT") throw error; }
             }
-            if (readerPid && await isProcessRunning(readerPid)) {
+            if (readerPid && await isProcessRunning(readerPid, readerStartTime)) {
                 try { process.kill(readerPid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
                 const deadline = Date.now() + 2_000;
                 while (Date.now() < deadline) {
-                    if (!await isProcessRunning(readerPid)) return;
+                    if (!await isProcessRunning(readerPid, readerStartTime)) return;
                     await delay(10);
                 }
                 assert.fail("Test-owned blocked reader did not terminate during cleanup.");
@@ -185,11 +195,12 @@ test("abrupt parent exit stops a reader whose computation blocks its event loop"
     assert.equal(code, 42);
     const blocked = await started(directory, 3_600_000);
     readerPid = blocked.pid;
+    readerStartTime = blocked.processStartTime;
     assert.equal(blocked.computationOnMainThread, false, "Blocked computation must not share the IPC control event loop");
     const deadline = Date.now() + 1_000;
     let alive = true;
     do {
-        alive = await isProcessRunning(readerPid);
+        alive = await isProcessRunning(readerPid, readerStartTime);
         if (alive) await delay(10);
     } while (alive && Date.now() < deadline);
     assert.equal(alive, false, "Blocked reader survived abrupt parent exit");
