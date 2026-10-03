@@ -123,9 +123,17 @@ test("abrupt parent exit stops a reader whose computation blocks its event loop"
     let childClosed;
     let readerPid;
     let markerPath;
+    let readerExited = false;
+    let observedExitedPid;
+    const originalKill = process.kill;
+    process.kill = (pid, signal) => {
+        if (pid === observedExitedPid && signal === "SIGKILL") throw new Error("Refusing to signal an exited reader PID.");
+        return originalKill(pid, signal);
+    };
     t.after(async () => {
         if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
         await childClosed?.catch(() => {});
+        if (readerExited) return;
         if (!readerPid && markerPath) {
             try { readerPid = JSON.parse(await readFile(markerPath, "utf8")).pid; }
             catch (error) { if (error.code !== "ENOENT") throw error; }
@@ -140,6 +148,7 @@ test("abrupt parent exit stops a reader whose computation blocks its event loop"
             assert.fail("Test-owned blocked reader did not terminate during cleanup.");
         }
     });
+    t.after(() => { process.kill = originalKill; });
     const { directory } = await fixture(t);
     markerPath = path.join(directory, "3600000.json");
     const driver = path.join(directory, "abrupt-parent.mjs");
@@ -174,6 +183,8 @@ test("abrupt parent exit stops a reader whose computation blocks its event loop"
         catch (error) { if (error.code !== "ESRCH") throw error; alive = false; }
     } while (alive && Date.now() < deadline);
     assert.equal(alive, false, "Blocked reader survived abrupt parent exit");
+    readerExited = true;
+    observedExitedPid = readerPid;
     readerPid = undefined;
 });
 
