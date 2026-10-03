@@ -123,11 +123,18 @@ export async function startDashboard({
     let refreshPending = false;
     let stopped = false;
 
+    const abortPendingRequests = (message) => {
+        for (const request of pendingRequests) {
+            request.abort(new Error(message));
+        }
+        pendingRequests.clear();
+    };
     const refresh = async () => {
         if (stopped) {
             return;
         }
         const generation = ++refreshGeneration;
+        abortPendingRequests("Dashboard refresh superseded.");
         refreshPending = true;
         try {
             const snapshot = await fetchDashboardSnapshot(
@@ -221,9 +228,7 @@ export async function startDashboard({
         stop() {
             stopped = true;
             clearInterval(refreshTimer);
-            for (const request of pendingRequests) {
-                request.abort(new Error("Dashboard has stopped."));
-            }
+            abortPendingRequests("Dashboard has stopped.");
         },
     };
 }
@@ -245,10 +250,13 @@ async function fetchDashboardSnapshot(fetchImpl, apiUrl, pendingRequests) {
                 cache: "no-store",
                 signal: controller.signal,
             });
+            controller.signal.throwIfAborted();
             if (!response.ok) {
                 throw new Error(`Dashboard request failed with HTTP ${response.status}.`);
             }
-            return response.json();
+            const snapshot = await response.json();
+            controller.signal.throwIfAborted();
+            return snapshot;
         };
         return await Promise.race([request(), aborted]);
     } finally {

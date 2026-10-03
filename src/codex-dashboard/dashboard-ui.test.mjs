@@ -524,6 +524,33 @@ test("startDashboard bounds the initial request and starts recovery polling", as
     assert.equal(fixture.view().sessionId, "startup-recovered");
 });
 
+test("startDashboard cancels superseded explicit refreshes", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const older = fixture.dashboard.refresh();
+    const newer = fixture.dashboard.refresh();
+    await flushRefresh();
+    assert.equal(fixture.requests[1].options.signal.aborted, true);
+    assert.equal(fixture.requests[2].options.signal.aborted, false);
+    await older;
+    fixture.respond(2, refreshSnapshot("current", 300));
+    await newer;
+    assert.equal(fixture.view().sessionId, "current");
+});
+
+test("startDashboard does not parse a response arriving after cancellation", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const pending = fixture.dashboard.refresh();
+    let parsed = 0;
+    fixture.dashboard.stop();
+    fixture.requests[1].resolve({
+        ok: true,
+        json: async () => { parsed++; return refreshSnapshot("abandoned", 900); },
+    });
+    await pending;
+    await flushRefresh();
+    assert.equal(parsed, 0);
+});
+
 test("startDashboard preserves theme, zoom and filter controls", async (t) => {
     const fixture = await startRefreshFixture(t);
     assert.equal(fixture.element("theme").value, "system");

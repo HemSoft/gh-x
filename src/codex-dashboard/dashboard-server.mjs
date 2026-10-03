@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 
+import { createSnapshotWorker, SnapshotBusyError } from "./snapshot-worker.mjs";
+
 const dashboardPath = fileURLToPath(new URL("./dashboard.html", import.meta.url));
 const dashboardUiPath = fileURLToPath(new URL("./dashboard-ui.mjs", import.meta.url));
 const dashboardEntryPath = fileURLToPath(new URL("./dashboard-entry.mjs", import.meta.url));
@@ -27,6 +29,7 @@ export async function createDashboardServer({
         throw new TypeError("getSnapshot is required.");
     }
 
+    const readSnapshot = createSnapshotWorker(getSnapshot);
     const basePath = `/${token}`;
     const apiPath = `${basePath}/api/usage`;
     const [htmlTemplate, dashboardUi, dashboardEntry, codexIcon] = await Promise.all([
@@ -79,14 +82,14 @@ export async function createDashboardServer({
                     sendJson(response, 400, { error: filter.error });
                     return;
                 }
-                sendJson(response, 200, await getSnapshot(filter.value));
+                sendJson(response, 200, await readSnapshot(filter.value));
             } catch (error) {
-                sendJson(response, 500, {
+                sendJson(response, error instanceof SnapshotBusyError ? 503 : 500, {
                     available: false,
                     source: "codex-local",
                     lastRefreshAt: new Date().toISOString(),
                     diagnostics: {
-                        code: "dashboard_snapshot_failed",
+                        code: error instanceof SnapshotBusyError ? error.code : "dashboard_snapshot_failed",
                         message: error?.message || "Unable to refresh Codex usage.",
                     },
                 });

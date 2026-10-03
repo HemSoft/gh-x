@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createSnapshotWorker, SnapshotBusyError } from "../codex-dashboard/snapshot-worker.mjs";
+
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const codexDirectory = path.resolve(moduleDirectory, "..", "codex-dashboard");
 const recentWindows = new Set([
@@ -72,6 +74,8 @@ export async function createDashboardHub({
         throw new TypeError("codexAdapter and copilotAdapter are required.");
     }
 
+    const readCodexSnapshot = createSnapshotWorker(filter => codexAdapter.getSnapshot(filter));
+    const readCopilotSnapshot = createSnapshotWorker(filter => copilotAdapter.getSnapshot(filter));
     const copilotDirectory = copilotAdapter.extensionDirectory;
     const [landing, codexHtmlTemplate, codexUi, codexEntry, codexIcon,
         copilotHtmlTemplate, copilotUi] = await Promise.all([
@@ -142,7 +146,7 @@ export async function createDashboardHub({
             return;
         }
         if (pathname === "/codex/api/usage") {
-            await sendSnapshot(response, codexAdapter, url.searchParams);
+            await sendSnapshot(response, readCodexSnapshot, url.searchParams);
             return;
         }
         if (pathname === "/copilot/") {
@@ -154,7 +158,7 @@ export async function createDashboardHub({
             return;
         }
         if (pathname === "/copilot/api/usage") {
-            await sendSnapshot(response, copilotAdapter, url.searchParams);
+            await sendSnapshot(response, readCopilotSnapshot, url.searchParams);
             return;
         }
         sendJson(response, 404, { error: "Not found." });
@@ -185,21 +189,21 @@ function stripServePrefix(pathname) {
         : pathname;
 }
 
-async function sendSnapshot(response, adapter, searchParams) {
+async function sendSnapshot(response, readSnapshot, searchParams) {
     const filter = parseFilter(searchParams);
     if (filter.error) {
         sendJson(response, 400, { error: filter.error });
         return;
     }
     try {
-        sendJson(response, 200, await adapter.getSnapshot(filter.value));
+        sendJson(response, 200, await readSnapshot(filter.value));
     } catch (error) {
-        sendJson(response, 500, {
+        sendJson(response, error instanceof SnapshotBusyError ? 503 : 500, {
             available: false,
             source: "unavailable",
             lastRefreshAt: new Date().toISOString(),
             diagnostics: {
-                code: "dashboard_snapshot_failed",
+                code: error instanceof SnapshotBusyError ? error.code : "dashboard_snapshot_failed",
                 message: error?.message || "Unable to refresh dashboard usage.",
             },
         });
