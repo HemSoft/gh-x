@@ -22,7 +22,7 @@ test("Canvas closes an unsettled read and leaves a sibling instance healthy", { 
     const source = fileURLToPath(new URL(".", import.meta.url));
     const target = path.join(directory, "src", "codex-dashboard");
     await mkdir(target, { recursive: true });
-    for (const file of ["canvas-control.mjs", "dashboard-server.mjs", "snapshot-worker.mjs", "isolated-snapshot-reader.mjs", "snapshot-reader-process.mjs", "dashboard.html", "dashboard-ui.mjs", "dashboard-entry.mjs", "codex-icon.svg"]) {
+    for (const file of ["canvas-control.mjs", "dashboard-server.mjs", "snapshot-worker.mjs", "isolated-snapshot-reader.mjs", "snapshot-reader-process.mjs", "snapshot-reader-thread.mjs", "dashboard.html", "dashboard-ui.mjs", "dashboard-entry.mjs", "codex-icon.svg"]) {
         await cp(path.join(source, file), path.join(target, file));
     }
     await cp(path.join(target, "dashboard-server.mjs"), path.join(target, "dashboard-server-real.mjs"));

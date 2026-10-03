@@ -18,13 +18,14 @@ async function fixture(t) {
     const modulePath = path.join(directory, "adapter.mjs");
     await writeFile(modulePath, `
         import { writeFileSync, renameSync } from "node:fs";
+        import { isMainThread } from "node:worker_threads";
         export function createAdapter({ directory }) {
             let reads = 0;
             return { getSnapshot(filter) {
                 reads++;
                 if ([3600000, 86400000].includes(filter.recentWindowMs)) {
                     const marker = directory + "/" + filter.recentWindowMs + ".json";
-                    writeFileSync(marker + ".tmp", JSON.stringify({ pid: process.pid }));
+                    writeFileSync(marker + ".tmp", JSON.stringify({ pid: process.pid, computationOnMainThread: isMainThread }));
                     renameSync(marker + ".tmp", marker);
                     // A blocked loop cannot observe AbortSignal or IPC messages.
                     while (true) {}
@@ -115,6 +116,65 @@ test("IPC serialization failure retires its process instead of leaking a slot", 
     const invalid = {}; invalid.self = invalid;
     await assert.rejects(reader(invalid), /circular/i);
     assert.equal((await reader({})).available, true);
+});
+
+test("abrupt parent exit stops a reader whose computation blocks its event loop", { timeout: 10_000 }, async t => {
+    let child;
+    let childClosed;
+    let readerPid;
+    let markerPath;
+    t.after(async () => {
+        if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await childClosed?.catch(() => {});
+        if (!readerPid && markerPath) {
+            try { readerPid = JSON.parse(await readFile(markerPath, "utf8")).pid; }
+            catch (error) { if (error.code !== "ENOENT") throw error; }
+        }
+        if (readerPid) {
+            try { process.kill(readerPid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+            const deadline = Date.now() + 2_000;
+            while (Date.now() < deadline) {
+                try { process.kill(readerPid, 0); await delay(10); }
+                catch (error) { if (error.code !== "ESRCH") throw error; return; }
+            }
+            assert.fail("Test-owned blocked reader did not terminate during cleanup.");
+        }
+    });
+    const { directory } = await fixture(t);
+    markerPath = path.join(directory, "3600000.json");
+    const driver = path.join(directory, "abrupt-parent.mjs");
+    await writeFile(driver, `
+        import { readFile } from "node:fs/promises";
+        import { setTimeout as delay } from "node:timers/promises";
+        import { createIsolatedSnapshotReader } from ${JSON.stringify(new URL("./isolated-snapshot-reader.mjs", import.meta.url).href)};
+        const directory = ${JSON.stringify(directory)};
+        const reader = createIsolatedSnapshotReader({
+            moduleUrl: ${JSON.stringify(pathToFileURL(path.join(directory, "adapter.mjs")).href)},
+            factoryName: "createAdapter", options: { directory },
+        });
+        reader({ recentWindowMs: 3600000 }).catch(() => {});
+        while (true) {
+            try { await readFile(directory + "/3600000.json"); break; }
+            catch (error) { if (error.code !== "ENOENT") throw error; await delay(10); }
+        }
+        process.exit(42);
+    `);
+    child = spawn(process.execPath, [driver], { stdio: ["ignore", "ignore", "ignore"] });
+    childClosed = once(child, "close");
+    childClosed.catch(() => {});
+    const [code] = await childClosed;
+    assert.equal(code, 42);
+    const blocked = await started(directory, 3_600_000);
+    readerPid = blocked.pid;
+    assert.equal(blocked.computationOnMainThread, false, "Blocked computation must not share the IPC control event loop");
+    const deadline = Date.now() + 1_000;
+    let alive = true;
+    do {
+        try { process.kill(readerPid, 0); await delay(10); }
+        catch (error) { if (error.code !== "ESRCH") throw error; alive = false; }
+    } while (alive && Date.now() < deadline);
+    assert.equal(alive, false, "Blocked reader survived abrupt parent exit");
+    readerPid = undefined;
 });
 
 test("idle shutdown keeps the process alive until reader cleanup completes", { timeout: 10_000 }, async t => {

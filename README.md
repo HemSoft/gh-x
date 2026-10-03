@@ -608,7 +608,9 @@ child processes, with at most two readers per provider or Canvas instance.
 Healthy readers stay warm to reuse their caches. A disconnected request or 30-second read deadline stops its
 reader process; capacity is released only after that process exits. New
 refreshes can then start even if an older reader ignored cancellation or
-blocked its event loop. Server shutdown also stops active and idle readers.
+blocked its event loop. Server shutdown also stops active and idle readers. Each process keeps its IPC
+control loop separate from the computation thread. If its parent dies, that
+control loop terminates the whole reader process even when computation blocks.
 Injected readers used by tests must honor the supplied `AbortSignal`; merely
 abandoning their promise does not free capacity.
 

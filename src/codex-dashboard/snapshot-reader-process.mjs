@@ -1,18 +1,21 @@
-let adapter;
+import { SHARE_ENV, Worker } from "node:worker_threads";
 
-process.on("disconnect", () => process.exit(0));
-process.on("message", async ({ id, moduleUrl, factoryName, options, filter }) => {
+// Never load provider code on this control loop. A blocked computation must
+// not prevent parent-death notification from terminating the whole process.
+const terminate = () => process.kill(process.pid, "SIGKILL");
+process.on("disconnect", terminate);
+const reader = new Worker(new URL("./snapshot-reader-thread.mjs", import.meta.url), { env: SHARE_ENV });
+reader.on("error", terminate);
+reader.on("exit", code => process.exit(code || 1));
+reader.on("message", message => {
+    if (!process.connected) { terminate(); return; }
     try {
-        if (!adapter) {
-            const module = await import(moduleUrl);
-            adapter = module[factoryName](options);
-        }
-        const snapshot = await adapter.getSnapshot(filter);
-        process.send({ id, snapshot });
-    } catch (error) {
-        process.send({ id, error: {
-            message: error?.message || "Unable to read dashboard snapshot.",
-            code: error?.code || "dashboard_snapshot_failed",
-        } });
+        process.send(message, error => { if (error) terminate(); });
+    } catch {
+        terminate();
     }
+});
+process.on("message", message => {
+    try { reader.postMessage(message); }
+    catch { terminate(); }
 });
