@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.14.6] - 2026-10-04
+
+- fix: verify dashboard hub Tailscale publication (#167)
+- docs: record v0.14.5 release (#166)
+
 ## [0.14.5] - 2026-10-04
 
 - fix: prevent stale dashboard refreshes (#165)
@@ -250,7 +255,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.14.5...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.14.6...HEAD
+[0.14.6]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.6
 [0.14.5]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.5
 [0.14.4]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.4
 [0.14.3]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.3
