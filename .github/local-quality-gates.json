@@ -30,6 +30,7 @@
     { "id": "performance", "tools": ["go", "node", "git"], "needs": [], "ci": ["performance/Detect performance workload changes", "performance/Measure critical local paths"] }
   ],
   "hosted": [
+    { "step": "windows-installer/Test Windows PowerShell installer", "reason": "Requires the hosted Windows PowerShell 5.1 runtime; a Linux local audit cannot qualify it. The same offline fixtures also run locally under Windows when available." },
     { "step": "security-analysis/Initialize CodeQL", "reason": "GitHub-hosted CodeQL setup; local audit never uploads source or security results." },
     { "step": "security-analysis/Analyze with CodeQL", "reason": "Require the current-revision GitHub CodeQL checks; not qualified by local success." },
     { "step": "dependency-review/Review dependency changes", "reason": "Requires a GitHub pull-request dependency diff and the Dependency Review Action." },

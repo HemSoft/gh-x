@@ -111,6 +111,9 @@ function Get-AuditActions {
             param($c)
             Invoke-CheckedCommand 'audit executor tests' 'pwsh' @('-NoProfile', '-File', '.agents/skills/perfection/scripts/test-audit.ps1')
             Invoke-CheckedCommand 'offline dashboard installer tests' 'pwsh' @('-NoProfile', '-File', 'tests/installer/test-dashboard-hub.ps1')
+            if ($IsWindows) {
+                Invoke-CheckedCommand 'Windows PowerShell installer tests' 'pwsh' @('-NoProfile', '-File', 'tests/installer/test-dashboard-hub.ps1', '-InstallerPowerShell', "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe")
+            }
         }
         'format' = { param($c) Invoke-NoOutputCommand 'formatting' 'gofmt' @('-l', '.') }
         'tidy' = { param($c) Invoke-CheckedCommand 'module tidiness' 'go' @('mod', 'tidy', '-diff') }

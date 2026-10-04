@@ -27,6 +27,9 @@ function Invoke-Tailscale {
     $start.RedirectStandardInput = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
+    $start.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $start.StandardErrorEncoding = [Text.Encoding]::UTF8
+    $start.CreateNoWindow = $true
     $process = $null
     try {
         $process = [Diagnostics.Process]::Start($start)
@@ -36,7 +39,9 @@ function Invoke-Tailscale {
         if (-not $process.WaitForExit(30000)) {
             $process.Kill()
             $process.WaitForExit()
-            throw "Tailscale $Operation timed out after 30 seconds; completion is unverified."
+            $null = $stdout.GetAwaiter().GetResult()
+            $partialError = $stderr.GetAwaiter().GetResult().Trim()
+            throw "Tailscale $Operation timed out after 30 seconds; completion is unverified. $partialError"
         }
         $output = $stdout.GetAwaiter().GetResult()
         $errorText = $stderr.GetAwaiter().GetResult()
@@ -58,13 +63,30 @@ function Get-OptionalProperty {
     return $null
 }
 
+function Test-PlainTcpForward {
+    param($Handler, [string]$Target)
+    if ($Handler -isnot [pscustomobject]) { return $false }
+    foreach ($property in $Handler.PSObject.Properties) {
+        switch ($property.Name) {
+            'TCPForward' { if ($property.Value -isnot [string] -or $property.Value -cne $Target) { return $false } }
+            { $_ -in @('HTTP', 'HTTPS') } { if ($property.Value -isnot [bool] -or $property.Value) { return $false } }
+            'TerminateTLS' { if ($property.Value -isnot [string] -or $property.Value.Length) { return $false } }
+            'ProxyProtocol' { if (($property.Value -isnot [int] -and $property.Value -isnot [long]) -or $property.Value -ne 0) { return $false } }
+            default { return $false }
+        }
+    }
+    return (Get-OptionalProperty $Handler 'TCPForward') -ceq $Target
+}
+
 $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existingTask) {
     $owned = $false
     try {
         $actions = @($existingTask.Actions)
         if ($actions.Count -eq 1) {
-            $file = [regex]::Match([string]$actions[0].Arguments, '(?i)(?:^|\s)-File\s+(?:"([^"]+)"|''([^'']+)''|(\S+))(?:\s|$)')
+            # Accept a real -File invocation, not launcher text embedded in -Command.
+            $prefix = '(?:(?:-NoProfile|-NonInteractive)\s+|(?:-WindowStyle\s+(?:Hidden|Normal|Minimized|Maximized)|-ExecutionPolicy\s+(?:Bypass|RemoteSigned|AllSigned|Restricted|Unrestricted|Default))\s+)*'
+            $file = [regex]::Match([string]$actions[0].Arguments, '(?i)^\s*' + $prefix + '-File\s+(?:"([^"]+)"|''([^'']+)''|(\S+))(?:\s|$)')
             $scriptPath = ($file.Groups | Select-Object -Skip 1 | Where-Object Success | Select-Object -First 1).Value
             $principal = [string]$existingTask.Principal.UserId
             $sameUser = $principal -eq $userId
@@ -103,16 +125,44 @@ if ($tailnetIp -notmatch '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$' -or
 }
 
 $configOutput = Invoke-Tailscale 'Serve configuration' @('serve', 'status', '--json')
+$foregroundConfigs = @()
 try {
     $config = $configOutput | ConvertFrom-Json -ErrorAction Stop
     if ($null -ne $config -and $config -isnot [pscustomobject]) { throw 'Expected an object' }
     $tcp = Get-OptionalProperty $config 'TCP'
     $web = Get-OptionalProperty $config 'Web'
-    foreach ($value in @($tcp, $web)) {
+    $funnel = Get-OptionalProperty $config 'AllowFunnel'
+    foreach ($value in @($tcp, $web, $funnel)) {
         if ($null -ne $value -and $value -isnot [pscustomobject]) { throw 'Expected protocol maps' }
     }
+    if ($null -ne $funnel) {
+        foreach ($entry in $funnel.PSObject.Properties) {
+            if ($entry.Value -isnot [bool]) { throw 'Expected boolean Funnel values' }
+        }
+    }
+    $foreground = Get-OptionalProperty $config 'Foreground'
+    if ($null -ne $foreground -and $foreground -isnot [pscustomobject]) { throw 'Expected foreground map' }
+    if ($null -ne $foreground) {
+        foreach ($session in $foreground.PSObject.Properties) {
+            if ($session.Value -isnot [pscustomobject]) { throw 'Expected foreground configuration' }
+            $foregroundTcp = Get-OptionalProperty $session.Value 'TCP'
+            $foregroundWeb = Get-OptionalProperty $session.Value 'Web'
+            $foregroundFunnel = Get-OptionalProperty $session.Value 'AllowFunnel'
+            foreach ($map in @($foregroundTcp, $foregroundWeb, $foregroundFunnel)) {
+                if ($null -ne $map -and $map -isnot [pscustomobject]) { throw 'Expected foreground protocol map' }
+            }
+            $foregroundConfigs += [pscustomobject]@{ TCP = $foregroundTcp; Web = $foregroundWeb; Funnel = $foregroundFunnel }
+        }
+    }
 } catch { throw 'Tailscale Serve configuration is invalid; no publication was attempted.' }
-$funnel = Get-OptionalProperty $config 'AllowFunnel'
+foreach ($session in $foregroundConfigs) {
+    $ports = if ($null -ne $session.TCP) { @($session.TCP.PSObject.Properties.Name) } else { @() }
+    if ('80' -in $ports -or '443' -in $ports -or
+        $null -ne (Get-OptionalProperty $session.Web "${dnsName}:443") -or
+        $null -ne (Get-OptionalProperty $session.Funnel "${dnsName}:443")) {
+        throw 'Tailscale foreground Serve already claims a requested port or host; nothing was changed. Finish that foreground session before installation.'
+    }
+}
 if ((Get-OptionalProperty $funnel "${dnsName}:443") -eq $true) {
     throw 'Tailscale HTTPS port 443 is already public through Funnel; nothing was changed.'
 }
@@ -121,7 +171,7 @@ if ($null -ne $httpsPort -and (Get-OptionalProperty $httpsPort 'HTTPS') -ne $tru
     throw 'Tailscale port 443 is already used by another Serve target; nothing was changed.'
 }
 $tcpPort = Get-OptionalProperty $tcp '80'
-if ($null -ne $tcpPort -and (Get-OptionalProperty $tcpPort 'TCPForward') -ne "127.0.0.1:$Port") {
+if ($null -ne $tcpPort -and -not (Test-PlainTcpForward $tcpPort "127.0.0.1:$Port")) {
     throw 'Tailscale TCP port 80 is already used by another Serve target; nothing was changed.'
 }
 $hostConfig = Get-OptionalProperty $web "${dnsName}:443"

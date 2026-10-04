@@ -629,11 +629,15 @@ HTTP fallback when that client cannot resolve MagicDNS. Neither route is
 exposed to the LAN or public internet.
 
 Each Tailscale operation must succeed within 30 seconds. A failed command names
-the operation and exit code. If HTTPS succeeds but TCP fails, installation
+the operation and exit code. A timeout reports unverified completion and keeps
+captured stderr for diagnosis. If HTTPS succeeds but TCP fails, installation
 returns a nonzero result and reports that HTTPS and the logon task remain.
 Correct the named failure and rerun the installer. It never resets Serve or
 deletes scheduled tasks during recovery. Unrelated mounts remain; conflicting
 `/dashboards`, port 80 or non-HTTPS port 443 targets cause preflight to fail.
+Active foreground sessions on those ports or this HTTPS host also fail
+preflight. A matching TCP destination is accepted only as a plain forward;
+TLS termination, PROXY protocol and unknown handler settings are not overwritten.
 Port 443 with public Funnel access also fails preflight; the installer neither
 publishes private usage through it nor disables unrelated public routes.
 A same-named task is updated only when its sole action runs this exact launcher
@@ -650,7 +654,8 @@ pwsh -NoProfile -File tests/installer/test-dashboard-hub.ps1
 ```
 
 These tests use a native command double and scheduler mocks. They never contact
-Tailscale services or register real tasks. On Windows, the same fixtures can
+Tailscale services or register real tasks. Required CI checks run PowerShell 7
+on Ubuntu and Windows PowerShell 5.1 on Windows. On Windows, the same fixtures can
 also exercise the Windows PowerShell 5.1 launcher:
 
 ```powershell

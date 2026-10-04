@@ -82,6 +82,18 @@ jobs:
           path: coverage.out
           retention-days: 1
 
+  windows-installer:
+    name: Dashboard installer (Windows PowerShell 5.1)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+      - name: Test Windows PowerShell installer
+        shell: pwsh
+        run: ./tests/installer/test-dashboard-hub.ps1 -InstallerPowerShell "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe"
+
   # ── Lint ───────────────────────────────────────────────────────
   lint:
     name: Lint
@@ -501,7 +513,7 @@ jobs:
     name: Quality Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [build-and-test, lint, quality, mutation, security-analysis, dependency-review, codex-review, performance]
+    needs: [build-and-test, windows-installer, lint, quality, mutation, security-analysis, dependency-review, codex-review, performance]
     steps:
       - name: Evaluate all gates
         env:
@@ -511,6 +523,7 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           echo "Build & Test: ${{ needs.build-and-test.result }}"
+          echo "Windows 5.1:  ${{ needs.windows-installer.result }}"
           echo "Lint:         ${{ needs.lint.result }}"
           echo "Quality:      ${{ needs.quality.result }}"
           echo "Mutation:     ${{ needs.mutation.result }}"
@@ -520,6 +533,7 @@ jobs:
           echo "Performance:  ${{ needs.performance.result }}"
 
           if [[ "${{ needs.build-and-test.result }}" != "success" || \
+                "${{ needs.windows-installer.result }}" != "success" || \
                 "${{ needs.lint.result }}" != "success" || \
                 "${{ needs.quality.result }}" != "success" || \
                 "${{ needs.mutation.result }}" != "success" || \

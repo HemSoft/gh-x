@@ -1,5 +1,5 @@
 # Offline integration tests of the real installer. No Pester, Tailscale daemon or scheduler access.
-param([string]$InstallerPath, [string]$InstallerPowerShell)
+param([string]$InstallerPath, [string]$InstallerPowerShell, [string]$CaseName)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
@@ -20,8 +20,8 @@ try {
     $source = Join-Path $fixture 'native.go'
     @'
 package main
-import ("encoding/json"; "fmt"; "os"; "strings")
-type reply struct { Output string; Exit int }
+import ("encoding/json"; "fmt"; "os"; "strings"; "time")
+type reply struct { Output string; Error string; Exit int; Delay int }
 type config struct { Replies map[string]reply; DNS string; IP string; Serve map[string]interface{} }
 func main() {
     root := os.Getenv("HUB_INSTALL_FIXTURE")
@@ -38,6 +38,8 @@ func main() {
     log, err := os.OpenFile(root + "/native-calls.jsonl", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); if err != nil { panic(err) }
     if err = json.NewEncoder(log).Encode(args); err != nil { panic(err) }; if err = log.Close(); err != nil { panic(err) }
     r, ok := c.Replies[key]; if !ok { fmt.Fprintln(os.Stderr, "unknown native operation"); os.Exit(99) }
+    if r.Error != "" { fmt.Fprintln(os.Stderr, r.Error) }
+    if r.Delay != 0 { time.Sleep(time.Duration(r.Delay) * time.Millisecond) }
     if r.Exit != 0 { fmt.Fprintln(os.Stderr, "fixture native failure: " + key); os.Exit(r.Exit) }
     if key == "https" || key == "tcp" {
         // Model the observable effect of scoped Serve writes, including destructive reset.
@@ -78,14 +80,30 @@ func main() {
         @{ Name = 'human task same basename'; Existing = 'other-path'; Error = 'Scheduled task'; Calls = 0 },
         @{ Name = 'human task other principal'; Existing = 'other-user'; Error = 'Scheduled task'; Calls = 0 },
         @{ Name = 'human task extra action'; Existing = 'extra-action'; Error = 'Scheduled task'; Calls = 0 },
+        @{ Name = 'human task Command text'; Existing = 'command-text'; Error = 'Scheduled task'; Calls = 0 },
+        @{ Name = 'human task encoded command'; Existing = 'encoded-command'; Error = 'Scheduled task'; Calls = 0 },
         @{ Name = 'human HTTPS mount'; Collision = 'https'; Error = 'HTTPS.*already'; Calls = 3 },
         @{ Name = 'human TCP target'; Collision = 'tcp'; Error = 'TCP.*already'; Calls = 3 },
+        @{ Name = 'TCP TLS termination'; Collision = 'tcp-tls'; Error = 'TCP.*already'; Calls = 3 },
+        @{ Name = 'TCP proxy protocol'; Collision = 'tcp-proxy'; Error = 'TCP.*already'; Calls = 3 },
+        @{ Name = 'foreground port 443'; Collision = 'foreground-443'; Error = 'foreground Serve'; Calls = 3 },
+        @{ Name = 'foreground port 80'; Collision = 'foreground-80'; Error = 'foreground Serve'; Calls = 3 },
+        @{ Name = 'foreground web handler'; Collision = 'foreground-web'; Error = 'foreground Serve'; Calls = 3 },
+        @{ Name = 'unknown foreground shape'; Collision = 'foreground-shape'; Error = 'Serve configuration'; Calls = 3 },
         @{ Name = 'human port 443'; Collision = '443'; Error = '443.*already'; Calls = 3 },
         @{ Name = 'public Funnel port'; Collision = 'funnel'; Error = '443.*already public'; Calls = 3 },
+        @{ Name = 'unknown Funnel shape'; Collision = 'funnel-shape'; Error = 'Serve configuration'; Calls = 3 },
+        @{ Name = 'unknown Funnel value'; Collision = 'funnel-value'; Error = 'Serve configuration'; Calls = 3 },
+        @{ Name = 'UTF8 native error'; Reply = 'https'; Exit = 47; NativeError = ([string][char]0x00E9 + 'chec ' + [char]0x03BB); Error = 'HTTPS Serve.*47'; Calls = 4; Registered = 1 },
+        @{ Name = 'timeout native diagnostic'; Reply = 'https'; Delay = 31000; NativeError = 'fixture pre-timeout diagnostic'; Error = 'HTTPS Serve.*timed out.*completion is unverified'; Calls = 4; Registered = 1 },
         @{ Name = 'success first host'; Success = $true; Calls = 5; Registered = 1; Https = $true },
         @{ Name = 'success second host'; DNS = 'second-device.tailfixture.ts.net.'; Success = $true; Calls = 5; Registered = 1; Https = $true },
         @{ Name = 'same owned task and routes'; Existing = 'owned'; Collision = 'owned'; Success = $true; Calls = 5; Registered = 1; Https = $true }
     )
+    if ($CaseName) {
+        $cases = @($cases | Where-Object Name -EQ $CaseName)
+        if (-not $cases.Count) { throw "Unknown case: $CaseName" }
+    }
     foreach ($case in $cases) {
         $folder = Join-Path $fixture ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $folder | Out-Null
@@ -104,8 +122,16 @@ if (-not $NoBrowser -or $Port -ne 4765) { throw 'Unexpected launcher arguments' 
             switch ($case.Collision) {
                 'https' { $serve.Web[$hostKey].Handlers['/dashboards'] = @{ Proxy = 'http://127.0.0.1:9002' } }
                 'tcp' { $serve.TCP['80'] = @{ TCPForward = '127.0.0.1:9003' } }
+                'tcp-tls' { $serve.TCP['80'] = @{ TCPForward = '127.0.0.1:4765'; TerminateTLS = 'human.tailfixture.ts.net' } }
+                'tcp-proxy' { $serve.TCP['80'] = @{ TCPForward = '127.0.0.1:4765'; ProxyProtocol = 1 } }
+                'foreground-443' { $serve['Foreground'] = @{ session = @{ TCP = @{ '443' = @{ HTTPS = $true } } } } }
+                'foreground-80' { $serve['Foreground'] = @{ session = @{ TCP = @{ '80' = @{ TCPForward = '127.0.0.1:9005' } } } } }
+                'foreground-web' { $serve['Foreground'] = @{ session = @{ Web = @{ $hostKey = @{ Handlers = @{ '/' = @{ Proxy = 'http://127.0.0.1:9006' } } } } } } }
+                'foreground-shape' { $serve['Foreground'] = 'unknown' }
                 '443' { $serve.TCP['443'] = @{ TCPForward = '127.0.0.1:9004' } }
                 'funnel' { $serve['AllowFunnel'] = @{ $hostKey = $true } }
+                'funnel-shape' { $serve['AllowFunnel'] = 'unknown' }
+                'funnel-value' { $serve['AllowFunnel'] = @{ $hostKey = 'unknown' } }
                 'owned' {
                     $serve.Web[$hostKey].Handlers['/dashboards'] = @{ Proxy = 'http://127.0.0.1:4765' }
                     $serve.TCP['80'] = @{ TCPForward = '127.0.0.1:4765' }
@@ -122,6 +148,8 @@ if (-not $NoBrowser -or $Port -ne 4765) { throw 'Unexpected launcher arguments' 
         if ($case.ContainsKey('Reply')) {
             if ($case.ContainsKey('Exit')) { $config.Replies[$case.Reply].Exit = $case.Exit }
             if ($case.ContainsKey('Output')) { $config.Replies[$case.Reply].Output = $case.Output }
+            if ($case.ContainsKey('NativeError')) { $config.Replies[$case.Reply]['Error'] = $case.NativeError }
+            if ($case.ContainsKey('Delay')) { $config.Replies[$case.Reply]['Delay'] = $case.Delay }
         }
         if ($case.Name -eq 'both Serve calls fail') { $config.Replies.tcp.Exit = 42 }
         $config | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $folder 'native.json') -Encoding utf8
@@ -129,7 +157,10 @@ if (-not $NoBrowser -or $Port -ne 4765) { throw 'Unexpected launcher arguments' 
         if ($case.ContainsKey('Existing')) {
             $path = if ($case.Existing -eq 'other-path') { Join-Path $fixture 'human/run-dashboard-hub.ps1' } else { Join-Path $folder 'run-dashboard-hub.ps1' }
             $user = if ($case.Existing -eq 'other-user') { 'FIXTUREDOMAIN\human' } else { 'FIXTUREDOMAIN\fixture-user' }
-            $action = @{ Execute = $powerShell; Arguments = "-NoProfile -File `"$path`" -Port 4765 -NoBrowser" }
+            $arguments = "-NoProfile -File `"$path`" -Port 4765 -NoBrowser"
+            if ($case.Existing -eq 'command-text') { $arguments = "-Command Write-Output 'placeholder -File `"$path`" -Port 4765 -NoBrowser'" }
+            if ($case.Existing -eq 'encoded-command') { $arguments = "-EncodedCommand ZQBjAGgAbwA= -File `"$path`"" }
+            $action = @{ Execute = $powerShell; Arguments = $arguments }
             $existing = @{ Actions = @($action); Principal = @{ UserId = $user } }
             if ($case.Existing -eq 'extra-action') { $existing.Actions += @{ Execute = 'human.exe'; Arguments = '' } }
         }
@@ -138,6 +169,7 @@ if (-not $NoBrowser -or $Port -ne 4765) { throw 'Unexpected launcher arguments' 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(1252)
 $env:HUB_INSTALL_FIXTURE = $PSScriptRoot
 $env:USERDOMAIN = 'FIXTUREDOMAIN'
 $env:USERNAME = 'fixture-user'
@@ -160,7 +192,7 @@ function Register-ScheduledTask {
     @{ TaskName = $TaskName; Action = $Action; Principal = $Principal } | ConvertTo-Json -Depth 8 -Compress | Add-Content (Join-Path $PSScriptRoot 'scheduler.jsonl')
 }
 try { & (Join-Path $PSScriptRoot 'install-dashboard-hub.ps1'); exit 0 }
-catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+catch { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
 '@ | Set-Content (Join-Path $folder 'wrapper.ps1') -Encoding utf8
         $process = $null
         try {
@@ -168,11 +200,14 @@ catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
             $start.UseShellExecute = $false
             $start.RedirectStandardOutput = $true
             $start.RedirectStandardError = $true
+            $start.StandardOutputEncoding = [Text.Encoding]::UTF8
+            $start.StandardErrorEncoding = [Text.Encoding]::UTF8
+            $start.CreateNoWindow = $true
             foreach ($argument in @('-NoProfile', '-File', (Join-Path $folder 'wrapper.ps1'))) { $start.ArgumentList.Add($argument) }
             $process = [Diagnostics.Process]::Start($start)
             $stdout = $process.StandardOutput.ReadToEndAsync()
             $stderr = $process.StandardError.ReadToEndAsync()
-            if (-not $process.WaitForExit(30000)) { $process.Kill($true); $process.WaitForExit(); throw 'Offline installer timed out' }
+            if (-not $process.WaitForExit(45000)) { $process.Kill($true); $process.WaitForExit(); throw 'Offline installer timed out' }
             $output = $stdout.GetAwaiter().GetResult()
             $errorText = $stderr.GetAwaiter().GetResult()
             $calls = @(if (Test-Path (Join-Path $folder 'native-calls.jsonl')) {
@@ -182,6 +217,7 @@ catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
             $expectedRegistrations = if ($case.ContainsKey('Registered')) { $case.Registered } else { 0 }
             if ($case.ContainsKey('Success')) { Assert-Test ($process.ExitCode -eq 0) "Expected success, got $errorText" }
             else { Assert-Test ($process.ExitCode -ne 0 -and $errorText -match $case.Error) "Expected failing operation '$($case.Error)', exit $($process.ExitCode): $errorText" }
+            if ($case.ContainsKey('NativeError')) { Assert-Test ($errorText.Contains($case.NativeError)) 'Native diagnostic bytes were lost or misdecoded' }
             Assert-Test ($calls.Count -eq $case.Calls) "Expected $($case.Calls) native calls, got $($calls.Count)"
             Assert-Test ($registrations.Count -eq $expectedRegistrations) 'Scheduler mutation count differs'
             Assert-Test ($output -notmatch 'desktop-phubt5b') 'Hard-coded hostname survived'
