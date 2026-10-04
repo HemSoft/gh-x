@@ -107,7 +107,11 @@ function Get-AuditActions {
         'helper-tests' = { param($c) Invoke-CheckedCommand 'release automation helpers' 'go' @('test', '-race', '-count=1', './.github/scripts/...') }
         'behavior-tests' = { param($c) Invoke-CheckedCommand 'CLI behavior' 'go' @('test', '-trimpath', '-race', '-count=1', './tests/behavior') }
         'dashboard-tests' = { param($c) Invoke-CheckedCommand 'Node dashboards' 'node' @('--test', 'src/codex-dashboard/*.test.mjs', 'src/dashboard-hub/*.test.mjs') }
-        'runner-tests' = { param($c) Invoke-CheckedCommand 'audit executor tests' 'pwsh' @('-NoProfile', '-File', '.agents/skills/perfection/scripts/test-audit.ps1') }
+        'runner-tests' = {
+            param($c)
+            Invoke-CheckedCommand 'audit executor tests' 'pwsh' @('-NoProfile', '-File', '.agents/skills/perfection/scripts/test-audit.ps1')
+            Invoke-CheckedCommand 'offline dashboard installer tests' 'pwsh' @('-NoProfile', '-File', 'tests/installer/test-dashboard-hub.ps1')
+        }
         'format' = { param($c) Invoke-NoOutputCommand 'formatting' 'gofmt' @('-l', '.') }
         'tidy' = { param($c) Invoke-CheckedCommand 'module tidiness' 'go' @('mod', 'tidy', '-diff') }
         'ruleset' = { param($c) Invoke-CheckedCommand 'ruleset validation' 'go' @('run', '.github/scripts/validate-main-ruleset.go') }

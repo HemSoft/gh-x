@@ -620,13 +620,43 @@ For phone access over Tailscale, install the persistent loopback-only hub once:
 .\install-dashboard-hub.ps1
 ```
 
-The installer registers the `HemSoft CLI Dashboard Hub` logon task and mounts
-the hub at `/dashboards/` with Tailscale Serve. Existing Serve mounts are left
-in place. Open `https://<home-magicdns-name>/dashboards/` from another device
-on the tailnet. The installer also adds a raw TCP forward on tailnet port 80,
-so `http://<home-tailscale-ip>/` works when a client cannot resolve MagicDNS.
-Neither route is exposed to the LAN or public internet. The hub reads Codex state directly and uses the installed
-`copilot-spend` extension's read-only session-store adapter and current UI.
+The installer checks the current device's DNS name, IPv4 address and Serve
+configuration before starting the hub or changing its logon task. It registers
+`HemSoft CLI Dashboard Hub`, mounts `/dashboards/` over HTTPS and adds a raw
+TCP forward on tailnet port 80. It prints each URL only after that operation
+succeeds. Use the printed HTTPS URL from another tailnet device, or the printed
+HTTP fallback when that client cannot resolve MagicDNS. Neither route is
+exposed to the LAN or public internet.
+
+Each Tailscale operation must succeed within 30 seconds. A failed command names
+the operation and exit code. If HTTPS succeeds but TCP fails, installation
+returns a nonzero result and reports that HTTPS and the logon task remain.
+Correct the named failure and rerun the installer. It never resets Serve or
+deletes scheduled tasks during recovery. Unrelated mounts remain; conflicting
+`/dashboards`, port 80 or non-HTTPS port 443 targets cause preflight to fail.
+Port 443 with public Funnel access also fails preflight; the installer neither
+publishes private usage through it nor disables unrelated public routes.
+A same-named task is updated only when its sole action runs this exact launcher
+under the current user. Use `-TaskName` to avoid an unrelated task's name.
+Do not change Serve configuration concurrently with installation; preflight and
+route writes are separate native operations, not an atomic transaction.
+
+The hub reads Codex state directly and uses the installed `copilot-spend`
+extension's read-only session-store adapter and current UI. Installer regressions
+run offline in CI and in the local audit:
+
+```powershell
+pwsh -NoProfile -File tests/installer/test-dashboard-hub.ps1
+```
+
+These tests use a native command double and scheduler mocks. They never contact
+Tailscale services or register real tasks. On Windows, the same fixtures can
+also exercise the Windows PowerShell 5.1 launcher:
+
+```powershell
+pwsh -NoProfile -File tests/installer/test-dashboard-hub.ps1 `
+  -InstallerPowerShell "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe"
+```
 
 ## How it works
 

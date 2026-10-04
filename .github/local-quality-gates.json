@@ -7,7 +7,7 @@
     { "id": "helper-tests", "tools": ["go"], "needs": [], "ci": ["build-and-test/Test release automation helpers"] },
     { "id": "behavior-tests", "tools": ["go"], "needs": [], "ci": ["build-and-test/Test CLI behavior"] },
     { "id": "dashboard-tests", "tools": ["node"], "needs": [], "ci": ["build-and-test/Test Node dashboards"] },
-    { "id": "runner-tests", "tools": ["pwsh", "go", "gofmt"], "needs": [], "ci": ["build-and-test/Test local audit runner"] },
+    { "id": "runner-tests", "tools": ["pwsh", "go", "gofmt"], "needs": [], "ci": ["build-and-test/Test local audit runner", "build-and-test/Test dashboard hub installer"] },
     { "id": "format", "tools": ["gofmt"], "needs": [], "ci": ["lint/Check formatting (gofmt)"] },
     { "id": "tidy", "tools": ["go"], "needs": [], "ci": ["lint/Check module tidiness"] },
     { "id": "ruleset", "tools": ["go"], "needs": [], "ci": ["lint/Validate main ruleset"] },
