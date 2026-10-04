@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -76,6 +77,7 @@ type workflowRunEvent struct {
 
 type workflowJob struct {
 	Name        string              `yaml:"name"`
+	RunsOn      string              `yaml:"runs-on"`
 	If          string              `yaml:"if"`
 	Uses        string              `yaml:"uses"`
 	Needs       []string            `yaml:"needs"`
@@ -96,6 +98,7 @@ type workflowStep struct {
 	Name            string            `yaml:"name"`
 	ID              string            `yaml:"id"`
 	Run             string            `yaml:"run"`
+	Shell           string            `yaml:"shell"`
 	Env             map[string]string `yaml:"env"`
 	If              string            `yaml:"if"`
 	Uses            string            `yaml:"uses"`
@@ -177,7 +180,8 @@ go run ./.github/scripts/release-targets build`, "CI must build the canonical re
 
 	gate := ci.Jobs["gate"]
 	require(gate.Name == "Quality Gate", "CI must publish the Quality Gate check")
-	require(equal(gate.Needs, "build-and-test", "lint", "quality", "mutation", "security-analysis", "dependency-review", "codex-review", "performance"), "Quality Gate must depend on every build, quality, security, review, and performance job")
+	require(windowsInstallerGateReady(ci.Jobs["windows-installer"], gate), "Quality Gate must require Windows PowerShell 5.1 installer regression tests")
+	require(equal(gate.Needs, "build-and-test", "windows-installer", "lint", "quality", "mutation", "security-analysis", "dependency-review", "codex-review", "performance"), "Quality Gate must depend on every build, quality, security, review, and performance job")
 	gateStep := namedStep(gate, "Evaluate all gates")
 	gateRun := gateStep.Run
 	require(reflect.DeepEqual(gateStep.Env, map[string]string{
@@ -324,6 +328,21 @@ go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the tr
 type rulesetValidation struct {
 	valid   bool
 	message string
+}
+
+func unconditionalRequiredStep(step workflowStep) bool {
+	return step.If == "" && !step.ContinueOnError
+}
+
+func windowsInstallerGateReady(installer, gate workflowJob) bool {
+	step := namedStep(installer, "Test Windows PowerShell installer")
+	evaluator := namedStep(gate, "Evaluate all gates")
+	return installer.RunsOn == "windows-latest" && installer.If == "" &&
+		step.Shell == "pwsh" && unconditionalRequiredStep(step) &&
+		strings.TrimSpace(step.Run) == `./tests/installer/test-dashboard-hub.ps1 -InstallerPowerShell "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe"` &&
+		slices.Contains(gate.Needs, "windows-installer") && gate.If == "always()" &&
+		unconditionalRequiredStep(evaluator) &&
+		strings.Contains(evaluator.Run, `"${{ needs.windows-installer.result }}" != "success"`)
 }
 
 func validateRuleset(configuredRuleset ruleset) error {

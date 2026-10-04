@@ -7,7 +7,7 @@
     { "id": "helper-tests", "tools": ["go"], "needs": [], "ci": ["build-and-test/Test release automation helpers"] },
     { "id": "behavior-tests", "tools": ["go"], "needs": [], "ci": ["build-and-test/Test CLI behavior"] },
     { "id": "dashboard-tests", "tools": ["node"], "needs": [], "ci": ["build-and-test/Test Node dashboards"] },
-    { "id": "runner-tests", "tools": ["pwsh", "go", "gofmt"], "needs": [], "ci": ["build-and-test/Test local audit runner"] },
+    { "id": "runner-tests", "tools": ["pwsh", "go", "gofmt"], "needs": [], "ci": ["build-and-test/Test local audit runner", "build-and-test/Test dashboard hub installer"] },
     { "id": "format", "tools": ["gofmt"], "needs": [], "ci": ["lint/Check formatting (gofmt)"] },
     { "id": "tidy", "tools": ["go"], "needs": [], "ci": ["lint/Check module tidiness"] },
     { "id": "ruleset", "tools": ["go"], "needs": [], "ci": ["lint/Validate main ruleset"] },
@@ -30,6 +30,7 @@
     { "id": "performance", "tools": ["go", "node", "git"], "needs": [], "ci": ["performance/Detect performance workload changes", "performance/Measure critical local paths"] }
   ],
   "hosted": [
+    { "step": "windows-installer/Test Windows PowerShell installer", "reason": "Requires the hosted Windows PowerShell 5.1 runtime; a Linux local audit cannot qualify it. The same offline fixtures also run locally under Windows when available." },
     { "step": "security-analysis/Initialize CodeQL", "reason": "GitHub-hosted CodeQL setup; local audit never uploads source or security results." },
     { "step": "security-analysis/Analyze with CodeQL", "reason": "Require the current-revision GitHub CodeQL checks; not qualified by local success." },
     { "step": "dependency-review/Review dependency changes", "reason": "Requires a GitHub pull-request dependency diff and the Dependency Review Action." },
