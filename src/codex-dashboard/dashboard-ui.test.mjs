@@ -6,6 +6,7 @@ import {
     buildUsageApiUrl,
     renderDashboard,
     renderSessions,
+    startDashboard,
 } from "./dashboard-ui.mjs";
 
 test("builds compact Codex usage and session values", () => {
@@ -255,6 +256,395 @@ test("builds a local-midnight Today request", () => {
     expected.setHours(0, 0, 0, 0);
     assert.equal(url, `/api/usage?recentSince=${encodeURIComponent(expected.toISOString())}`);
 });
+
+test("startDashboard ignores an older manual response and its freshness", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const older = fixture.dashboard.refresh();
+    const newer = fixture.dashboard.refresh();
+    fixture.respond(2, refreshSnapshot("newer", 200));
+    await newer;
+    const current = fixture.view();
+    fixture.respond(1, refreshSnapshot("older", 100, 60_000));
+    await older;
+    assert.deepEqual(fixture.view(), current);
+    assert.equal(current.sessionId, "newer");
+    assert.equal(current.totalTokens, "200");
+});
+
+test("startDashboard invalidates the previous filter before rendering its response", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const older = fixture.dashboard.refresh();
+    fixture.element("recent-window").dispatch("change", { target: { value: "3600000" } });
+    assert.match(fixture.requests[1].url, /recentWindowMs=86400000$/);
+    assert.match(fixture.requests[2].url, /recentWindowMs=3600000$/);
+    fixture.respond(2, refreshSnapshot("one-hour", 200));
+    await flushRefresh();
+    const current = fixture.view();
+    fixture.respond(1, refreshSnapshot("24-hour", 100, 60_000));
+    await older;
+    assert.deepEqual(fixture.view(), current);
+    assert.equal(current.recentWindow, "3600000");
+    assert.equal(current.sessionId, "one-hour");
+    assert.match(fixture.documentRef.cookie, /^codex-recent=3600000;/);
+});
+
+for (const failure of ["network", "http", "json"]) {
+    test(`startDashboard ignores a stale ${failure} failure after a filter change`, async (t) => {
+        const fixture = await startRefreshFixture(t);
+        const older = fixture.dashboard.refresh();
+        fixture.element("recent-window").dispatch("change", { target: { value: "3600000" } });
+        fixture.respond(2, refreshSnapshot("one-hour", 200));
+        await flushRefresh();
+        const current = fixture.view();
+        fixture.fail(1, failure);
+        await older;
+        assert.deepEqual(fixture.view(), current);
+        assert.equal(current.sessionId, "one-hour");
+    });
+
+    test(`startDashboard shows a current ${failure} failure and recovers`, async (t) => {
+        const fixture = await startRefreshFixture(t);
+        const failed = fixture.dashboard.refresh();
+        fixture.fail(1, failure);
+        await failed;
+        assert.equal(fixture.view().totalTokens, "Unavailable");
+        assert.equal(fixture.view().freshness, "Refresh unavailable");
+        assert.equal(fixture.view().sessionId, undefined);
+        const recovered = fixture.dashboard.refresh();
+        fixture.respond(2, refreshSnapshot("recovered", 300));
+        await recovered;
+        assert.equal(fixture.view().totalTokens, "300");
+        assert.equal(fixture.view().sessionId, "recovered");
+        assert.match(fixture.view().freshness, /^Updated /);
+    });
+}
+
+for (const failure of [false, true]) {
+    test(`startDashboard ignores a stale body ${failure ? "failure" : "success"} after JSON parsing starts`, async (t) => {
+        const fixture = await startRefreshFixture(t);
+        const body = Promise.withResolvers();
+        const older = fixture.dashboard.refresh();
+        fixture.requests[1].resolve({ ok: true, json: () => body.promise });
+        await flushRefresh();
+        const newer = fixture.dashboard.refresh();
+        fixture.respond(2, refreshSnapshot("newer", 200));
+        await newer;
+        const current = fixture.view();
+        if (failure) {
+            body.reject(new Error("Late JSON failure"));
+        } else {
+            body.resolve(refreshSnapshot("older", 100, 60_000));
+        }
+        await older;
+        assert.deepEqual(fixture.view(), current);
+        assert.equal(current.sessionId, "newer");
+    });
+}
+
+test("startDashboard orders Refresh button and timer requests identically", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    t.mock.timers.tick(5_000);
+    fixture.element("refresh").dispatch("click");
+    assert.equal(fixture.requests.length, 3);
+    fixture.respond(2, refreshSnapshot("button", 300));
+    await flushRefresh();
+    const current = fixture.view();
+    fixture.respond(1, refreshSnapshot("timer", 200, 60_000));
+    await flushRefresh();
+    assert.deepEqual(fixture.view(), current);
+    assert.equal(current.sessionId, "button");
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 4);
+    fixture.respond(3, refreshSnapshot("next-timer", 400));
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "next-timer");
+});
+
+for (const failure of [false, true]) {
+    test(`startDashboard stop prevents a pending ${failure ? "failure" : "success"} and future refreshes`, async (t) => {
+        const fixture = await startRefreshFixture(t);
+        const pending = fixture.dashboard.refresh();
+        const current = fixture.view();
+        fixture.dashboard.stop();
+        if (failure) {
+            fixture.fail(1, "network");
+        } else {
+            fixture.respond(1, refreshSnapshot("stopped", 200));
+        }
+        await pending;
+        assert.deepEqual(fixture.view(), current);
+        t.mock.timers.tick(20_000);
+        await fixture.dashboard.refresh();
+        fixture.element("refresh").dispatch("click");
+        fixture.element("recent-window").dispatch("change", { target: { value: "3600000" } });
+        await flushRefresh();
+        assert.equal(fixture.requests.length, 2);
+    });
+}
+
+test("startDashboard skips busy timer ticks so a slow response can render", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 2);
+    t.mock.timers.tick(15_000);
+    assert.equal(fixture.requests.length, 2);
+    fixture.respond(1, refreshSnapshot("slow-timer", 200));
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "slow-timer");
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 3);
+    fixture.respond(2, refreshSnapshot("next-timer", 300));
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "next-timer");
+});
+
+test("startDashboard stale completion cannot clear the current pending refresh", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    t.mock.timers.tick(5_000);
+    const manual = fixture.dashboard.refresh();
+    fixture.respond(1, refreshSnapshot("obsolete-timer", 200));
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "initial");
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 3);
+    fixture.respond(2, refreshSnapshot("current-manual", 300));
+    await manual;
+    assert.equal(fixture.view().sessionId, "current-manual");
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 4);
+});
+
+test("startDashboard skips timer ticks during body parsing and resumes after failure", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const body = Promise.withResolvers();
+    t.mock.timers.tick(5_000);
+    fixture.requests[1].resolve({ ok: true, json: () => body.promise });
+    await flushRefresh();
+    t.mock.timers.tick(10_000);
+    assert.equal(fixture.requests.length, 2);
+    body.reject(new Error("Slow JSON failure"));
+    await flushRefresh();
+    assert.equal(fixture.view().freshness, "Refresh unavailable");
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 3);
+    fixture.respond(2, refreshSnapshot("timer-recovered", 300));
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "timer-recovered");
+});
+
+for (const phase of ["fetch", "body"]) {
+    test(`startDashboard bounds an unsettled ${phase} and resumes polling`, async (t) => {
+        const fixture = await startRefreshFixture(t);
+        const pending = fixture.dashboard.refresh();
+        if (phase === "body") {
+            fixture.requests[1].resolve({ ok: true, json: () => new Promise(() => {}) });
+            await flushRefresh();
+        }
+        t.mock.timers.tick(30_000);
+        await flushRefresh();
+        assert.equal(fixture.view().freshness, "Refresh unavailable");
+        assert.equal(fixture.requests[1].options.signal?.aborted, true);
+        await pending;
+        t.mock.timers.tick(5_000);
+        assert.equal(fixture.requests.length, 3);
+        fixture.respond(2, refreshSnapshot("timeout-recovered", 300));
+        await flushRefresh();
+        assert.equal(fixture.view().sessionId, "timeout-recovered");
+        assert.equal(fixture.view().totalTokens, "300");
+    });
+}
+
+test("startDashboard an obsolete deadline cannot render or clear newer pending work", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const older = fixture.dashboard.refresh();
+    t.mock.timers.tick(20_000);
+    const newer = fixture.dashboard.refresh();
+    const current = fixture.view();
+    t.mock.timers.tick(10_000);
+    await flushRefresh();
+    assert.equal(fixture.requests[1].options.signal?.aborted, true);
+    await older;
+    assert.deepEqual(fixture.view(), current);
+    assert.equal(fixture.requests[2].options.signal.aborted, false);
+    t.mock.timers.tick(5_000);
+    assert.equal(fixture.requests.length, 3);
+    fixture.respond(2, refreshSnapshot("current-after-old-timeout", 300));
+    await newer;
+    assert.equal(fixture.view().sessionId, "current-after-old-timeout");
+});
+
+test("startDashboard removes a completed request deadline", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const completed = fixture.dashboard.refresh();
+    fixture.respond(1, refreshSnapshot("completed", 300));
+    await completed;
+    t.mock.timers.tick(30_000);
+    await flushRefresh();
+    assert.equal(fixture.requests[1].options.signal?.aborted, false);
+    assert.equal(fixture.view().sessionId, "completed");
+});
+
+test("startDashboard stop settles and cancels all outstanding requests", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const older = fixture.dashboard.refresh();
+    const newer = fixture.dashboard.refresh();
+    const current = fixture.view();
+    fixture.dashboard.stop();
+    await flushRefresh();
+    assert.equal(fixture.requests[1].options.signal?.aborted, true);
+    assert.equal(fixture.requests[2].options.signal?.aborted, true);
+    await Promise.all([older, newer]);
+    t.mock.timers.tick(30_000);
+    await flushRefresh();
+    assert.deepEqual(fixture.view(), current);
+    assert.equal(fixture.requests.length, 3);
+});
+
+test("startDashboard bounds the initial request and starts recovery polling", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    fixture.dashboard.stop();
+    const requests = [];
+    const started = startDashboard({
+        documentRef: fixture.documentRef,
+        fetchImpl: (url, options) => {
+            const request = Promise.withResolvers();
+            requests.push({ ...request, options });
+            return request.promise;
+        },
+    });
+    t.mock.timers.tick(30_000);
+    await flushRefresh();
+    assert.equal(fixture.view().freshness, "Refresh unavailable");
+    const dashboard = await started;
+    t.after(() => dashboard.stop());
+    t.mock.timers.tick(5_000);
+    assert.equal(requests.length, 2);
+    requests[1].resolve({ ok: true, json: async () => refreshSnapshot("startup-recovered", 300) });
+    await flushRefresh();
+    assert.equal(fixture.view().sessionId, "startup-recovered");
+});
+
+test("startDashboard cancels superseded explicit refreshes", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const older = fixture.dashboard.refresh();
+    const newer = fixture.dashboard.refresh();
+    await flushRefresh();
+    assert.equal(fixture.requests[1].options.signal.aborted, true);
+    assert.equal(fixture.requests[2].options.signal.aborted, false);
+    await older;
+    fixture.respond(2, refreshSnapshot("current", 300));
+    await newer;
+    assert.equal(fixture.view().sessionId, "current");
+});
+
+test("startDashboard does not parse a response arriving after cancellation", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    const pending = fixture.dashboard.refresh();
+    let parsed = 0;
+    fixture.dashboard.stop();
+    fixture.requests[1].resolve({
+        ok: true,
+        json: async () => { parsed++; return refreshSnapshot("abandoned", 900); },
+    });
+    await pending;
+    await flushRefresh();
+    assert.equal(parsed, 0);
+});
+
+test("startDashboard preserves theme, zoom and filter controls", async (t) => {
+    const fixture = await startRefreshFixture(t);
+    assert.equal(fixture.element("theme").value, "system");
+    assert.equal(fixture.element("zoom-level").textContent, "100%");
+    assert.equal(fixture.element("recent-window").value, "86400000");
+    fixture.element("theme").dispatch("change", { target: { value: "dark" } });
+    assert.equal(fixture.documentRef.documentElement.dataset.theme, "dark");
+    assert.match(fixture.documentRef.cookie, /^codex-theme=dark;/);
+    fixture.element("zoom-in").dispatch("click");
+    assert.equal(fixture.element("zoom-level").textContent, "110%");
+    assert.match(fixture.documentRef.cookie, /^codex-zoom=110;/);
+    fixture.element("zoom-out").dispatch("click");
+    assert.equal(fixture.element("zoom-level").textContent, "100%");
+    assert.equal(fixture.requests.length, 1);
+});
+
+async function startRefreshFixture(t) {
+    t.mock.timers.enable({ apis: ["setInterval", "setTimeout", "Date"], now: Date.parse("2026-09-30T22:00:00Z") });
+    const elements = new Map();
+    const element = (id) => {
+        if (!elements.has(id)) {
+            elements.set(id, fakeElement("div"));
+        }
+        return elements.get(id);
+    };
+    element("rate-bar").parentElement = fakeElement("div");
+    const documentRef = {
+        cookie: "",
+        documentElement: {
+            dataset: {},
+            style: { setProperty() {}, removeProperty() {} },
+        },
+        querySelector: () => ({ content: "/api/usage" }),
+        createElement: fakeElement,
+        createTextNode: (text) => ({ textContent: text }),
+        getElementById: element,
+    };
+    const requests = [];
+    const respond = (index, snapshot) => requests[index].resolve({
+        ok: true,
+        status: 200,
+        json: async () => snapshot,
+    });
+    const fail = (index, failure) => {
+        if (failure === "network") {
+            requests[index].reject(new Error("Network unavailable"));
+        } else {
+            requests[index].resolve({
+                ok: failure !== "http",
+                status: 503,
+                json: async () => { throw new Error("Invalid JSON"); },
+            });
+        }
+    };
+    const dashboard = await startDashboard({
+        documentRef,
+        fetchImpl: (url, options) => {
+            const request = Promise.withResolvers();
+            requests.push({ url, options, ...request });
+            if (requests.length === 1) {
+                respond(0, refreshSnapshot("initial", 50));
+            }
+            return request.promise;
+        },
+    });
+    t.after(() => dashboard.stop());
+    return {
+        documentRef,
+        dashboard,
+        requests,
+        respond,
+        fail,
+        element,
+        view: () => ({
+            recentWindow: element("recent-window").value,
+            totalTokens: element("total-tokens").textContent,
+            freshness: element("last-refresh").textContent,
+            sessionId: element("sessions").children[0]?.dataset.sessionId,
+        }),
+    };
+}
+
+function refreshSnapshot(sessionId, totalTokens, ageMs = 1_000) {
+    return {
+        available: true,
+        lastRefreshAt: new Date(Date.now() - ageMs).toISOString(),
+        totals: { totalTokens, cachedInputTokens: 0, requests: 1, toolCalls: 0 },
+        sessions: [{ sessionId, summary: sessionId, totalTokens, activity: [] }],
+    };
+}
+
+function flushRefresh() {
+    return new Promise(setImmediate);
+}
 
 function fakeElement(tagName) {
     const classes = new Set();

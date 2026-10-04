@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createSnapshotWorker, SnapshotBusyError, SnapshotTimeoutError } from "../codex-dashboard/snapshot-worker.mjs";
+
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const codexDirectory = path.resolve(moduleDirectory, "..", "codex-dashboard");
 const recentWindows = new Set([
@@ -67,11 +69,18 @@ export async function createDashboardHub({
     port = 4765,
     readFileImpl = readFile,
     createServerImpl = createServer,
+    snapshotTimeoutMs = 30_000,
 } = {}) {
     if (!codexAdapter?.getSnapshot || !copilotAdapter?.getSnapshot) {
         throw new TypeError("codexAdapter and copilotAdapter are required.");
     }
 
+    const readCodexSnapshot = createSnapshotWorker((filter, options) => codexAdapter.getSnapshot(filter, options), {
+        timeoutMs: snapshotTimeoutMs, closeReader: () => codexAdapter.getSnapshot.close?.(),
+    });
+    const readCopilotSnapshot = createSnapshotWorker((filter, options) => copilotAdapter.getSnapshot(filter, options), {
+        timeoutMs: snapshotTimeoutMs, closeReader: () => copilotAdapter.getSnapshot.close?.(),
+    });
     const copilotDirectory = copilotAdapter.extensionDirectory;
     const [landing, codexHtmlTemplate, codexUi, codexEntry, codexIcon,
         copilotHtmlTemplate, copilotUi] = await Promise.all([
@@ -142,7 +151,7 @@ export async function createDashboardHub({
             return;
         }
         if (pathname === "/codex/api/usage") {
-            await sendSnapshot(response, codexAdapter, url.searchParams);
+            await sendSnapshot(response, readCodexSnapshot, url.searchParams);
             return;
         }
         if (pathname === "/copilot/") {
@@ -154,7 +163,7 @@ export async function createDashboardHub({
             return;
         }
         if (pathname === "/copilot/api/usage") {
-            await sendSnapshot(response, copilotAdapter, url.searchParams);
+            await sendSnapshot(response, readCopilotSnapshot, url.searchParams);
             return;
         }
         sendJson(response, 404, { error: "Not found." });
@@ -166,13 +175,22 @@ export async function createDashboardHub({
     });
     const address = server.address();
     const actualPort = typeof address === "object" && address ? address.port : port;
+    let closing;
     return {
         host,
         port: actualPort,
         url: `http://${host}:${actualPort}/`,
-        close: () => new Promise((resolve, reject) => {
-            server.close((error) => error ? reject(error) : resolve());
-        }),
+        close() {
+            if (!closing) {
+                const readsClosed = Promise.all([readCodexSnapshot.close(), readCopilotSnapshot.close()]);
+                const httpClosed = new Promise((resolve, reject) => {
+                    server.close((error) => error ? reject(error) : resolve());
+                });
+                server.closeAllConnections?.();
+                closing = Promise.all([readsClosed, httpClosed]);
+            }
+            return closing;
+        },
     };
 }
 
@@ -185,21 +203,22 @@ function stripServePrefix(pathname) {
         : pathname;
 }
 
-async function sendSnapshot(response, adapter, searchParams) {
+async function sendSnapshot(response, readSnapshot, searchParams) {
     const filter = parseFilter(searchParams);
     if (filter.error) {
         sendJson(response, 400, { error: filter.error });
         return;
     }
     try {
-        sendJson(response, 200, await adapter.getSnapshot(filter.value));
+        sendJson(response, 200, await readSnapshot.serve(response, filter.value));
     } catch (error) {
-        sendJson(response, 500, {
+        sendJson(response, error instanceof SnapshotBusyError ? 503 : 500, {
             available: false,
             source: "unavailable",
             lastRefreshAt: new Date().toISOString(),
             diagnostics: {
-                code: "dashboard_snapshot_failed",
+                code: error instanceof SnapshotBusyError || error instanceof SnapshotTimeoutError
+                    ? error.code : "dashboard_snapshot_failed",
                 message: error?.message || "Unable to refresh dashboard usage.",
             },
         });
@@ -247,6 +266,7 @@ function sendJson(response, statusCode, body) {
 }
 
 function send(response, statusCode, contentType, body) {
+    if (response.destroyed) return;
     response.writeHead(statusCode, {
         "Cache-Control": "no-store",
         "Content-Security-Policy": "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'",
