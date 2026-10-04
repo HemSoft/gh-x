@@ -83,6 +83,9 @@ func main() {
         @{ Name = 'human task Command text'; Existing = 'command-text'; Error = 'Scheduled task'; Calls = 0 },
         @{ Name = 'human task encoded command'; Existing = 'encoded-command'; Error = 'Scheduled task'; Calls = 0 },
         @{ Name = 'human HTTPS mount'; Collision = 'https'; Error = 'HTTPS.*already'; Calls = 3 },
+        @{ Name = 'HTTPS app capabilities'; Collision = 'https-caps'; Error = 'HTTPS.*already'; Calls = 3 },
+        @{ Name = 'false foreground Funnel'; Collision = 'foreground-funnel-false'; Success = $true; Https = $true; Calls = 5; Registered = 1 },
+        @{ Name = 'unknown foreground Funnel value'; Collision = 'foreground-funnel-invalid'; Error = 'Serve configuration'; Calls = 3 },
         @{ Name = 'human TCP target'; Collision = 'tcp'; Error = 'TCP.*already'; Calls = 3 },
         @{ Name = 'TCP TLS termination'; Collision = 'tcp-tls'; Error = 'TCP.*already'; Calls = 3 },
         @{ Name = 'TCP proxy protocol'; Collision = 'tcp-proxy'; Error = 'TCP.*already'; Calls = 3 },
@@ -121,6 +124,9 @@ if (-not $NoBrowser -or $Port -ne 4765) { throw 'Unexpected launcher arguments' 
         if ($case.ContainsKey('Collision')) {
             switch ($case.Collision) {
                 'https' { $serve.Web[$hostKey].Handlers['/dashboards'] = @{ Proxy = 'http://127.0.0.1:9002' } }
+                'https-caps' { $serve.Web[$hostKey].Handlers['/dashboards'] = @{ Proxy = 'http://127.0.0.1:4765'; AcceptAppCaps = @('fixture.example/read') } }
+                'foreground-funnel-false' { $serve['Foreground'] = @{ session = @{ AllowFunnel = @{ $hostKey = $false } } } }
+                'foreground-funnel-invalid' { $serve['Foreground'] = @{ session = @{ AllowFunnel = @{ $hostKey = 'unknown' } } } }
                 'tcp' { $serve.TCP['80'] = @{ TCPForward = '127.0.0.1:9003' } }
                 'tcp-tls' { $serve.TCP['80'] = @{ TCPForward = '127.0.0.1:4765'; TerminateTLS = 'human.tailfixture.ts.net' } }
                 'tcp-proxy' { $serve.TCP['80'] = @{ TCPForward = '127.0.0.1:4765'; ProxyProtocol = 1 } }
@@ -169,7 +175,7 @@ if (-not $NoBrowser -or $Port -ne 4765) { throw 'Unexpected launcher arguments' 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
-[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(1252)
+[Console]::OutputEncoding = [Text.Encoding]::GetEncoding(28591)
 $env:HUB_INSTALL_FIXTURE = $PSScriptRoot
 $env:USERDOMAIN = 'FIXTUREDOMAIN'
 $env:USERNAME = 'fixture-user'

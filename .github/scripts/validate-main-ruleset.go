@@ -330,13 +330,19 @@ type rulesetValidation struct {
 	message string
 }
 
+func unconditionalRequiredStep(step workflowStep) bool {
+	return step.If == "" && !step.ContinueOnError
+}
+
 func windowsInstallerGateReady(installer, gate workflowJob) bool {
 	step := namedStep(installer, "Test Windows PowerShell installer")
+	evaluator := namedStep(gate, "Evaluate all gates")
 	return installer.RunsOn == "windows-latest" && installer.If == "" &&
-		step.Shell == "pwsh" && !step.ContinueOnError && step.If == "" &&
+		step.Shell == "pwsh" && unconditionalRequiredStep(step) &&
 		strings.TrimSpace(step.Run) == `./tests/installer/test-dashboard-hub.ps1 -InstallerPowerShell "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe"` &&
-		slices.Contains(gate.Needs, "windows-installer") &&
-		strings.Contains(namedStep(gate, "Evaluate all gates").Run, `"${{ needs.windows-installer.result }}" != "success"`)
+		slices.Contains(gate.Needs, "windows-installer") && gate.If == "always()" &&
+		unconditionalRequiredStep(evaluator) &&
+		strings.Contains(evaluator.Run, `"${{ needs.windows-installer.result }}" != "success"`)
 }
 
 func validateRuleset(configuredRuleset ruleset) error {

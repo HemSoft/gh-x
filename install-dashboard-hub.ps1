@@ -63,6 +63,14 @@ function Get-OptionalProperty {
     return $null
 }
 
+function Test-PlainWebProxy {
+    param($Handler, [string]$Target)
+    if ($Handler -isnot [pscustomobject]) { return $false }
+    $properties = @($Handler.PSObject.Properties)
+    return $properties.Count -eq 1 -and $properties[0].Name -ceq 'Proxy' -and
+        $properties[0].Value -is [string] -and $properties[0].Value -ceq $Target
+}
+
 function Test-PlainTcpForward {
     param($Handler, [string]$Target)
     if ($Handler -isnot [pscustomobject]) { return $false }
@@ -151,15 +159,20 @@ try {
             foreach ($map in @($foregroundTcp, $foregroundWeb, $foregroundFunnel)) {
                 if ($null -ne $map -and $map -isnot [pscustomobject]) { throw 'Expected foreground protocol map' }
             }
+            if ($null -ne $foregroundFunnel) {
+                foreach ($entry in $foregroundFunnel.PSObject.Properties) {
+                    if ($entry.Value -isnot [bool]) { throw 'Expected boolean foreground Funnel values' }
+                }
+            }
             $foregroundConfigs += [pscustomobject]@{ TCP = $foregroundTcp; Web = $foregroundWeb; Funnel = $foregroundFunnel }
         }
     }
 } catch { throw 'Tailscale Serve configuration is invalid; no publication was attempted.' }
 foreach ($session in $foregroundConfigs) {
-    $ports = if ($null -ne $session.TCP) { @($session.TCP.PSObject.Properties.Name) } else { @() }
+    $ports = @(if ($null -ne $session.TCP) { $session.TCP.PSObject.Properties | ForEach-Object Name })
     if ('80' -in $ports -or '443' -in $ports -or
         $null -ne (Get-OptionalProperty $session.Web "${dnsName}:443") -or
-        $null -ne (Get-OptionalProperty $session.Funnel "${dnsName}:443")) {
+        (Get-OptionalProperty $session.Funnel "${dnsName}:443") -eq $true) {
         throw 'Tailscale foreground Serve already claims a requested port or host; nothing was changed. Finish that foreground session before installation.'
     }
 }
@@ -179,7 +192,7 @@ $handlers = Get-OptionalProperty $hostConfig 'Handlers'
 if ($null -ne $handlers) {
     foreach ($mount in $handlers.PSObject.Properties) {
         if ($mount.Name.TrimEnd('/') -eq $ServePath.TrimEnd('/') -and
-            (Get-OptionalProperty $mount.Value 'Proxy') -ne "http://127.0.0.1:$Port") {
+            -not (Test-PlainWebProxy $mount.Value "http://127.0.0.1:$Port")) {
             throw "Tailscale HTTPS path '$ServePath' is already used by another Serve target; nothing was changed."
         }
     }

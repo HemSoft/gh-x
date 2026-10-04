@@ -638,6 +638,8 @@ deletes scheduled tasks during recovery. Unrelated mounts remain; conflicting
 Active foreground sessions on those ports or this HTTPS host also fail
 preflight. A matching TCP destination is accepted only as a plain forward;
 TLS termination, PROXY protocol and unknown handler settings are not overwritten.
+HTTPS mounts with application-capability forwarding or other extra settings also
+fail preflight rather than losing those settings.
 Port 443 with public Funnel access also fails preflight; the installer neither
 publishes private usage through it nor disables unrelated public routes.
 A same-named task is updated only when its sole action runs this exact launcher
