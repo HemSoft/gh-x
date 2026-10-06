@@ -476,6 +476,7 @@ jobs:
     needs: [build-and-test, windows-installer, lint, quality, mutation, security-analysis, dependency-review, codex-review, performance]
     steps:
       - name: Evaluate all gates
+        shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF: ${{ github.ref }}

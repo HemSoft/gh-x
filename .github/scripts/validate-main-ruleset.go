@@ -405,13 +405,69 @@ func windowsInstallerGateReady(installer, gate workflowJob) bool {
 		strings.Contains(evaluator.Run, `"${{ needs.windows-installer.result }}" != "success"`)
 }
 
+// Keep the supported evaluator identical to CI; substring checks cannot prove execution.
+const qualityGateScript = `echo "Build & Test: ${{ needs.build-and-test.result }}"
+echo "Windows 5.1:  ${{ needs.windows-installer.result }}"
+echo "Lint:         ${{ needs.lint.result }}"
+echo "Quality:      ${{ needs.quality.result }}"
+echo "Mutation:     ${{ needs.mutation.result }}"
+echo "CodeQL:       ${{ needs.security-analysis.result }}"
+echo "Dependencies: ${{ needs.dependency-review.result }}"
+echo "Codex review: ${{ needs.codex-review.result }}"
+echo "Performance:  ${{ needs.performance.result }}"
+
+if [[ "${{ needs.build-and-test.result }}" != "success" || \
+      "${{ needs.windows-installer.result }}" != "success" || \
+      "${{ needs.lint.result }}" != "success" || \
+      "${{ needs.quality.result }}" != "success" || \
+      "${{ needs.mutation.result }}" != "success" || \
+      "${{ needs.security-analysis.result }}" != "success" || \
+      "${{ needs.dependency-review.result }}" != "success" || \
+      "${{ needs.performance.result }}" != "success" ]]; then
+  echo "::error::One or more quality gates failed"
+  exit 1
+fi
+if [[ "$EVENT_NAME" == "workflow_dispatch" && \
+      "$REF" != "refs/heads/$DEFAULT_BRANCH" && \
+      "$REF_NAME" != chore/changelog-* ]]; then
+  echo "::error::A non-changelog branch dispatch cannot publish the required Quality Gate"
+  exit 1
+fi
+if [[ "$EVENT_NAME" == "pull_request" && "${{ needs.codex-review.result }}" != "success" ]]; then
+  echo "::error::Every pull request requires a clean current-head Codex review"
+  exit 1
+fi
+if [[ "${{ needs.codex-review.result }}" != "success" && "${{ needs.codex-review.result }}" != "skipped" ]]; then
+  echo "::error::Current-head Codex review gate did not pass"
+  exit 1
+fi
+echo "All quality gates passed ✅"`
+
+func windowsAggregateGateReady(gate workflowJob) bool {
+	if gate.RunsOn != "ubuntu-latest" || gate.If != "always()" || gate.ContinueOnError || len(gate.Additional) != 0 || len(gate.Steps) != 1 {
+		return false
+	}
+	want := workflowStep{
+		Name: "Evaluate all gates", Shell: "bash", Run: qualityGateScript,
+		Env: map[string]string{
+			"EVENT_NAME":     "${{ github.event_name }}",
+			"REF":            "${{ github.ref }}",
+			"REF_NAME":       "${{ github.ref_name }}",
+			"DEFAULT_BRANCH": "${{ github.event.repository.default_branch }}",
+		},
+	}
+	actual := gate.Steps[0]
+	actual.Run = strings.TrimSpace(actual.Run)
+	return reflect.DeepEqual(actual, want)
+}
+
 func windowsLauncherWorkflowReady(ci workflow) bool {
 	return len(ci.Env) == 0 && len(ci.Defaults) == 0 && windowsLauncherGateReady(ci.Jobs["windows-installer"], ci.Jobs["gate"])
 }
 
 func windowsLauncherGateReady(installer, gate workflowJob) bool {
 	step, found := findWorkflowStep(installer, "Test Windows standalone launcher")
-	return found && windowsInstallerGateReady(installer, gate) && windowsLauncherSetupReady(installer) &&
+	return found && windowsInstallerGateReady(installer, gate) && windowsAggregateGateReady(gate) && windowsLauncherSetupReady(installer) &&
 		step.Shell == "pwsh" && unconditionalRequiredStep(step) && launcherNodeEnvironmentReady(step) &&
 		strings.TrimSpace(step.Run) == "node --test src/codex-dashboard/launcher.test.mjs"
 }
@@ -427,7 +483,7 @@ func windowsLauncherSetupReady(job workflowJob) bool {
 	launcher := slices.IndexFunc(job.Steps, func(step workflowStep) bool {
 		return step.Name == "Test Windows standalone launcher"
 	})
-	return checkout >= 0 && node == checkout+1 && launcher == node+1 && hasSingleLauncherAction(job, "actions/setup-node") && hasSingleLauncherAction(job, "actions/checkout") && dashboardNodePinReady(job)
+	return checkout >= 0 && node == checkout+1 && launcher == node+1 && hasSingleLauncherAction(job, "actions/setup-node") && hasSingleLauncherAction(job, "actions/checkout") && reflect.DeepEqual(job.Steps[node].With, map[string]string{"node-version-file": ".node-version"})
 }
 
 func hasSingleLauncherAction(job workflowJob, action string) bool {

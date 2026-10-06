@@ -1,7 +1,10 @@
 package main
 
 import (
+	"errors"
 	"os"
+	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -141,6 +144,24 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 			})
 		}},
 		{name: "Linux cannot qualify lifecycle", mutate: func(job, _ *workflowJob) { job.RunsOn = "ubuntu-latest" }},
+		{name: "aggregate shell discards script", mutate: func(_, gate *workflowJob) {
+			mutateWorkflowStep(gate, "Evaluate all gates", func(step *workflowStep) { step.Shell = "true {0}" })
+		}},
+		{name: "aggregate job overrides execution defaults", mutate: func(_, gate *workflowJob) {
+			gate.Additional = map[string]any{"defaults": map[string]any{"run": map[string]any{"shell": "true {0}"}}}
+		}},
+		{name: "aggregate step overrides working directory", mutate: func(_, gate *workflowJob) {
+			mutateWorkflowStep(gate, "Evaluate all gates", func(step *workflowStep) { step.Additional = map[string]any{"working-directory": "other"} })
+		}},
+		{name: "aggregate script exits before checks", mutate: func(_, gate *workflowJob) {
+			mutateWorkflowStep(gate, "Evaluate all gates", func(step *workflowStep) { step.Run = "exit 0\n" + step.Run })
+		}},
+		{name: "aggregate extra step overrides environment", mutate: func(_, gate *workflowJob) {
+			gate.Steps = append([]workflowStep{{Name: "Override Bash environment", Run: "echo BASH_ENV=other >> $GITHUB_ENV"}}, gate.Steps...)
+		}},
+		{name: "Node download source overridden", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.With["mirror"] = "https://example.invalid/node" })
+		}},
 		{name: "aggregate dependency missing", mutate: func(_, gate *workflowJob) {
 			gate.Needs = slices.DeleteFunc(gate.Needs, func(name string) bool { return name == "windows-installer" })
 		}},
@@ -235,5 +256,37 @@ func TestLauncherRejectsGlobalRuntimeOverrides(t *testing.T) {
 		if windowsLauncherWorkflowReady(ci) {
 			t.Fatal("global runtime overrides must not qualify the checked-out launcher")
 		}
+	}
+}
+
+func TestAggregateGateRejectsWindowsFailures(t *testing.T) {
+	data, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci workflow
+	if err := yaml.Unmarshal(data, &ci); err != nil {
+		t.Fatal(err)
+	}
+	step := namedStep(ci.Jobs["gate"], "Evaluate all gates")
+	for _, result := range []string{"success", "failure", "skipped", "cancelled", ""} {
+		t.Run("Windows-"+result, func(t *testing.T) {
+			script := strings.ReplaceAll(step.Run, "${{ needs.windows-installer.result }}", result)
+			script = regexp.MustCompile(`\$\{\{ needs\.[^}]+\.result \}\}`).ReplaceAllString(script, "success")
+			command := exec.Command("bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script)
+			command.Dir = t.TempDir()
+			command.Env = []string{"PATH=" + os.Getenv("PATH"), "EVENT_NAME=pull_request", "REF=refs/pull/188/merge", "REF_NAME=188/merge", "DEFAULT_BRANCH=main"}
+			output, err := command.CombinedOutput()
+			if result == "success" {
+				if err != nil || !strings.Contains(string(output), "All quality gates passed") {
+					t.Fatalf("success: %v: %s", err, output)
+				}
+				return
+			}
+			var exitError *exec.ExitError
+			if !errors.As(err, &exitError) || exitError.ExitCode() != 1 || !strings.Contains(string(output), "One or more quality gates failed") {
+				t.Fatalf("Windows %q: %v: %s", result, err, output)
+			}
+		})
 	}
 }
