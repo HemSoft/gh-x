@@ -122,3 +122,7 @@ $collisionFindings = @(Get-CrapFindings @(
 Assert-Equal $collisionFindings.Count 2 'Full file and declaration identity must preserve uncovered functions'
 Assert-Equal ($collisionFindings.File -join ',') '.github/scripts/second/main.go,src/shared.go' 'Never borrow same-named function coverage'
 Assert-Equal ($collisionFindings.CRAP -join ',') '42,42' 'Uncovered fixture exceeds unchanged CRAP threshold'
+
+# Actions propagates LASTEXITCODE from the intentional failing Go fixture.
+# Reaching this point proves every assertion and required cleanup succeeded.
+exit 0
