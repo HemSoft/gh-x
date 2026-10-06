@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -180,6 +182,7 @@ func TestDashboardInfrastructureContract(t *testing.T) {
 		{"wrong artifact name", func(step *workflowStep) { step.With["name"] = "wrong" }},
 		{"wrong artifact path", func(step *workflowStep) { step.With["path"] = "wrong" }},
 		{"wrong retention", func(step *workflowStep) { step.With["retention-days"] = "1" }},
+		{"missing evidence must fail", func(step *workflowStep) { step.With["if-no-files-found"] = "warn" }},
 		{"mutable uploader", func(step *workflowStep) { step.Uses = "actions/upload-artifact@v7" }},
 	}
 	for _, test := range uploadCases {
@@ -280,5 +283,46 @@ func TestHelperScopeCannotComeFromCommentsOrUnrelatedCommands(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestDashboardDiagnosticsRetainFailure(t *testing.T) {
+	data, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci workflow
+	if err := yaml.Unmarshal(data, &ci); err != nil {
+		t.Fatal(err)
+	}
+	for name, log := range map[string]string{"Install dashboard quality tools": "install.log", "Test dashboard quality gate": "fixtures.log"} {
+		t.Run(name, func(t *testing.T) {
+			directory := t.TempDir()
+			bin := filepath.Join(directory, "bin")
+			if err := os.Mkdir(bin, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bin, "node"), []byte("#!/bin/sh\necho original-quality-failure >&2\nexit 23\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			step := namedStep(ci.Jobs["quality"], name)
+			if step.Shell != "bash" {
+				t.Fatalf("shell %q loses pipeline failure semantics", step.Shell)
+			}
+			command := exec.Command("bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step.Run)
+			command.Env = append(os.Environ(), "RUNNER_TEMP="+directory, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			output, err := command.CombinedOutput()
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 23 {
+				t.Fatalf("original exit 23 lost: %v, %s", err, output)
+			}
+			retained, err := os.ReadFile(filepath.Join(directory, "dashboard-quality", log))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(retained), "original-quality-failure") {
+				t.Fatalf("original stderr not retained: %s", retained)
+			}
+		})
 	}
 }

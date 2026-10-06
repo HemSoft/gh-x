@@ -251,10 +251,16 @@ jobs:
           node-version-file: .node-version
 
       - name: Install dashboard quality tools
-        run: node .github/scripts/dashboard-quality/install.mjs
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/dashboard-quality"
+          node .github/scripts/dashboard-quality/install.mjs 2>&1 | tee "$RUNNER_TEMP/dashboard-quality/install.log"
 
       - name: Test dashboard quality gate
-        run: node --test .github/scripts/dashboard-quality/*.test.mjs
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/dashboard-quality"
+          node --test .github/scripts/dashboard-quality/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/dashboard-quality/fixtures.log"
 
       - name: Enforce dashboard JavaScript quality
         run: node .github/scripts/dashboard-quality/run.mjs "$RUNNER_TEMP/dashboard-quality"
@@ -264,6 +270,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dashboard-quality
+          if-no-files-found: error
           path: ${{ runner.temp }}/dashboard-quality
           retention-days: 14
 

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { repositoryRoot } from './tools.mjs';
+import { repositoryRoot, toolsDirectory } from './tools.mjs';
 
 test('the installer refuses dependency source inside the Go checkout', () => {
   const child = spawnSync(process.execPath, [fileURLToPath(new URL('./install.mjs', import.meta.url))], {
@@ -137,4 +137,40 @@ test('failed dashboard tests remain the primary error when coverage is missing',
   const failure = JSON.parse(await readFile(path.join(output, 'failure.json'), 'utf8'));
   assert.match(failure.error, /^Dashboard tests failed: exit 23/);
   assert.match(failure.error, /coverage-final\.json/);
+});
+
+
+test('nested production modules execute their nested behavior tests', async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dashboard-nested-test-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const scripts = await copyRunner(root, ['run.mjs', 'tools.mjs', 'failure.mjs', 'raw.mjs', 'measure.mjs']);
+  for (const name of ['package.json', 'package-lock.json', '.node-version']) {
+    await copyFile(new URL(`../../../${name}`, import.meta.url), path.join(root, name));
+  }
+  const nested = path.join(root, 'src/codex-dashboard/nested');
+  await mkdir(nested, { recursive: true });
+  await mkdir(path.join(root, 'src/dashboard-hub'), { recursive: true });
+  await writeFile(path.join(root, 'src/codex-dashboard/smoke.test.mjs'), "import test from 'node:test'; test('root', () => {});\n");
+  await writeFile(path.join(root, 'src/dashboard-hub/smoke.test.mjs'), "import test from 'node:test'; test('hub', () => {});\n");
+  await writeFile(path.join(nested, 'behavior.mjs'), 'export function twice(value) { return value * 2; }\n');
+  await writeFile(path.join(nested, 'behavior.test.mjs'), "import assert from 'node:assert/strict'; import test from 'node:test'; import {twice} from './behavior.mjs'; test('nested behavior', () => assert.equal(twice(2), 4));\n");
+  const metrics = { lines: 100, statements: 100, branches: 100, functions: 100 };
+  await writeFile(path.join(root, '.github/dashboard-quality-policy.json'), JSON.stringify({
+    maximumActionableCrap: 30, minimum: metrics,
+    modules: { 'src/codex-dashboard/nested/behavior.mjs': { minimum: metrics, maximumCrap: 1 } },
+  }));
+  const output = path.join(root, 'reports');
+  const environment = { ...process.env, GH_X_DASHBOARD_QUALITY_TOOLS: await toolsDirectory() };
+  // This fixture starts an independent test runner, not a recursive node:test child.
+  delete environment.NODE_TEST_CONTEXT;
+  const child = spawnSync(process.execPath, [path.join(scripts, 'run.mjs'), output], {
+    encoding: 'utf8', env: environment,
+  });
+  assert.equal(child.status, 0, child.stdout + child.stderr);
+  assert.match(child.stdout, /nested behavior/);
+  const report = JSON.parse(await readFile(path.join(output, 'quality.json'), 'utf8'));
+  assert.equal(report.modules.length, 1);
+  assert.equal(report.modules[0].functions[0].hits, 1);
+  assert.equal(report.metrics.functions.percent, 100);
+  assert.deepEqual(report.findings, []);
 });

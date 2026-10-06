@@ -29,7 +29,7 @@ Missing direct tools also name that installer command.
 ## Scope and measurement
 
 Every `.mjs` module under `src/codex-dashboard` and `src/dashboard-hub` is
-inventoried recursively. Tests and the explicit process-liveness fixture
+inventoried recursively. The measurement selects tests with recursive `**/*.test.mjs` patterns under both source roots. Tests and the explicit process-liveness fixture
 `src/codex-dashboard/test-process-liveness.mjs` are excluded. There are no
 generated modules in these source roots and no generated-code exclusions.
 The filesystem inventory must match the reviewed policy inventory, and every
@@ -82,7 +82,7 @@ simplify or add branch tests. Existing Go thresholds remain unchanged.
 Reports include `coverage-final.json`, raw V8 data, `quality.json` and
 `quality.md`. Measurement failures also write `failure.json`. Failed tests cannot
 qualify the metrics they produced. Local audits retain this output in their
-artifact directory after failures; CI uploads it with `if: always()` for 14 days.
+artifact directory after failures; CI uploads it with `if: always()` for 14 days. Installation and gate-fixture steps create that directory before executing and retain stdout/stderr with Bash pipe failure semantics. Empty artifact uploads fail instead of reporting success.
 The runner clears only its own prior report files before a new measurement so a
 failed rerun cannot leave a stale successful report.
 Raw V8 files are cleared before checking tools, including when a missing tool

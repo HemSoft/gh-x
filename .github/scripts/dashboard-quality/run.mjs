@@ -50,7 +50,7 @@ async function run() {
   args.push('--exclude', '**/*.test.mjs');
   for (const fixture of fixtureExclusions) args.push('--exclude', fixture);
   args.push('--reports-dir', output, '--temp-directory', path.join(output, 'v8'), '--reporter', 'json', '--reporter', 'text',
-    process.execPath, '--test', ...sourceRoots.map(directory => `${directory}/*.test.mjs`));
+    process.execPath, '--test', ...sourceRoots.map(directory => `${directory}/**/*.test.mjs`));
   const tests = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit' });
   if (tests.error) throw tests.error;
   if (tests.status !== 0) testFailure = `Dashboard tests failed: ${tests.signal ? `signal ${tests.signal}` : `exit ${tests.status}`}; retained measurements do not qualify failed tests`;

@@ -606,14 +606,23 @@ func dashboardQualityReady(ci workflow) bool {
 			return false
 		}
 	}
-	return dashboardEvidenceReady(ci.Jobs["quality"])
+	return dashboardEvidenceReady(ci.Jobs["quality"]) && dashboardDiagnosticsReady(ci.Jobs["quality"])
+}
+
+func dashboardDiagnosticsReady(job workflowJob) bool {
+	for _, name := range []string{"Install dashboard quality tools", "Test dashboard quality gate"} {
+		if namedStep(job, name).Shell != "bash" {
+			return false
+		}
+	}
+	return true
 }
 
 func dashboardEvidenceReady(job workflowJob) bool {
 	upload, found := findWorkflowStep(job, "Upload dashboard quality evidence")
 	return found && upload.If == "always()" && !upload.ContinueOnError &&
 		upload.With["name"] == "dashboard-quality" && upload.With["path"] == "${{ runner.temp }}/dashboard-quality" &&
-		upload.With["retention-days"] == "14" && isPinnedAction(upload.Uses, "actions/upload-artifact")
+		upload.With["retention-days"] == "14" && upload.With["if-no-files-found"] == "error" && isPinnedAction(upload.Uses, "actions/upload-artifact")
 }
 
 func dashboardNodePinReady(job workflowJob) bool {
@@ -628,8 +637,10 @@ func dashboardNodePinReady(job workflowJob) bool {
 
 var dashboardQualityCommands = map[string]map[string]string{
 	"quality": {
-		"Install dashboard quality tools":      "node .github/scripts/dashboard-quality/install.mjs",
-		"Test dashboard quality gate":          "node --test .github/scripts/dashboard-quality/*.test.mjs",
+		"Install dashboard quality tools": `mkdir -p "$RUNNER_TEMP/dashboard-quality"
+node .github/scripts/dashboard-quality/install.mjs 2>&1 | tee "$RUNNER_TEMP/dashboard-quality/install.log"`,
+		"Test dashboard quality gate": `mkdir -p "$RUNNER_TEMP/dashboard-quality"
+node --test .github/scripts/dashboard-quality/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/dashboard-quality/fixtures.log"`,
 		"Enforce dashboard JavaScript quality": `node .github/scripts/dashboard-quality/run.mjs "$RUNNER_TEMP/dashboard-quality"`,
 	},
 }
