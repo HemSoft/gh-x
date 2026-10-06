@@ -543,6 +543,13 @@ gh-x v0.1.0 © 2026 HemSoft Developments · gh extension install HemSoft/gh-x
 ↑ v0.1.2 available · gh extension upgrade gh-x
 ```
 
+## T3 Code project icon
+
+[t3.json](t3.json) selects [the gh-x SVG](assets/gh-x.svg) as this repository's
+project icon in T3 Code. The image is self-contained and uses a path relative to
+the checkout, so the configuration also works in worktrees. Leave the project's
+icon selection on Automatic to use it.
+
 ## Local development
 
 Requires Go 1.26.7 or newer. CI reads the exact patched version from
