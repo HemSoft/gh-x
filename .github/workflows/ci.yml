@@ -96,6 +96,8 @@ jobs:
           node-version-file: .node-version
       - name: Test Windows standalone launcher
         shell: pwsh
+        env:
+          NODE_OPTIONS: ""
         run: node --test src/codex-dashboard/launcher.test.mjs
       - name: Test Windows PowerShell installer
         shell: pwsh

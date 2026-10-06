@@ -397,8 +397,13 @@ func windowsInstallerGateReady(installer, gate workflowJob) bool {
 func windowsLauncherGateReady(installer, gate workflowJob) bool {
 	step, found := findWorkflowStep(installer, "Test Windows standalone launcher")
 	return found && windowsInstallerGateReady(installer, gate) && windowsLauncherSetupReady(installer) &&
-		step.Shell == "pwsh" && unconditionalRequiredStep(step) &&
+		step.Shell == "pwsh" && unconditionalRequiredStep(step) && launcherNodeEnvironmentReady(step) &&
 		strings.TrimSpace(step.Run) == "node --test src/codex-dashboard/launcher.test.mjs"
+}
+
+func launcherNodeEnvironmentReady(step workflowStep) bool {
+	options, present := step.Env["NODE_OPTIONS"]
+	return present && options == "" && len(step.Env) == 1
 }
 
 func windowsLauncherSetupReady(job workflowJob) bool {
@@ -407,7 +412,7 @@ func windowsLauncherSetupReady(job workflowJob) bool {
 	launcher := slices.IndexFunc(job.Steps, func(step workflowStep) bool {
 		return step.Name == "Test Windows standalone launcher"
 	})
-	return checkout >= 0 && node > checkout && launcher > node && hasSingleLauncherAction(job, "actions/setup-node") && hasSingleLauncherAction(job, "actions/checkout") && dashboardNodePinReady(job)
+	return checkout >= 0 && node > checkout && launcher == node+1 && hasSingleLauncherAction(job, "actions/setup-node") && hasSingleLauncherAction(job, "actions/checkout") && dashboardNodePinReady(job)
 }
 
 func hasSingleLauncherAction(job workflowJob, action string) bool {

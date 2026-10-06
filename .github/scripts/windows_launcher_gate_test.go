@@ -46,10 +46,10 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.With["node-version-file"] = "go.mod" })
 		}},
 		{name: "later Node setup overrides version", mutate: func(job, _ *workflowJob) {
-			insertLauncherNodeSetup(job, workflowStep{Uses: "actions/setup-node@" + strings.Repeat("a", 40), With: map[string]string{"node-version": "18"}})
+			insertBeforeLauncher(job, workflowStep{Uses: "actions/setup-node@" + strings.Repeat("a", 40), With: map[string]string{"node-version": "18"}})
 		}},
 		{name: "later mutable Node setup", mutate: func(job, _ *workflowJob) {
-			insertLauncherNodeSetup(job, workflowStep{Uses: "actions/setup-node@v6", With: map[string]string{"node-version-file": ".node-version"}})
+			insertBeforeLauncher(job, workflowStep{Uses: "actions/setup-node@v6", With: map[string]string{"node-version-file": ".node-version"}})
 		}},
 		{name: "unrelated step before checkout", want: true, mutate: func(job, _ *workflowJob) {
 			job.Steps = append([]workflowStep{{Name: "Unrelated preparation", Run: "echo ready"}}, job.Steps...)
@@ -59,6 +59,20 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 		}},
 		{name: "ignored Node setup failure", mutate: func(job, _ *workflowJob) {
 			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.ContinueOnError = true })
+		}},
+		{name: "PATH override between Node and launcher", mutate: func(job, _ *workflowJob) {
+			insertBeforeLauncher(job, workflowStep{Name: "Replace Node path", Run: "'C:/unqualified-node' >> $env:GITHUB_PATH"})
+		}},
+		{name: "launcher test filtering via Node options", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Env = map[string]string{"NODE_OPTIONS": "--test-only"} })
+		}},
+		{name: "launcher environment overrides PATH", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) {
+				step.Env = map[string]string{"NODE_OPTIONS": "", "PATH": "C:/unqualified-node"}
+			})
+		}},
+		{name: "launcher inherits Node options", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Env = nil })
 		}},
 		{name: "Node setup after launcher", mutate: func(job, _ *workflowJob) {
 			reorderLauncherSetup(job, "actions/setup-node", "Test Windows standalone launcher")
@@ -176,7 +190,7 @@ func TestLauncherNodeMutationsFollowPinChanges(t *testing.T) {
 	}
 }
 
-func insertLauncherNodeSetup(job *workflowJob, step workflowStep) {
+func insertBeforeLauncher(job *workflowJob, step workflowStep) {
 	index := slices.IndexFunc(job.Steps, func(candidate workflowStep) bool { return candidate.Name == "Test Windows standalone launcher" })
 	job.Steps = slices.Insert(job.Steps, index, step)
 }
