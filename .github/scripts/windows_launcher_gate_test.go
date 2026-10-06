@@ -45,6 +45,15 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 		{name: "wrong Node version source", mutate: func(job, _ *workflowJob) {
 			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.With["node-version-file"] = "go.mod" })
 		}},
+		{name: "later Node setup overrides version", mutate: func(job, _ *workflowJob) {
+			insertLauncherNodeSetup(job, workflowStep{Uses: "actions/setup-node@" + strings.Repeat("a", 40), With: map[string]string{"node-version": "18"}})
+		}},
+		{name: "later mutable Node setup", mutate: func(job, _ *workflowJob) {
+			insertLauncherNodeSetup(job, workflowStep{Uses: "actions/setup-node@v6", With: map[string]string{"node-version-file": ".node-version"}})
+		}},
+		{name: "unrelated step before checkout", want: true, mutate: func(job, _ *workflowJob) {
+			job.Steps = append([]workflowStep{{Name: "Unrelated preparation", Run: "echo ready"}}, job.Steps...)
+		}},
 		{name: "conditional Node setup", mutate: func(job, _ *workflowJob) {
 			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.If = "false" })
 		}},
@@ -61,10 +70,34 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 			job.Steps = slices.DeleteFunc(job.Steps, func(step workflowStep) bool { return strings.HasPrefix(step.Uses, "actions/checkout@") })
 		}},
 		{name: "conditional checkout", mutate: func(job, _ *workflowJob) {
-			job.Steps[0].If = "false"
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.If = "false" })
 		}},
 		{name: "ignored checkout failure", mutate: func(job, _ *workflowJob) {
-			job.Steps[0].ContinueOnError = true
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.ContinueOnError = true })
+		}},
+		{name: "foreign checkout before Node cannot qualify a later repository checkout", mutate: func(job, _ *workflowJob) {
+			var original workflowStep
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { original = *step })
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.With = map[string]string{"repository": "example/unrelated"} })
+			job.Steps = append(job.Steps, original)
+		}},
+		{name: "later checkout replaces triggering revision", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) {
+				copy := *step
+				copy.With = map[string]string{"ref": "main"}
+				job.Steps = append(job.Steps, copy)
+			})
+		}},
+		{name: "checkout outside workspace root", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.With = map[string]string{"path": "dependency"} })
+		}},
+		{name: "checkout of an old ref", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.With = map[string]string{"ref": "main"} })
+		}},
+		{name: "explicit current repository and workspace root", want: true, mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) {
+				step.With = map[string]string{"repository": "${{ github.repository }}", "path": "."}
+			})
 		}},
 		{name: "Linux cannot qualify lifecycle", mutate: func(job, _ *workflowJob) { job.RunsOn = "ubuntu-latest" }},
 		{name: "aggregate dependency missing", mutate: func(_, gate *workflowJob) {
@@ -93,13 +126,17 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 }
 
 func mutateLauncherNodeSetup(job *workflowJob, mutate func(*workflowStep)) {
+	mutateLauncherAction(job, "actions/setup-node", mutate)
+}
+
+func mutateLauncherAction(job *workflowJob, action string, mutate func(*workflowStep)) {
 	for index := range job.Steps {
-		if strings.HasPrefix(job.Steps[index].Uses, "actions/setup-node@") {
+		if strings.HasPrefix(job.Steps[index].Uses, action+"@") {
 			mutate(&job.Steps[index])
 			return
 		}
 	}
-	panic("missing Windows launcher Node setup")
+	panic("missing Windows launcher action: " + action)
 }
 
 func reorderLauncherSetup(job *workflowJob, action, after string) {
@@ -127,8 +164,19 @@ func TestLauncherNodeMutationsFollowPinChanges(t *testing.T) {
 	if !windowsLauncherGateReady(job, gate) {
 		t.Fatal("an immutable pin change must preserve the contract")
 	}
+	job.Steps = append([]workflowStep{{Name: "Unrelated preparation", Run: "echo ready"}}, job.Steps...)
+	mutateLauncherAction(&job, "actions/checkout", func(step *workflowStep) { step.If = "false" })
+	if windowsLauncherGateReady(job, gate) {
+		t.Fatal("checkout mutations must follow unrelated prepended steps")
+	}
+	mutateLauncherAction(&job, "actions/checkout", func(step *workflowStep) { step.If = "" })
 	mutateLauncherNodeSetup(&job, func(step *workflowStep) { step.ContinueOnError = true })
 	if windowsLauncherGateReady(job, gate) {
 		t.Fatal("mutations must still target Node after its pin changes")
 	}
+}
+
+func insertLauncherNodeSetup(job *workflowJob, step workflowStep) {
+	index := slices.IndexFunc(job.Steps, func(candidate workflowStep) bool { return candidate.Name == "Test Windows standalone launcher" })
+	job.Steps = slices.Insert(job.Steps, index, step)
 }

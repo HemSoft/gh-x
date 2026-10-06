@@ -407,16 +407,32 @@ func windowsLauncherSetupReady(job workflowJob) bool {
 	launcher := slices.IndexFunc(job.Steps, func(step workflowStep) bool {
 		return step.Name == "Test Windows standalone launcher"
 	})
-	return checkout >= 0 && node > checkout && launcher > node && dashboardNodePinReady(job)
+	return checkout >= 0 && node > checkout && launcher > node && hasSingleLauncherAction(job, "actions/setup-node") && hasSingleLauncherAction(job, "actions/checkout") && dashboardNodePinReady(job)
+}
+
+func hasSingleLauncherAction(job workflowJob, action string) bool {
+	count := 0
+	for _, step := range job.Steps {
+		if strings.HasPrefix(step.Uses, action+"@") {
+			count++
+		}
+	}
+	return count == 1
 }
 
 func requiredActionIndex(job workflowJob, action string) int {
 	for index, step := range job.Steps {
-		if isPinnedAction(step.Uses, action) && unconditionalRequiredStep(step) {
+		if isPinnedAction(step.Uses, action) && unconditionalRequiredStep(step) &&
+			(action != "actions/checkout" || checkoutTargetsWorkspace(step)) {
 			return index
 		}
 	}
 	return -1
+}
+
+func checkoutTargetsWorkspace(step workflowStep) bool {
+	return (step.With["repository"] == "" || step.With["repository"] == "${{ github.repository }}") &&
+		(step.With["path"] == "" || step.With["path"] == ".") && step.With["ref"] == ""
 }
 
 func validateRuleset(configuredRuleset ruleset) error {
