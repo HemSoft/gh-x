@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-06
+
+- chore(deps): bump github/gh-aw-actions/setup-cli from 0.89.21 to 0.90.1 in the github-actions group (#169)
+- docs: record v0.15.0 release (#172)
+
 ## [0.15.0] - 2026-10-06
 
 - feat: add gold gh-x project icon for T3 Code (#171)
@@ -260,7 +265,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.1
 [0.15.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.0
 [0.14.6]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.6
 [0.14.5]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.5
