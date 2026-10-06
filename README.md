@@ -695,9 +695,10 @@ blocks the affected gate, not unrelated work. Failed coverage collection blocks
 coverage and CRAP instead of reusing an old profile. Any failed or blocked local
 gate makes the audit exit nonzero.
 
-All maintained Go packages, including the hidden `.github/scripts/...` release
+All maintained production Go packages, including the hidden `.github/scripts/...` release
 and review helpers, participate in build, vet, static analysis, complexity and
-fresh coverage gates. Behavior tests run separately. CRAP joins use full relative
+fresh coverage gates. The `./tests/behavior` package runs separately without a
+coverage profile. CRAP joins use full relative
 file paths and function declaration lines, so helper files and methods with the
 same names cannot borrow coverage from one another. No generated Go source is
 tracked. `*_test.go` files are excluded from production complexity; no maintained

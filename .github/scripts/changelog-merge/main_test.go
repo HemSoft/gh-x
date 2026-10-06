@@ -709,7 +709,9 @@ func TestReviewDecisionClearing(t *testing.T) {
 		name, author, head, state string
 		after                     time.Duration
 		want                      bool
+		missingTimestamp          bool
 	}{
+		{name: "missing finding timestamp", author: "reviewer", head: testHead, state: "APPROVED", after: time.Minute, missingTimestamp: true},
 		{name: "later approval", author: "reviewer", head: testHead, state: "APPROVED", after: time.Minute, want: true},
 		{name: "later dismissal", author: "reviewer", head: testHead, state: "DISMISSED", after: time.Minute, want: true},
 		{name: "different author", author: "other", head: testHead, state: "APPROVED", after: time.Minute},
@@ -722,8 +724,12 @@ func TestReviewDecisionClearing(t *testing.T) {
 			later := review{State: test.state, SubmittedAt: when.Add(test.after), Author: actor{Login: test.author}}
 			later.Commit.OID = test.head
 			state := reviewState{}
-			state.Reviews.Nodes = []review{finding, later}
-			if got := clearedReviewDecision(state, finding); got != test.want {
+			candidate := finding
+			if test.missingTimestamp {
+				candidate.SubmittedAt = time.Time{}
+			}
+			state.Reviews.Nodes = []review{candidate, later}
+			if got := clearedReviewDecision(state, candidate); got != test.want {
 				t.Fatalf("cleared = %v, want %v", got, test.want)
 			}
 		})
