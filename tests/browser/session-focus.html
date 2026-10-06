@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Session focus browser regression</title>
+<h1>Session focus browser regression</h1>
+<output id="result">Running…</output>
+<script type="module">
+import { renderSessions } from "../../src/codex-dashboard/dashboard-ui.mjs";
+import { runSessionFocusRegression } from "./session-focus.mjs";
+try {
+    const result = runSessionFocusRegression(document, renderSessions);
+    document.getElementById("result").textContent = JSON.stringify(result);
+} catch (error) {
+    document.getElementById("result").textContent = `FAIL: ${error.message}`;
+    throw error;
+}
+</script>
+</html>
