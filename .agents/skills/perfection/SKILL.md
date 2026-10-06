@@ -120,11 +120,20 @@ PowerShell executor regression tests. The local runner executes:
     in `.github/quality-tools.env`, including integer-ratio boundary checks.
 11. Run performance gate tests and all versioned benchmark budgets. Local audits
     always measure; only CI applies changed-path selection.
+12. Run dashboard JavaScript quality fixtures and the same all-source c8/ESLint
+    measurement as CI. The reviewed policy prevents aggregate/per-module coverage
+    loss and worst-function CRAP growth; any function above CRAP 30 fails.
+    Scores from 15 through 30 remain visible as the review queue. See
+    `docs/dashboard-quality.md` for the per-function V8 branch basis and explicit
+    zero-coverage entry-module gaps. Failure reports remain in the audit's
+    artifact directory.
 
 Prerequisites: PowerShell 7, the Go version in `go.mod`, a supported race-test C
-compiler, Node 24 with npx, Git, authenticated read-only GitHub CLI access, Bash
+compiler, Node from `.node-version` with npm/npx, Git, authenticated read-only GitHub CLI access, Bash
 and its standard Unix utilities. Git Bash supplies those utilities on Windows.
 Pinned analyzers must already be installed; the audit never installs them.
+Run `node .github/scripts/dashboard-quality/install.mjs` for the locked JavaScript development tools first;
+the measurement checks direct pins and the complete secondary dependency graph.
 
 The default JSON report and performance evidence live in a unique system temp
 directory. `-ReportPath <existing-directory>/audit.json` selects another report

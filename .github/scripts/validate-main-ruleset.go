@@ -208,6 +208,7 @@ func validateReviewCI(ci workflow) {
 
 func validateBuildCI(ci workflow) {
 	require(helperQualityScopesReady(ci), "all maintained Go helpers must participate in shared quality gates")
+	require(dashboardQualityReady(ci), "dashboard JavaScript quality must use locked tools, shared commands and retained failure evidence")
 	crossBuild := namedStep(ci.Jobs["build-and-test"], "Build all release targets")
 	require(reflect.DeepEqual(crossBuild.Env, map[string]string{
 		"RELEASE_VERSION":    "ci",
@@ -577,16 +578,71 @@ func actionVersionComment(workflowContent, action string) (string, bool) {
 }
 
 func helperQualityScopesReady(ci workflow) bool {
-	for job, steps := range helperQualityCommands {
+	if !workflowCommandsReady(ci, helperQualityCommands) {
+		return false
+	}
+	crap, _ := findWorkflowStep(ci.Jobs["quality"], "Enforce: CRAP score < 30")
+	return crap.Shell == "pwsh"
+}
+
+func workflowCommandsReady(ci workflow, commands map[string]map[string]string) bool {
+	for job, steps := range commands {
 		for name, command := range steps {
 			step, found := findWorkflowStep(ci.Jobs[job], name)
-			if !found || strings.TrimSpace(step.Run) != command {
+			if !found || strings.TrimSpace(step.Run) != command || step.If != "" || step.ContinueOnError {
 				return false
 			}
 		}
 	}
-	crap, _ := findWorkflowStep(ci.Jobs["quality"], "Enforce: CRAP score < 30")
-	return crap.Shell == "pwsh"
+	return true
+}
+
+func dashboardQualityReady(ci workflow) bool {
+	if !workflowCommandsReady(ci, dashboardQualityCommands) {
+		return false
+	}
+	for _, job := range []string{"build-and-test", "quality", "performance"} {
+		if !dashboardNodePinReady(ci.Jobs[job]) {
+			return false
+		}
+	}
+	return dashboardEvidenceReady(ci.Jobs["quality"]) && dashboardDiagnosticsReady(ci.Jobs["quality"])
+}
+
+func dashboardDiagnosticsReady(job workflowJob) bool {
+	for _, name := range []string{"Install dashboard quality tools", "Test dashboard quality gate"} {
+		if namedStep(job, name).Shell != "bash" {
+			return false
+		}
+	}
+	return true
+}
+
+func dashboardEvidenceReady(job workflowJob) bool {
+	upload, found := findWorkflowStep(job, "Upload dashboard quality evidence")
+	return found && upload.If == "always()" && !upload.ContinueOnError &&
+		upload.With["name"] == "dashboard-quality" && upload.With["path"] == "${{ runner.temp }}/dashboard-quality" &&
+		upload.With["retention-days"] == "14" && upload.With["if-no-files-found"] == "error" && isPinnedAction(upload.Uses, "actions/upload-artifact")
+}
+
+func dashboardNodePinReady(job workflowJob) bool {
+	for _, step := range job.Steps {
+		if strings.HasPrefix(step.Uses, "actions/setup-node@") {
+			return isPinnedAction(step.Uses, "actions/setup-node") && unconditionalRequiredStep(step) &&
+				step.With["node-version-file"] == ".node-version" && step.With["node-version"] == ""
+		}
+	}
+	return false
+}
+
+var dashboardQualityCommands = map[string]map[string]string{
+	"quality": {
+		"Install dashboard quality tools": `mkdir -p "$RUNNER_TEMP/dashboard-quality"
+node .github/scripts/dashboard-quality/install.mjs 2>&1 | tee "$RUNNER_TEMP/dashboard-quality/install.log"`,
+		"Test dashboard quality gate": `mkdir -p "$RUNNER_TEMP/dashboard-quality"
+node --test .github/scripts/dashboard-quality/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/dashboard-quality/fixtures.log"`,
+		"Enforce dashboard JavaScript quality": `node .github/scripts/dashboard-quality/run.mjs "$RUNNER_TEMP/dashboard-quality"`,
+	},
 }
 
 func findWorkflowStep(job workflowJob, name string) (workflowStep, bool) {

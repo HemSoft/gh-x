@@ -3,6 +3,11 @@ import test from "node:test";
 
 import { createDashboardServer } from "./dashboard-server.mjs";
 
+test("rejects missing snapshot providers before opening a server", async () => {
+    await assert.rejects(createDashboardServer(), /getSnapshot is required/);
+    await assert.rejects(createDashboardServer({ getSnapshot: 1 }), /getSnapshot is required/);
+});
+
 test("serves the protected Codex dashboard and validated snapshots", async () => {
     const requests = [];
     const server = await createDashboardServer({

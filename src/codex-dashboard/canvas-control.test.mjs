@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -39,6 +39,40 @@ test("rejects sessions without Canvas rendering", async () => {
         }),
         /Canvas rendering is unavailable/,
     );
+});
+
+test("rejects incomplete Canvas control inputs before publishing a marker", async (context) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "canvas-invalid-"));
+    context.after(() => rm(directory, { recursive: true, force: true }));
+    await assert.rejects(createCanvasControl(), /openCanvas is required/);
+    await assert.rejects(createCanvasControl({ directory }), /openCanvas is required/);
+    assert.deepEqual(await readdir(directory), []);
+    await assert.rejects(createCanvasControl({ directory, openCanvas() {} }), /workingDirectory is required/);
+    assert.deepEqual(await readdir(directory), []);
+    await assert.rejects(createCanvasControl({ directory, openCanvas() {}, workingDirectory: " " }), /workingDirectory is required/);
+    assert.deepEqual(await readdir(directory), []);
+});
+
+test("Canvas control defaults produce a unique private marker and preserve callback errors", async (context) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "canvas-defaults-"));
+    context.after(() => rm(directory, { recursive: true, force: true }));
+    const control = await createCanvasControl({
+        directory, workingDirectory: directory,
+        openCanvas() { throw new Error("RPC unavailable"); },
+    });
+    context.after(() => control.close());
+    const marker = JSON.parse(await readFile(control.markerPath, "utf8"));
+    assert.equal(marker.pid, process.pid);
+    assert.match(marker.updatedAt, /^\d{4}-\d\d-\d\dT/);
+    assert.match(control.endpoint, /\/[A-Za-z0-9_-]{32}\/open$/);
+    const method = await fetch(control.endpoint);
+    assert.equal(method.status, 405);
+    const failed = await fetch(control.endpoint, { method: "POST" });
+    assert.equal(failed.status, 500);
+    assert.deepEqual(await failed.json(), { error: "RPC unavailable" });
+    await control.close();
+    await control.close();
+    await assert.rejects(readFile(control.markerPath), { code: "ENOENT" });
 });
 
 test("publishes a private endpoint that opens the Codex Canvas", async () => {

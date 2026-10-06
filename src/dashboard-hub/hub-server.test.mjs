@@ -6,6 +6,13 @@ import test from "node:test";
 
 import { createDashboardHub } from "./hub-server.mjs";
 
+test("rejects incomplete adapter pairs before reading files or listening", async () => {
+    for (const options of [undefined, {}, { codexAdapter: {} }, { codexAdapter: { getSnapshot() {} } },
+        { codexAdapter: { getSnapshot() {} }, copilotAdapter: {} }]) {
+        await assert.rejects(createDashboardHub(options), /codexAdapter and copilotAdapter are required/);
+    }
+});
+
 test("serves both dashboards through local and Tailscale-mounted paths", async (context) => {
     const fixture = await mkdtemp(path.join(os.tmpdir(), "dashboard-hub-"));
     await Promise.all([
