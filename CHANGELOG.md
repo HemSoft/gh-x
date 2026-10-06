@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.15.5] - 2026-10-06
+
+- chore: enforce dashboard JavaScript quality baselines (#186)
+- docs: record v0.15.4 release (#185)
+
 ## [0.15.4] - 2026-10-06
 
 - fix: preserve dashboard session keyboard focus across refreshes (#184)
@@ -280,7 +285,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.15.4...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.15.5...HEAD
+[0.15.5]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.5
 [0.15.4]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.4
 [0.15.3]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.3
 [0.15.2]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.2
