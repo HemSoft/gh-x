@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-06
+
+- feat: add gold gh-x project icon for T3 Code (#171)
+- docs: record v0.14.6 release (#168)
+
 ## [0.14.6] - 2026-10-04
 
 - fix: verify dashboard hub Tailscale publication (#167)
@@ -255,7 +260,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.14.6...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.0
 [0.14.6]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.6
 [0.14.5]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.5
 [0.14.4]: https://github.com/HemSoft/gh-x/releases/tag/v0.14.4
