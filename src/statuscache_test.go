@@ -320,6 +320,7 @@ func TestStatusTargetFingerprintSeparatesGitHubOverrides(t *testing.T) {
 
 func TestStatusCacheDirectoryTracksConfiguredDefaultRemote(t *testing.T) {
 	defer saveStatusFuncs()()
+	isolateStatusCacheAuthentication(t)
 	commonDirectory := t.TempDir()
 	remoteConfig := "remote.origin.url\nhttps://github.com/owner/repo.git\x00" +
 		"remote.other.url\nhttps://github.com/owner/other.git\x00" +
@@ -470,6 +471,7 @@ func TestStatusRemoteConfigTracksURLRewrites(t *testing.T) {
 
 func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 	defer saveStatusFuncs()()
+	isolateStatusCacheAuthentication(t)
 	commonDirectory := t.TempDir()
 	remoteConfig := "remote.upstream.url\nhttps://github.com/owner/repo.git\x00"
 	statusCommandFunc = func(name string, args ...string) (string, error) {
@@ -517,6 +519,7 @@ func TestStatusCacheDirectoryWithoutOrigin(t *testing.T) {
 
 func TestStatusCacheDirectoryIsolatesAuthenticationContext(t *testing.T) {
 	defer saveStatusFuncs()()
+	isolateStatusCacheAuthentication(t)
 	commonDirectory := t.TempDir()
 	configDirectory := t.TempDir()
 	t.Setenv("GH_CONFIG_DIR", configDirectory)
@@ -700,4 +703,88 @@ func useStatusCacheDirectory(t *testing.T, directory, remoteURL string) {
 	t.Cleanup(func() {
 		statusCacheDirectoryFunc = saved
 	})
+}
+
+// Cache unit tests own auth files and the keyring seam. Never inherit a
+// developer token or call the platform credential store from a fixture.
+func isolateStatusCacheAuthentication(t *testing.T) string {
+	t.Helper()
+	directory := t.TempDir()
+	t.Setenv("GH_CONFIG_DIR", directory)
+	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_REPO", "GH_HOST"} {
+		t.Setenv(name, "")
+	}
+	previous := statusKeyringGetFunc
+	t.Cleanup(func() { statusKeyringGetFunc = previous })
+	statusKeyringGetFunc = func(string, string) (string, error) {
+		return "", errors.New("unexpected keyring access in isolated cache fixture")
+	}
+	return directory
+}
+
+func TestStatusCacheAuthenticationFixtureIgnoresAmbientCredentials(t *testing.T) {
+	tests := []struct{ name, hosts, token string }{
+		{name: "missing authentication"},
+		{name: "configured developer account", hosts: "github.com:\n  user: developer\n"},
+		{name: "environment tokens", hosts: "github.com:\n  user: developer\n", token: "synthetic-ambient-token"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ambient := t.TempDir()
+			t.Setenv("GH_CONFIG_DIR", ambient)
+			if test.hosts != "" {
+				if err := os.WriteFile(filepath.Join(ambient, "hosts.yml"), []byte(test.hosts), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
+				t.Setenv(name, test.token)
+			}
+			directory := isolateStatusCacheAuthentication(t)
+			if directory == ambient {
+				t.Fatal("fixture retained developer configuration")
+			}
+			for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
+				if os.Getenv(name) != "" {
+					t.Fatalf("fixture inherited %s", name)
+				}
+			}
+			auth, err := statusAuthContext()
+			if err != nil || auth != "" {
+				t.Fatalf("isolated authentication = %q, %v", auth, err)
+			}
+			if test.hosts != "" {
+				bytes, err := os.ReadFile(filepath.Join(ambient, "hosts.yml"))
+				if err != nil || string(bytes) != test.hosts {
+					t.Fatalf("ambient config changed: %q, %v", bytes, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStatusAuthContextConfiguredUnavailableKeyringFailsClosed(t *testing.T) {
+	directory := isolateStatusCacheAuthentication(t)
+	contents := []byte("github.com:\n  user: fixture-user\n")
+	path := filepath.Join(directory, "hosts.yml")
+	if err := os.WriteFile(path, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	unavailable := errors.New("synthetic keyring unavailable")
+	calls := 0
+	statusKeyringGetFunc = func(service, user string) (string, error) {
+		calls++
+		if service != "gh:github.com" || user != "" {
+			t.Fatalf("keyring target = %q/%q", service, user)
+		}
+		return "", unavailable
+	}
+	auth, err := statusAuthContext()
+	if !errors.Is(err, unavailable) || auth != "" || calls != 1 {
+		t.Fatalf("unavailable keyring = %q, %v, calls=%d", auth, err, calls)
+	}
+	persisted, readErr := os.ReadFile(path)
+	if readErr != nil || string(persisted) != string(contents) {
+		t.Fatalf("authentication config mutated: %q, %v", persisted, readErr)
+	}
 }
