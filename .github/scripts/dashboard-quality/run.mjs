@@ -4,11 +4,13 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { toolsDirectory } from './tools.mjs';
+import { recordFailure } from './failure.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const toolRoot = await toolsDirectory(root);
 const require = createRequire(path.join(toolRoot, 'package.json'));
 const output = path.resolve(process.argv[2] ?? path.join(root, 'coverage/dashboard'));
+let testFailure;
 await mkdir(output, { recursive: true });
 for (const name of ['quality.json', 'quality.md', 'failure.json', 'coverage-final.json']) {
   await rm(path.join(output, name), { force: true });
@@ -66,6 +68,7 @@ async function run() {
     process.execPath, '--test', ...sourceRoots.map(directory => `${directory}/*.test.mjs`));
   const tests = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit' });
   if (tests.error) throw tests.error;
+  if (tests.status !== 0) testFailure = `Dashboard tests failed: ${tests.signal ? `signal ${tests.signal}` : `exit ${tests.status}`}; retained measurements do not qualify failed tests`;
   const coverage = JSON.parse(await readFile(path.join(output, 'coverage-final.json'), 'utf8'));
   const functions = await rawFunctions(path.join(output, 'v8'));
   const modules = await Promise.all(files.map(async file => {
@@ -77,7 +80,7 @@ async function run() {
     measurement: 'c8 V8 statements/lines/branches; AST function inventory and raw V8 execution ranges; ESLint classic cyclomatic complexity',
     metrics: aggregate(modules), modules };
   const findings = policyFindings(report, policy);
-  if (tests.status !== 0) findings.unshift(`Dashboard tests failed: exit ${tests.status}; retained measurements do not qualify failed tests`);
+  if (testFailure) findings.unshift(testFailure);
   report.findings = findings;
   await writeFile(path.join(output, 'quality.json'), JSON.stringify(report, null, 2) + '\n');
   const rows = modules.flatMap(module => module.functions).sort((a, b) => b.crap - a.crap);
@@ -95,7 +98,8 @@ async function run() {
 try {
   await run();
 } catch (error) {
-  await writeFile(path.join(output, 'failure.json'), JSON.stringify({ error: error.message }, null, 2) + '\n');
-  console.error(error.message);
-  process.exitCode = 1;
+  if (testFailure && !error.message.startsWith(testFailure)) {
+    error = new Error(`${testFailure}\nMeasurement report unavailable: ${error.message}`, { cause: error });
+  }
+  await recordFailure(error, output);
 }
