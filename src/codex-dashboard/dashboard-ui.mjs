@@ -196,11 +196,15 @@ export async function startDashboard({
     documentRef.getElementById("theme-fields").addEventListener("input", () => {
         applyCustomTheme(documentRef, readThemeForm(documentRef));
     });
-    documentRef.getElementById("cancel-theme").addEventListener("click", () => {
+    const restoreTheme = () => {
         theme = applyTheme(documentRef, theme);
         if (theme === "custom") {
             applyCustomTheme(documentRef, customTheme);
         }
+    };
+    themeDialog.addEventListener("cancel", restoreTheme);
+    documentRef.getElementById("cancel-theme").addEventListener("click", () => {
+        restoreTheme();
         themeDialog.close();
     });
     documentRef.getElementById("save-theme").addEventListener("click", () => {
