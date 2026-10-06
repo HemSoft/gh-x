@@ -36,7 +36,7 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 		}},
 		{name: "missing Node setup", mutate: func(job, _ *workflowJob) {
 			job.Steps = slices.DeleteFunc(job.Steps, func(step workflowStep) bool {
-				return step.Uses == "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38"
+				return strings.HasPrefix(step.Uses, "actions/setup-node@")
 			})
 		}},
 		{name: "mutable Node action", mutate: func(job, _ *workflowJob) {
@@ -94,7 +94,7 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 
 func mutateLauncherNodeSetup(job *workflowJob, mutate func(*workflowStep)) {
 	for index := range job.Steps {
-		if job.Steps[index].Uses == "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38" {
+		if strings.HasPrefix(job.Steps[index].Uses, "actions/setup-node@") {
 			mutate(&job.Steps[index])
 			return
 		}
@@ -111,4 +111,24 @@ func reorderLauncherSetup(job *workflowJob, action, after string) {
 	setup := job.Steps[from]
 	copy(job.Steps[from:to], job.Steps[from+1:to+1])
 	job.Steps[to] = setup
+}
+
+func TestLauncherNodeMutationsFollowPinChanges(t *testing.T) {
+	data, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci workflow
+	if err := yaml.Unmarshal(data, &ci); err != nil {
+		t.Fatal(err)
+	}
+	job, gate := ci.Jobs["windows-installer"], ci.Jobs["gate"]
+	mutateLauncherNodeSetup(&job, func(step *workflowStep) { step.Uses = "actions/setup-node@" + strings.Repeat("a", 40) })
+	if !windowsLauncherGateReady(job, gate) {
+		t.Fatal("an immutable pin change must preserve the contract")
+	}
+	mutateLauncherNodeSetup(&job, func(step *workflowStep) { step.ContinueOnError = true })
+	if windowsLauncherGateReady(job, gate) {
+		t.Fatal("mutations must still target Node after its pin changes")
+	}
 }
