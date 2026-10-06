@@ -71,7 +71,7 @@ func TestRunCheckReleaseDecisions(t *testing.T) {
 				head = commitReleaseFixture(t, test.path, "fix: product")
 			}
 			if test.superseded {
-				head = strings.Repeat("a", 40)
+				commitReleaseFixture(t, "README.md", "docs: newer main")
 			}
 			t.Setenv("RELEASE_SHA", head)
 			t.Setenv("GITHUB_OUTPUT", output)
@@ -81,6 +81,9 @@ func TestRunCheckReleaseDecisions(t *testing.T) {
 			bytes, err := os.ReadFile(output)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if test.superseded && string(bytes) != "skip=true\n" {
+				t.Fatalf("superseded outputs = %q; must not reconcile a tagged head", bytes)
 			}
 			if !strings.Contains(string(bytes), test.expected+"\n") {
 				t.Fatalf("outputs = %s, want %s", bytes, test.expected)

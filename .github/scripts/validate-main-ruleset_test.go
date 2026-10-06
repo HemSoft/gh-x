@@ -280,5 +280,14 @@ func TestActionVersionComment(t *testing.T) {
 
 func TestVersionedWorkflowValidation(t *testing.T) {
 	t.Chdir("../..")
-	main()
+	if err := validateRepository(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryValidationFailureReturnsError(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := validateRepository(); err == nil || !strings.Contains(err.Error(), "read .github/rulesets/main.json") {
+		t.Fatalf("missing configuration error = %v", err)
+	}
 }

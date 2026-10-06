@@ -140,3 +140,47 @@ func TestHiddenHelperQualityScopes(t *testing.T) {
 		})
 	}
 }
+
+func TestHelperScopeCannotComeFromCommentsOrUnrelatedCommands(t *testing.T) {
+	contents, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for jobName, steps := range helperQualityCommands {
+		for name := range steps {
+			for _, disguise := range []string{"comment", "echo", "disabled", "missing step"} {
+				t.Run(name+"/"+disguise, func(t *testing.T) {
+					var ci workflow
+					if err := yaml.Unmarshal(contents, &ci); err != nil {
+						t.Fatal(err)
+					}
+					job := ci.Jobs[jobName]
+					for i := range job.Steps {
+						if job.Steps[i].Name != name {
+							continue
+						}
+						scope := "./.github/scripts/..."
+						if jobName == "quality" {
+							scope = ".github/scripts"
+						}
+						job.Steps[i].Run = strings.ReplaceAll(job.Steps[i].Run, scope, "")
+						switch disguise {
+						case "comment":
+							job.Steps[i].Run += "\n# " + scope
+						case "echo":
+							job.Steps[i].Run += "\necho " + scope
+						case "disabled":
+							job.Steps[i].Run = "if false; then\n" + steps[name] + "\nfi"
+						case "missing step":
+							job.Steps[i].Name = "renamed step"
+						}
+					}
+					ci.Jobs[jobName] = job
+					if helperQualityScopesReady(ci) {
+						t.Fatal("disguised or missing helper scope was accepted")
+					}
+				})
+			}
+		}
+	}
+}

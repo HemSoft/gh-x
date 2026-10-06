@@ -107,6 +107,29 @@ type workflowStep struct {
 }
 
 func main() {
+	if err := validateRepository(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// Configuration assertions stop at the first invalid invariant. Convert only
+// those expected failures to errors; programming panics must still propagate.
+func validateRepository() (err error) {
+	defer func() {
+		if failure := recover(); failure != nil {
+			if validationErr, ok := failure.(validationError); ok {
+				err = validationErr
+				return
+			}
+			panic(failure)
+		}
+	}()
+	validateVersionedWorkflows()
+	return nil
+}
+
+func validateVersionedWorkflows() {
 	var configuredRuleset ruleset
 	loadJSON(".github/rulesets/main.json", &configuredRuleset)
 	ci, ciContent := loadWorkflowWithContent(".github/workflows/ci.yml")
@@ -516,10 +539,11 @@ func require(condition bool, message string) {
 	}
 }
 
-func fail(message string) {
-	fmt.Fprintln(os.Stderr, message)
-	os.Exit(1)
-}
+type validationError string
+
+func (err validationError) Error() string { return string(err) }
+
+func fail(message string) { panic(validationError(message)) }
 
 var actionSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
@@ -553,23 +577,73 @@ func actionVersionComment(workflowContent, action string) (string, bool) {
 }
 
 func helperQualityScopesReady(ci workflow) bool {
-	packageSteps := map[string][]string{
-		"build-and-test": {"Build", "Vet", "Test Go packages (race detection enabled)"},
-		"lint":           {"Staticcheck", "Gocritic (anti-pattern detection)", "Errcheck (unchecked errors)", "Dead code detection", "Vulnerability scan"},
-	}
-	for job, names := range packageSteps {
-		for _, name := range names {
-			if !strings.Contains(namedStep(ci.Jobs[job], name).Run, "./.github/scripts/...") {
+	for job, steps := range helperQualityCommands {
+		for name, command := range steps {
+			step, found := findWorkflowStep(ci.Jobs[job], name)
+			if !found || strings.TrimSpace(step.Run) != command {
 				return false
 			}
 		}
 	}
-	for _, name := range []string{"Enforce: cyclomatic complexity ≤ 10", "Enforce: cognitive complexity ≤ 15"} {
-		if !strings.Contains(namedStep(ci.Jobs["quality"], name).Run, ".github/scripts") {
-			return false
+	crap, _ := findWorkflowStep(ci.Jobs["quality"], "Enforce: CRAP score < 30")
+	return crap.Shell == "pwsh"
+}
+
+func findWorkflowStep(job workflowJob, name string) (workflowStep, bool) {
+	for _, step := range job.Steps {
+		if step.Name == name {
+			return step, true
 		}
 	}
-	crap := namedStep(ci.Jobs["quality"], "Enforce: CRAP score < 30")
-	return crap.Shell == "pwsh" && strings.TrimSpace(crap.Run) == `. ./.agents/skills/perfection/scripts/perfection-audit.ps1
-Assert-CrapThreshold coverage.out 30.0`
+	return workflowStep{}, false
+}
+
+// Keep these commands canonical: a comment or unrelated command containing a
+// helper path cannot stand in for an analyzer's actual arguments.
+var helperQualityCommands = map[string]map[string]string{
+	"build-and-test": {
+		"Build": `go build -o "$RUNNER_TEMP/bin/" ./... ./.github/scripts/...`,
+		"Vet":   `go vet ./... ./.github/scripts/...`,
+		"Test Go packages (race detection enabled)": `go list ./... ./.github/scripts/... | grep -v '/tests/behavior$' > "$RUNNER_TEMP/go-packages.list"
+mapfile -t packages < "$RUNNER_TEMP/go-packages.list"
+go test -race -count=1 -coverprofile=coverage.out "${packages[@]}"`,
+	},
+	"lint": {
+		"Staticcheck":                       `staticcheck ./... ./.github/scripts/...`,
+		"Gocritic (anti-pattern detection)": `gocritic check ./... ./.github/scripts/...`,
+		"Errcheck (unchecked errors)":       `errcheck -exclude .errcheck_excludes ./... ./.github/scripts/...`,
+		"Dead code detection": `output=$(deadcode ./... ./.github/scripts/... 2>&1 || true)
+if [ -n "$output" ]; then
+  echo "::error::Dead code detected:"
+  echo "$output"
+  exit 1
+fi`,
+		"Vulnerability scan": `govulncheck ./... ./.github/scripts/...`,
+	},
+	"quality": {
+		"Enforce: cyclomatic complexity ≤ 10": `if ! command -v gocyclo &>/dev/null; then
+  echo "::error::gocyclo not installed"
+  exit 1
+fi
+violations=$(gocyclo -over 10 -ignore "_test\.go" . .github/scripts 2>&1 || true)
+if [ -n "$violations" ]; then
+  count=$(echo "$violations" | wc -l)
+  echo "::error::${count} function(s) exceed cyclomatic complexity 10:"
+  echo "$violations"
+  exit 1
+fi`,
+		"Enforce: cognitive complexity ≤ 15": `if ! command -v gocognit &>/dev/null; then
+  echo "::error::gocognit not installed"
+  exit 1
+fi
+violations=$(gocognit -over 15 -ignore "_test\.go" . .github/scripts 2>&1 || true)
+if [ -n "$violations" ]; then
+  count=$(echo "$violations" | wc -l)
+  echo "::error::${count} function(s) exceed cognitive complexity 15:"
+  echo "$violations"
+  exit 1
+fi`,
+		"Enforce: CRAP score < 30": `. ./.agents/skills/perfection/scripts/perfection-audit.ps1
+Assert-CrapThreshold coverage.out 30.0`,
+	},
 }

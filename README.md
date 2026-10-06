@@ -699,8 +699,9 @@ All maintained Go packages, including the hidden `.github/scripts/...` release
 and review helpers, participate in build, vet, static analysis, complexity and
 fresh coverage gates. Behavior tests run separately. CRAP joins use full relative
 file paths and function declaration lines, so helper files and methods with the
-same names cannot borrow coverage from one another. No generated Go source is tracked. `*_test.go` files are excluded from
-production complexity; no maintained helper is excluded. Mutation testing retains its separately declared `./src` scope.
+same names cannot borrow coverage from one another. No generated Go source is
+tracked. `*_test.go` files are excluded from production complexity; no maintained
+helper is excluded. Mutation testing retains its separately declared `./src` scope.
 
 The local set includes release-helper tests, all 12 release-target builds,
 CLI behavior, dashboard tests, ruleset and changelog validation, mutation

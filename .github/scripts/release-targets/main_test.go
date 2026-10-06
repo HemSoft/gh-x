@@ -222,10 +222,14 @@ func TestRunTargets(t *testing.T) {
 			t.Chdir("../../..")
 			t.Setenv(manifestEnv, test.manifest)
 			t.Setenv("RELEASE_VERSION", "")
-			err := runTargets(test.args)
+			output, err := captureTargetOutput(t, func() error { return runTargets(test.args) })
 			if test.wantErr == "" {
 				if err != nil {
 					t.Fatal(err)
+				}
+				want := strings.ReplaceAll(strings.Join(repositoryTargets, "\n"), "=", " -> ") + "\n"
+				if output != want {
+					t.Fatalf("target listing = %q, want %q", output, want)
 				}
 				return
 			}
@@ -234,4 +238,27 @@ func TestRunTargets(t *testing.T) {
 			}
 		})
 	}
+}
+
+func captureTargetOutput(t *testing.T, run func() error) (string, error) {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "target-output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := os.Stdout
+	os.Stdout = file
+	t.Cleanup(func() {
+		os.Stdout = previous
+		if err := file.Close(); err != nil {
+			t.Errorf("close captured output: %v", err)
+		}
+	})
+	runErr := run()
+	os.Stdout = previous
+	output, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output), runErr
 }
