@@ -251,7 +251,7 @@ jobs:
           node-version-file: .node-version
 
       - name: Install dashboard quality tools
-        run: npm ci --ignore-scripts --no-fund --no-audit
+        run: node .github/scripts/dashboard-quality/install.mjs
 
       - name: Test dashboard quality gate
         run: node --test .github/scripts/dashboard-quality/*.test.mjs

@@ -621,7 +621,7 @@ func dashboardNodePinReady(job workflowJob) bool {
 
 var dashboardQualityCommands = map[string]map[string]string{
 	"quality": {
-		"Install dashboard quality tools":      "npm ci --ignore-scripts --no-fund --no-audit",
+		"Install dashboard quality tools":      "node .github/scripts/dashboard-quality/install.mjs",
 		"Test dashboard quality gate":          "node --test .github/scripts/dashboard-quality/*.test.mjs",
 		"Enforce dashboard JavaScript quality": `node .github/scripts/dashboard-quality/run.mjs "$RUNNER_TEMP/dashboard-quality"`,
 	},

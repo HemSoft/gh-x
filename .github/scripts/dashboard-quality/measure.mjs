@@ -1,5 +1,10 @@
-import { Linter } from 'eslint';
-import { builtinRules } from 'eslint/use-at-your-own-risk';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { toolsDirectory } from './tools.mjs';
+
+const require = createRequire(path.join(await toolsDirectory(), 'package.json'));
+const { Linter } = require('eslint');
+const { builtinRules } = require('eslint/use-at-your-own-risk');
 
 export const sourceRoots = ['src/codex-dashboard', 'src/dashboard-hub'];
 export const fixtureExclusions = ['src/codex-dashboard/test-process-liveness.mjs'];

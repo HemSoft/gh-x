@@ -3,9 +3,11 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { toolsDirectory } from './tools.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
-const require = createRequire(import.meta.url);
+const toolRoot = await toolsDirectory(root);
+const require = createRequire(path.join(toolRoot, 'package.json'));
 const output = path.resolve(process.argv[2] ?? path.join(root, 'coverage/dashboard'));
 await mkdir(output, { recursive: true });
 for (const name of ['quality.json', 'quality.md', 'failure.json', 'coverage-final.json']) {
@@ -18,12 +20,12 @@ async function verifyTools() {
   const declared = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
   for (const tool of ['c8', 'eslint']) {
     const installed = JSON.parse(await readFile(require.resolve(`${tool}/package.json`), 'utf8'));
-    if (installed.version !== declared.devDependencies[tool]) throw new Error(`${tool} ${installed.version}; expected ${declared.devDependencies[tool]}; run npm ci`);
+    if (installed.version !== declared.devDependencies[tool]) throw new Error(`${tool} ${installed.version}; expected ${declared.devDependencies[tool]}; run node .github/scripts/dashboard-quality/install.mjs`);
   }
   // npm's dependency graph catches missing secondary tools, not only the two CLIs.
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const check = spawnSync(npm, ['ls', '--all', '--omit=optional'], { cwd: root, encoding: 'utf8', shell: process.platform === 'win32' });
-  if (check.error || check.status !== 0) throw new Error(`Quality dependencies incomplete; run npm ci: ${check.error?.message ?? check.stderr}`);
+  const check = spawnSync(npm, ['ls', '--all', '--omit=optional'], { cwd: toolRoot, encoding: 'utf8', shell: process.platform === 'win32' });
+  if (check.error || check.status !== 0) throw new Error(`Quality dependencies incomplete; run node .github/scripts/dashboard-quality/install.mjs: ${check.error?.message ?? check.stderr}`);
   return { node: nodeVersion, ...declared.devDependencies };
 }
 

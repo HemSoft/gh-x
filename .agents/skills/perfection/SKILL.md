@@ -132,7 +132,7 @@ Prerequisites: PowerShell 7, the Go version in `go.mod`, a supported race-test C
 compiler, Node from `.node-version` with npm/npx, Git, authenticated read-only GitHub CLI access, Bash
 and its standard Unix utilities. Git Bash supplies those utilities on Windows.
 Pinned analyzers must already be installed; the audit never installs them.
-Run `npm ci --ignore-scripts` for the locked JavaScript development tools first;
+Run `node .github/scripts/dashboard-quality/install.mjs` for the locked JavaScript development tools first;
 the measurement checks direct pins and the complete secondary dependency graph.
 
 The default JSON report and performance evidence live in a unique system temp

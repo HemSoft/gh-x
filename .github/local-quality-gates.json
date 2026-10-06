@@ -45,6 +45,6 @@
     { "step": "quality/Install quality tools", "reason": "Local analyzers must already be installed at quality-tools.env pins." },
     { "step": "mutation/Install gremlins", "reason": "Local Gremlins must already match quality-tools.env." },
     { "step": "quality/Settle before retry", "reason": "GitHub artifact propagation only; local gates use the fresh local coverage file." },
-    {"step": "quality/Install dashboard quality tools", "reason": "Run npm ci from the authoritative package-lock.json before a local audit; the measurement verifies direct pins and the full secondary dependency graph without installing."}
+    {"step": "quality/Install dashboard quality tools", "reason": "Run the isolated installer from package-lock.json before a local audit; measurement verifies direct pins and the complete secondary dependency graph without installing."}
   ]
 }

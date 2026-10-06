@@ -717,7 +717,7 @@ Race tests require Go's supported C compiler setup. Git Bash supplies the shell
 utilities on Windows; CI runs these checks on Ubuntu. Changelog validation needs
 read access to this repository's releases through `gh`. The runner does not
 install Go analyzers or modify GitHub. Markdown lint uses the pinned `npx` command.
-Install the locked JavaScript development tools with `npm ci --ignore-scripts`
+Install the locked JavaScript development tools with `node .github/scripts/dashboard-quality/install.mjs`
 before running the audit.
 
 A JSON report and performance evidence are retained in a unique system temporary

@@ -1,18 +1,24 @@
 # Dashboard JavaScript quality
 
-Install the development tools with `npm ci --ignore-scripts`, then run:
+Install the development tools with `node .github/scripts/dashboard-quality/install.mjs`, then run:
 
 ```bash
+node .github/scripts/dashboard-quality/install.mjs
 node --test .github/scripts/dashboard-quality/*.test.mjs
 node .github/scripts/dashboard-quality/run.mjs /tmp/dashboard-quality
 ```
+
+The installer runs locked `npm ci` in a temporary directory identified by the
+lockfile digest. It keeps dependency source outside the checkout so recursive Go
+commands retain their repository scope. `GH_X_DASHBOARD_QUALITY_TOOLS` may select
+another external tools directory.
 
 The same commands run in the required CI Quality Gate and the local Perfection
 audit. Node is pinned in `.node-version`; c8 and ESLint have exact development
 dependency versions and a committed npm lock. Runtime dashboards remain free
 of npm dependencies. The runner checks the Node version, installed direct tool
 versions and the complete npm dependency graph before measuring. A missing
-secondary dependency fails with an instruction to run `npm ci`.
+secondary dependency fails with an instruction to rerun the isolated installer.
 
 ## Scope and measurement
 
