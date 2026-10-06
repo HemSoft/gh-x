@@ -54,8 +54,14 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 		{name: "later mutable Node setup", mutate: func(job, _ *workflowJob) {
 			insertBeforeLauncher(job, workflowStep{Uses: "actions/setup-node@v6", With: map[string]string{"node-version-file": ".node-version"}})
 		}},
-		{name: "unrelated step before checkout", want: true, mutate: func(job, _ *workflowJob) {
+		{name: "step before checkout cannot qualify", mutate: func(job, _ *workflowJob) {
 			job.Steps = append([]workflowStep{{Name: "Unrelated preparation", Run: "echo ready"}}, job.Steps...)
+		}},
+		{name: "Node setup startup hook", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.Env = map[string]string{"NODE_OPTIONS": "--require ./bypass.cjs"} })
+		}},
+		{name: "checkout environment override", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.Env = map[string]string{"NODE_OPTIONS": "--require ./bypass.cjs"} })
 		}},
 		{name: "conditional Node setup", mutate: func(job, _ *workflowJob) {
 			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.If = "false" })
@@ -228,10 +234,21 @@ func TestLauncherNodeMutationsFollowPinChanges(t *testing.T) {
 	}
 	job.Steps = append([]workflowStep{{Name: "Unrelated preparation", Run: "echo ready"}}, job.Steps...)
 	mutateLauncherAction(&job, "actions/checkout", func(step *workflowStep) { step.If = "false" })
+	if job.Steps[0].If != "" {
+		t.Fatal("checkout mutation must not target prepended preparation")
+	}
+	checkout := slices.IndexFunc(job.Steps, func(step workflowStep) bool { return strings.HasPrefix(step.Uses, "actions/checkout@") })
+	if checkout != 1 || job.Steps[checkout].If != "false" {
+		t.Fatal("checkout mutation must locate its action after a prepended step")
+	}
+	job.Steps = job.Steps[1:]
 	if windowsLauncherGateReady(job, gate) {
 		t.Fatal("checkout mutations must follow unrelated prepended steps")
 	}
 	mutateLauncherAction(&job, "actions/checkout", func(step *workflowStep) { step.If = "" })
+	if !windowsLauncherGateReady(job, gate) {
+		t.Fatal("restored checkout must qualify before testing Node mutations")
+	}
 	mutateLauncherNodeSetup(&job, func(step *workflowStep) { step.ContinueOnError = true })
 	if windowsLauncherGateReady(job, gate) {
 		t.Fatal("mutations must still target Node after its pin changes")

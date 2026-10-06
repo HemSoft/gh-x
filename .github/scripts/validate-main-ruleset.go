@@ -483,7 +483,7 @@ func windowsLauncherSetupReady(job workflowJob) bool {
 	launcher := slices.IndexFunc(job.Steps, func(step workflowStep) bool {
 		return step.Name == "Test Windows standalone launcher"
 	})
-	return checkout >= 0 && node == checkout+1 && launcher == node+1 && hasSingleLauncherAction(job, "actions/setup-node") && hasSingleLauncherAction(job, "actions/checkout") && reflect.DeepEqual(job.Steps[node].With, map[string]string{"node-version-file": ".node-version"})
+	return checkout == 0 && node == checkout+1 && launcher == node+1 && hasSingleLauncherAction(job, "actions/setup-node") && hasSingleLauncherAction(job, "actions/checkout") && reflect.DeepEqual(job.Steps[node].With, map[string]string{"node-version-file": ".node-version"})
 }
 
 func hasSingleLauncherAction(job workflowJob, action string) bool {
@@ -498,7 +498,7 @@ func hasSingleLauncherAction(job workflowJob, action string) bool {
 
 func requiredActionIndex(job workflowJob, action string) int {
 	for index, step := range job.Steps {
-		if isPinnedAction(step.Uses, action) && unconditionalRequiredStep(step) && len(step.Additional) == 0 &&
+		if isPinnedAction(step.Uses, action) && unconditionalRequiredStep(step) && len(step.Additional) == 0 && len(step.Env) == 0 &&
 			(action != "actions/checkout" || checkoutTargetsWorkspace(step)) {
 			return index
 		}
