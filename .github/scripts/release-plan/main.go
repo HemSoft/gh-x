@@ -27,27 +27,28 @@ var (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fail("usage: release-plan <check|version|notes|create|changelog>")
-	}
-
-	var err error
-	switch os.Args[1] {
-	case "check":
-		err = runCheck()
-	case "version":
-		err = runVersion()
-	case "notes":
-		err = runNotes()
-	case "create":
-		err = runCreate()
-	case "changelog":
-		err = runChangelog()
-	default:
-		err = fmt.Errorf("unknown command %q", os.Args[1])
-	}
-	if err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		fail(err.Error())
+	}
+}
+
+func run(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: release-plan <check|version|notes|create|changelog>")
+	}
+	switch args[0] {
+	case "check":
+		return runCheck()
+	case "version":
+		return runVersion()
+	case "notes":
+		return runNotes()
+	case "create":
+		return runCreate()
+	case "changelog":
+		return runChangelog()
+	default:
+		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
@@ -79,20 +80,9 @@ func runCheck() error {
 		return writeOutputs(map[string]string{"skip": "true"})
 	}
 
-	latest, err := latestReachableTag()
+	latest, versionBase, rangeStart, err := releaseComparison()
 	if err != nil {
 		return err
-	}
-	versionBase, err := latestSemanticTag()
-	if err != nil {
-		return err
-	}
-	rangeStart := latest
-	if rangeStart == "" {
-		rangeStart, err = gitOutputWithInput("", "hash-object", "-t", "tree", "--stdin")
-		if err != nil {
-			return err
-		}
 	}
 	changed, err := gitOutput("diff", "--no-renames", "--name-only", rangeStart, "HEAD")
 	if err != nil {
@@ -336,12 +326,16 @@ func localReleaseAssetDigests(paths []string) (map[string]string, error) {
 	return local, nil
 }
 
-func fileSHA256(path string) (string, error) {
+func fileSHA256(path string) (digest string, resultErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open release asset %s: %w", path, err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); resultErr == nil && err != nil {
+			resultErr = fmt.Errorf("close %s: %w", file.Name(), err)
+		}
+	}()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return "", fmt.Errorf("hash release asset %s: %w", path, err)
@@ -578,7 +572,7 @@ func requiredSHA(name string) (string, error) {
 	return value, nil
 }
 
-func writeOutputs(values map[string]string) error {
+func writeOutputs(values map[string]string) (resultErr error) {
 	path := os.Getenv("GITHUB_OUTPUT")
 	if path == "" {
 		return errors.New("GITHUB_OUTPUT is not set")
@@ -587,7 +581,11 @@ func writeOutputs(values map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("open GITHUB_OUTPUT: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); resultErr == nil && err != nil {
+			resultErr = fmt.Errorf("close %s: %w", file.Name(), err)
+		}
+	}()
 	for _, key := range []string{"latest", "skip", "tag", "release_tag", "version_base"} {
 		if value, ok := values[key]; ok {
 			if _, err := fmt.Fprintf(file, "%s=%s\n", key, value); err != nil {
@@ -646,4 +644,23 @@ func runCommand(name string, args ...string) error {
 func fail(message string) {
 	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)
+}
+
+func releaseComparison() (string, string, string, error) {
+	latest, err := latestReachableTag()
+	if err != nil {
+		return "", "", "", err
+	}
+	versionBase, err := latestSemanticTag()
+	if err != nil {
+		return "", "", "", err
+	}
+	rangeStart := latest
+	if rangeStart == "" {
+		rangeStart, err = gitOutputWithInput("", "hash-object", "-t", "tree", "--stdin")
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+	return latest, versionBase, rangeStart, nil
 }

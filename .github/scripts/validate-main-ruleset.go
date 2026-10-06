@@ -122,6 +122,17 @@ func main() {
 	require(equal(ci.On.PullRequest.Types, "opened", "synchronize", "reopened", "ready_for_review", "edited"), "CI pull-request events changed")
 	require(equal(ci.On.Push.Branches, "main"), "CI must report status for the main branch badge")
 
+	validateSecurityCI(ci, ciContent)
+	validateReviewCI(ci)
+	validateBuildCI(ci)
+	releaseJob := validateReleaseConfiguration(ci, autoRelease, qualityToolsContent)
+	validateReleasePublication(releaseJob, autoReleaseContent)
+	validateExistingRelease(releaseJob)
+	validateChangelogDelivery(releaseJob, authoritativeRunContent)
+	fmt.Fprintln(os.Stdout, "main ruleset and release workflows are consistent")
+}
+
+func validateSecurityCI(ci workflow, ciContent string) {
 	security := ci.Jobs["security-analysis"]
 	require(security.Name == "CodeQL Analysis (${{ matrix.language }})", "CI must publish per-language CodeQL checks")
 	require(reflect.DeepEqual(security.Permissions, map[string]string{
@@ -151,7 +162,9 @@ func main() {
 	requirePinnedAction(ciContent, reviewStep, "actions/dependency-review-action", "v5")
 	require(reviewStep.With["fail-on-severity"] == "high", "dependency review must block high and critical vulnerabilities")
 	require(namedStep(dependencyReview, "Skip dependency review outside pull requests").If == "github.event_name != 'pull_request'", "non-PR runs must complete dependency review without a bypass")
+}
 
+func validateReviewCI(ci workflow) {
 	changelogCheck := namedStep(ci.Jobs["lint"], "Validate changelog release links")
 	require(changelogCheck.Env["GH_TOKEN"] == "${{ github.token }}", "changelog validation must authenticate GitHub Release queries")
 	require(strings.TrimSpace(changelogCheck.Run) == "go run ./.github/scripts/changelog-check", "CI must run the tested changelog validator")
@@ -168,7 +181,10 @@ func main() {
 	require(codexStep.Env["REVIEW_SETUP_AT"] == "${{ github.event.pull_request.updated_at }}", "ordinary review setup must bind the triggering pull request update")
 	require(codexStep.Env["EXPECTED_HEAD"] == "${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}", "Codex review must bind the immutable head")
 	require(strings.Contains(codexStep.Run, `REVIEW_SCOPE="$review_scope" go run ./.github/scripts/changelog-merge review`), "Codex verification must select explicit ordinary or changelog scope")
+}
 
+func validateBuildCI(ci workflow) {
+	require(helperQualityScopesReady(ci), "all maintained Go helpers must participate in shared quality gates")
 	crossBuild := namedStep(ci.Jobs["build-and-test"], "Build all release targets")
 	require(reflect.DeepEqual(crossBuild.Env, map[string]string{
 		"RELEASE_VERSION":    "ci",
@@ -197,7 +213,9 @@ go run ./.github/scripts/release-targets build`, "CI must build the canonical re
 	require(strings.Contains(gateRun, `"${{ needs.performance.result }}" != "success"`), "Quality Gate must reject failed performance budgets")
 	require(strings.Contains(gateRun, "::error::One or more quality gates failed"), "Quality Gate must report a failed dependency")
 	require(strings.Contains(gateRun, "exit 1"), "Quality Gate must fail when a dependency is unsuccessful")
+}
 
+func validateReleaseConfiguration(ci, autoRelease workflow, qualityToolsContent string) workflowJob {
 	require(equal(autoRelease.On.WorkflowRun.Workflows, "CI Quality Gates"), "auto-release must follow CI Quality Gates")
 	require(equal(autoRelease.On.WorkflowRun.Types, "completed"), "auto-release must follow completed CI runs")
 	require(equal(autoRelease.On.WorkflowRun.Branches, "main"), "auto-release must follow main-branch CI runs")
@@ -227,6 +245,10 @@ go run ./.github/scripts/release-targets build`, "CI must build the canonical re
 
 	validateTrustedReleaseHelper(releaseJob)
 
+	return releaseJob
+}
+
+func validateReleasePublication(releaseJob workflowJob, autoReleaseContent string) {
 	check := namedStep(releaseJob, "Check whether release is needed")
 	require(stepIndex(releaseJob, "Load trusted release helpers") < stepIndex(releaseJob, "Check whether release is needed"), "trusted release helpers must load before any release decision")
 	require(check.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release check must receive the validated SHA through env")
@@ -269,7 +291,9 @@ go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the tr
 	require(create.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release creation must receive the validated SHA through env")
 	require(create.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "release creation must receive the new or resumed release tag")
 	require(strings.TrimSpace(create.Run) == `go run "$RUNNER_TEMP/release-plan.go" create`, "release creation must use the trusted release-plan command")
+}
 
+func validateExistingRelease(releaseJob workflowJob) {
 	existingNotes := namedStep(releaseJob, "Load existing release notes")
 	require(existingNotes.ID == "existing_release", "existing release notes step must expose its outcome")
 	require(existingNotes.If == "steps.check.outputs.release_tag != ''", "tagged release runs must check for existing release notes")
@@ -288,7 +312,9 @@ go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the tr
 	require(changelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog update must receive the new or resumed release tag")
 	require(strings.Contains(changelog.Run, "git switch --detach origin/main"), "changelog reconciliation must start from current main")
 	require(strings.Contains(changelog.Run, `go run "$RUNNER_TEMP/release-plan.go" changelog`), "release workflow must use the trusted changelog updater")
+}
 
+func validateChangelogDelivery(releaseJob workflowJob, authoritativeRunContent string) {
 	mergeChangelog := namedStep(releaseJob, "Queue guarded changelog auto-merge and await completion")
 	require(mergeChangelog.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "changelog pull request must run for new and confirmed existing releases")
 	require(mergeChangelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog pull request must receive the new or resumed release tag")
@@ -321,8 +347,6 @@ go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the tr
 	noDiffDispatch := strings.Index(noDiffBranch, "gh workflow run ci.yml --ref main")
 	noDiffExit := strings.Index(noDiffBranch, "exit 0")
 	require(noDiffDispatch >= 0 && noDiffExit >= 0 && noDiffDispatch < noDiffExit, "already-current changelog retries must dispatch main CI before returning")
-
-	fmt.Fprintln(os.Stdout, "main ruleset and release workflows are consistent")
 }
 
 type rulesetValidation struct {
@@ -526,4 +550,26 @@ func actionVersionComment(workflowContent, action string) (string, bool) {
 		return "", false
 	}
 	return matches[1], true
+}
+
+func helperQualityScopesReady(ci workflow) bool {
+	packageSteps := map[string][]string{
+		"build-and-test": {"Build", "Vet", "Test Go packages (race detection enabled)"},
+		"lint":           {"Staticcheck", "Gocritic (anti-pattern detection)", "Errcheck (unchecked errors)", "Dead code detection", "Vulnerability scan"},
+	}
+	for job, names := range packageSteps {
+		for _, name := range names {
+			if !strings.Contains(namedStep(ci.Jobs[job], name).Run, "./.github/scripts/...") {
+				return false
+			}
+		}
+	}
+	for _, name := range []string{"Enforce: cyclomatic complexity ≤ 10", "Enforce: cognitive complexity ≤ 15"} {
+		if !strings.Contains(namedStep(ci.Jobs["quality"], name).Run, ".github/scripts") {
+			return false
+		}
+	}
+	crap := namedStep(ci.Jobs["quality"], "Enforce: CRAP score < 30")
+	return crap.Shell == "pwsh" && strings.TrimSpace(crap.Run) == `. ./.agents/skills/perfection/scripts/perfection-audit.ps1
+Assert-CrapThreshold coverage.out 30.0`
 }

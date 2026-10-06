@@ -25,35 +25,10 @@ func main() {
 		fail(err)
 	}
 
-	latestOutput, err := exec.Command(
-		"gh",
-		"release",
-		"view",
-		"--repo",
-		"HemSoft/gh-x",
-		"--json",
-		"tagName",
-		"--jq",
-		".tagName",
-	).Output()
+	latest, releasedTags, err := readPublishedReleases()
 	if err != nil {
-		fail(fmt.Errorf("find latest published GitHub Release: %w", err))
+		fail(err)
 	}
-	latest := strings.TrimSpace(string(latestOutput))
-
-	releaseOutput, err := exec.Command(
-		"gh",
-		"api",
-		"--paginate",
-		"repos/HemSoft/gh-x/releases",
-		"--jq",
-		".[] | select(.draft == false and .prerelease == false) | .tag_name",
-	).Output()
-	if err != nil {
-		fail(fmt.Errorf("list published GitHub Releases: %w", err))
-	}
-
-	releasedTags := strings.Fields(string(releaseOutput))
 	if err := validateChangelog(string(contents), latest, releasedTags); err != nil {
 		fail(err)
 	}
@@ -76,7 +51,7 @@ func validateChangelog(contents, latest string, releasedTags []string) error {
 		return errors.New("CHANGELOG.md has no Unreleased comparison link")
 	}
 	if match[1] != expectedUnreleased {
-		return fmt.Errorf("Unreleased comparison is %q; want %q", match[1], expectedUnreleased)
+		return fmt.Errorf("unreleased comparison is %q; want %q", match[1], expectedUnreleased)
 	}
 
 	latestVersion := strings.TrimPrefix(latest, "v")
@@ -149,4 +124,36 @@ func containsVersion(matches [][]string, version string) bool {
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "changelog check failed:", err)
 	os.Exit(1)
+}
+
+func readPublishedReleases() (string, []string, error) {
+	latestOutput, err := exec.Command(
+		"gh",
+		"release",
+		"view",
+		"--repo",
+		"HemSoft/gh-x",
+		"--json",
+		"tagName",
+		"--jq",
+		".tagName",
+	).Output()
+	if err != nil {
+		return "", nil, fmt.Errorf("find latest published GitHub Release: %w", err)
+	}
+	latest := strings.TrimSpace(string(latestOutput))
+
+	releaseOutput, err := exec.Command(
+		"gh",
+		"api",
+		"--paginate",
+		"repos/HemSoft/gh-x/releases",
+		"--jq",
+		".[] | select(.draft == false and .prerelease == false) | .tag_name",
+	).Output()
+	if err != nil {
+		return "", nil, fmt.Errorf("list published GitHub Releases: %w", err)
+	}
+
+	return latest, strings.Fields(string(releaseOutput)), nil
 }

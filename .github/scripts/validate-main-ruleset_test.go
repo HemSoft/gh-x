@@ -277,3 +277,8 @@ func TestActionVersionComment(t *testing.T) {
 		})
 	}
 }
+
+func TestVersionedWorkflowValidation(t *testing.T) {
+	t.Chdir("../..")
+	main()
+}

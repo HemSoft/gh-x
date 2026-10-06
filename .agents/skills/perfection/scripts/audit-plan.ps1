@@ -93,12 +93,12 @@ function Invoke-ReleaseBuilds {
 
 function Get-AuditActions {
     return @{
-        'build' = { param($c) Invoke-CheckedCommand 'build' 'go' @('build', '-o', (Join-Path $c.Temp 'bin/'), './...') }
+        'build' = { param($c) Invoke-CheckedCommand 'build' 'go' @('build', '-o', (Join-Path $c.Temp 'bin/'), './...', './.github/scripts/...') }
         'release-builds' = { param($c) Invoke-ReleaseBuilds $c }
-        'vet' = { param($c) Invoke-CheckedCommand 'vet' 'go' @('vet', './...') }
+        'vet' = { param($c) Invoke-CheckedCommand 'vet' 'go' @('vet', './...', './.github/scripts/...') }
         'unit-tests' = {
             param($c)
-            $packages = @(& go list ./...)
+            $packages = @(& go list ./... ./.github/scripts/...)
             if ($LASTEXITCODE -ne 0) { throw 'go list failed.' }
             $packages = @($packages | Where-Object { $_ -notmatch '/tests/behavior$' })
             if (-not $packages.Count) { throw 'No unit-test packages discovered.' }
@@ -115,7 +115,7 @@ function Get-AuditActions {
                 Invoke-CheckedCommand 'Windows PowerShell installer tests' 'pwsh' @('-NoProfile', '-File', 'tests/installer/test-dashboard-hub.ps1', '-InstallerPowerShell', "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe")
             }
         }
-        'format' = { param($c) Invoke-NoOutputCommand 'formatting' 'gofmt' @('-l', '.') }
+        'format' = { param($c) Invoke-NoOutputCommand 'formatting' 'gofmt' @('-l', '.', '.github/scripts') }
         'tidy' = { param($c) Invoke-CheckedCommand 'module tidiness' 'go' @('mod', 'tidy', '-diff') }
         'ruleset' = { param($c) Invoke-CheckedCommand 'ruleset validation' 'go' @('run', '.github/scripts/validate-main-ruleset.go') }
         'changelog' = {
@@ -124,11 +124,11 @@ function Get-AuditActions {
             if ($LASTEXITCODE -ne 0) { Stop-AuditBlocked 'Cannot read HemSoft/gh-x through gh; verify network and GitHub authentication.' }
             Invoke-CheckedCommand 'changelog release links' 'go' @('run', './.github/scripts/changelog-check')
         }
-        'staticcheck' = { param($c) Assert-AuditTool $c 'staticcheck'; Invoke-CheckedCommand 'staticcheck' 'staticcheck' @('./...') }
-        'gocritic' = { param($c) Assert-AuditTool $c 'gocritic'; Invoke-CheckedCommand 'gocritic' 'gocritic' @('check', './...') }
-        'errcheck' = { param($c) Assert-AuditTool $c 'errcheck'; Invoke-CheckedCommand 'errcheck' 'errcheck' @('-exclude', '.errcheck_excludes', './...') }
-        'deadcode' = { param($c) Assert-AuditTool $c 'deadcode'; Invoke-NoOutputCommand 'deadcode' 'deadcode' @('./...') }
-        'vulnerabilities' = { param($c) Assert-AuditTool $c 'govulncheck'; Invoke-CheckedCommand 'govulncheck' 'govulncheck' @('./...') }
+        'staticcheck' = { param($c) Assert-AuditTool $c 'staticcheck'; Invoke-CheckedCommand 'staticcheck' 'staticcheck' @('./...', './.github/scripts/...') }
+        'gocritic' = { param($c) Assert-AuditTool $c 'gocritic'; Invoke-CheckedCommand 'gocritic' 'gocritic' @('check', './...', './.github/scripts/...') }
+        'errcheck' = { param($c) Assert-AuditTool $c 'errcheck'; Invoke-CheckedCommand 'errcheck' 'errcheck' @('-exclude', '.errcheck_excludes', './...', './.github/scripts/...') }
+        'deadcode' = { param($c) Assert-AuditTool $c 'deadcode'; Invoke-NoOutputCommand 'deadcode' 'deadcode' @('./...', './.github/scripts/...') }
+        'vulnerabilities' = { param($c) Assert-AuditTool $c 'govulncheck'; Invoke-CheckedCommand 'govulncheck' 'govulncheck' @('./...', './.github/scripts/...') }
         'suppressions' = {
             param($c)
             $files = @(Get-ChildItem -LiteralPath $c.Root -Recurse -File -Filter '*.go')
@@ -144,8 +144,8 @@ function Get-AuditActions {
             Invoke-CheckedCommand 'Markdown lint' 'npx' @('--yes', "markdownlint-cli2@$($c.Pins.MARKDOWNLINT_CLI2_VERSION)", '**/*.md', '#node_modules', '#.agents', '#.github/agents')
         }
         'coverage' = { param($c) Assert-AuditCoverage $c.Coverage }
-        'cyclomatic' = { param($c) Assert-AuditTool $c 'gocyclo'; Invoke-NoOutputCommand 'cyclomatic <= 10' 'gocyclo' @('-over', '10', '-ignore', '_test\.go', '.') }
-        'cognitive' = { param($c) Assert-AuditTool $c 'gocognit'; Invoke-NoOutputCommand 'cognitive <= 15' 'gocognit' @('-over', '15', '-ignore', '_test\.go', '.') }
+        'cyclomatic' = { param($c) Assert-AuditTool $c 'gocyclo'; Invoke-NoOutputCommand 'cyclomatic <= 10' 'gocyclo' @('-over', '10', '-ignore', '_test\.go', '.', '.github/scripts') }
+        'cognitive' = { param($c) Assert-AuditTool $c 'gocognit'; Invoke-NoOutputCommand 'cognitive <= 15' 'gocognit' @('-over', '15', '-ignore', '_test\.go', '.', '.github/scripts') }
         'crap' = { param($c) Assert-AuditTool $c 'gocyclo'; Assert-CrapThreshold $c.Coverage 30.0 }
         'mutation-fixtures' = { param($c) Invoke-CheckedCommand 'mutation fixtures' 'bash' @('.github/scripts/test-mutation-gate.sh') }
         'mutation' = {

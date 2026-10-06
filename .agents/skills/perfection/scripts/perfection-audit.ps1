@@ -122,7 +122,7 @@ function Assert-CrapThreshold {
 
     Show-Section "CRAP score < $Threshold"
 
-    $complexityLines = @(& gocyclo -ignore '_test\.go' . 2>&1)
+    $complexityLines = @(& gocyclo -ignore '_test\.go' . .github/scripts 2>&1)
     if ($LASTEXITCODE -ne 0) {
         $complexityLines | ForEach-Object { Write-Host $_ }
         throw 'gocyclo failed while calculating CRAP scores.'
@@ -134,11 +134,28 @@ function Assert-CrapThreshold {
         throw 'go tool cover failed while calculating CRAP scores.'
     }
 
+    $module = (& go list -m).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve module for coverage paths.' }
+    $failures = @(Get-CrapFindings $complexityLines $coverageLines $module $Threshold)
+
+    if ($failures.Count -gt 0) {
+        $failures | Sort-Object CRAP -Descending | Format-Table -AutoSize | Out-Host
+        throw "$($failures.Count) function(s) have CRAP score >= $Threshold."
+    }
+
+    Write-Host "All functions have CRAP score below $Threshold."
+}
+
+function Get-CrapFindings {
+    param([string[]]$ComplexityLines, [string[]]$CoverageLines, [string]$Module, [double]$Threshold)
     $coverageByFunction = @{}
     foreach ($line in $coverageLines) {
         $text = [string]$line
-        if ($text -match '^\S+/(?<file>[^/:]+\.go):\d+:\s+(?<function>\S+)\s+(?<coverage>[0-9.]+)%$') {
-            $coverageByFunction["$($Matches.file)|$($Matches.function)"] = [double]$Matches.coverage
+        if ($text -match '^(?<file>.+\.go):(?<line>\d+):\s+(?<function>\S+)\s+(?<coverage>[0-9.]+)%$') {
+            $coverageFile = $Matches.file.Replace('\', '/')
+            if (-not $coverageFile.StartsWith($Module + '/', [StringComparison]::Ordinal)) { throw "Coverage file outside module: $coverageFile" }
+            $relativeFile = $coverageFile.Substring($Module.Length + 1)
+            $coverageByFunction["$relativeFile|$($Matches.line)"] = [double]$Matches.coverage
         }
     }
 
@@ -161,8 +178,9 @@ function Assert-CrapThreshold {
             $functionName = $functionName.Split('.', 2)[1]
         }
 
-        $fileName = [System.IO.Path]::GetFileName(($parts[3] -split ':')[0])
-        $key = "$fileName|$functionName"
+        if ($parts[3] -notmatch '^(?<file>.+\.go):(?<line>\d+):\d+$') { throw "Invalid complexity location: $($parts[3])" }
+        $fileName = $Matches.file.Replace('\', '/') -replace '^\./', ''
+        $key = "$fileName|$($Matches.line)"
         $coverage = if ($coverageByFunction.ContainsKey($key)) {
             [double]$coverageByFunction[$key]
         } else {
@@ -181,12 +199,7 @@ function Assert-CrapThreshold {
         }
     }
 
-    if ($failures.Count -gt 0) {
-        $failures | Sort-Object CRAP -Descending | Format-Table -AutoSize | Out-Host
-        throw "$($failures.Count) function(s) have CRAP score >= $Threshold."
-    }
-
-    Write-Host "All functions have CRAP score below $Threshold."
+    return $failures
 }
 
 function Assert-MutationThresholds {

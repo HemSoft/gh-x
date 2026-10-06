@@ -43,6 +43,13 @@ type pullRequest struct {
 type changedFile struct{ Filename, Status string }
 
 func main() {
+	if err := runFromEnvironment(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func runFromEnvironment() error {
 	ctx, cancel := context.WithTimeout(context.Background(), executionTimeout(os.Args[1:]))
 	defer cancel()
 	branch := os.Getenv("REVIEW_BRANCH")
@@ -61,10 +68,7 @@ func main() {
 		scope:  os.Getenv("REVIEW_SCOPE"),
 		setup:  os.Getenv("REVIEW_SETUP_AT"),
 	}
-	if err := run(ctx, cfg, os.Args[1:], ghCommand(ctx)); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	return run(ctx, cfg, os.Args[1:], ghCommand(ctx))
 }
 
 func ghCommand(ctx context.Context) command {
@@ -80,11 +84,8 @@ func ghCommand(ctx context.Context) command {
 }
 
 func run(ctx context.Context, cfg config, args []string, gh command) error {
-	if len(args) != 1 || (args[0] != "review" && args[0] != "enable" && args[0] != "request") {
-		return errors.New("usage: changelog-merge <request|review|enable>")
-	}
-	if !repoPattern.MatchString(cfg.repo) || !shaPattern.MatchString(cfg.head) {
-		return errors.New("invalid repository or expected head")
+	if err := validateInvocation(cfg, args); err != nil {
+		return err
 	}
 	changelogOnly, err := reviewScope(cfg, args[0])
 	if err != nil {
@@ -103,6 +104,10 @@ func run(ctx context.Context, cfg config, args []string, gh command) error {
 	if args[0] == "request" {
 		return ensureRequest(gh, cfg, number)
 	}
+	return enableChangelogMerge(ctx, gh, cfg, number)
+}
+
+func enableChangelogMerge(ctx context.Context, gh command, cfg config, number string) error {
 	if err := waitForReviewGate(ctx, gh, cfg); err != nil {
 		return err
 	}
@@ -307,7 +312,7 @@ func waitForReview(ctx context.Context, gh command, cfg config, number string, c
 			return inspectEligibility(gh, cfg, number, changelogOnly)
 		}
 		if err := pause(ctx); err != nil {
-			return fmt.Errorf("PR #%s lacks a clean current-head AI review or resolved conversations: %w", number, err)
+			return fmt.Errorf("pr #%s lacks a clean current-head AI review or resolved conversations: %w", number, err)
 		}
 	}
 }
@@ -379,7 +384,7 @@ func passingReviewGate(checks []checkRun, head string) (bool, error) {
 			continue
 		}
 		if check.HeadSHA != head {
-			return false, errors.New("Codex review gate head mismatch")
+			return false, errors.New("codex review gate head mismatch")
 		}
 		if check.Status != "completed" {
 			return false, nil
@@ -400,4 +405,14 @@ func executionTimeout(args []string) time.Duration {
 	// Allow a full setup window plus the persisted request window. This is
 	// only a process watchdog; pendingReview enforces the original deadline.
 	return 2*reviewWindow + 2*time.Minute
+}
+
+func validateInvocation(cfg config, args []string) error {
+	if len(args) != 1 || (args[0] != "review" && args[0] != "enable" && args[0] != "request") {
+		return errors.New("usage: changelog-merge <request|review|enable>")
+	}
+	if !repoPattern.MatchString(cfg.repo) || !shaPattern.MatchString(cfg.head) {
+		return errors.New("invalid repository or expected head")
+	}
+	return nil
 }
