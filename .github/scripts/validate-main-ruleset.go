@@ -606,14 +606,21 @@ func dashboardQualityReady(ci workflow) bool {
 			return false
 		}
 	}
-	upload, found := findWorkflowStep(ci.Jobs["quality"], "Upload dashboard quality evidence")
-	return found && upload.If == "always()" && upload.With["path"] == "${{ runner.temp }}/dashboard-quality"
+	return dashboardEvidenceReady(ci.Jobs["quality"])
+}
+
+func dashboardEvidenceReady(job workflowJob) bool {
+	upload, found := findWorkflowStep(job, "Upload dashboard quality evidence")
+	return found && upload.If == "always()" && !upload.ContinueOnError &&
+		upload.With["name"] == "dashboard-quality" && upload.With["path"] == "${{ runner.temp }}/dashboard-quality" &&
+		upload.With["retention-days"] == "14" && isPinnedAction(upload.Uses, "actions/upload-artifact")
 }
 
 func dashboardNodePinReady(job workflowJob) bool {
 	for _, step := range job.Steps {
 		if strings.HasPrefix(step.Uses, "actions/setup-node@") {
-			return step.With["node-version-file"] == ".node-version" && step.With["node-version"] == ""
+			return isPinnedAction(step.Uses, "actions/setup-node") && unconditionalRequiredStep(step) &&
+				step.With["node-version-file"] == ".node-version" && step.With["node-version"] == ""
 		}
 	}
 	return false

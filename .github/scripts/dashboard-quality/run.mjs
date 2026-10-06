@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { toolsDirectory } from './tools.mjs';
 import { recordFailure } from './failure.mjs';
+import { rawFunctions } from './raw.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const toolRoot = await toolsDirectory(root);
@@ -15,13 +16,19 @@ await mkdir(output, { recursive: true });
 for (const name of ['quality.json', 'quality.md', 'failure.json', 'coverage-final.json']) {
   await rm(path.join(output, name), { force: true });
 }
+await rm(path.join(output, 'v8'), { recursive: true, force: true });
 
 async function verifyTools() {
   const nodeVersion = (await readFile(path.join(root, '.node-version'), 'utf8')).trim();
   if (process.versions.node !== nodeVersion) throw new Error(`Node ${process.versions.node}; expected ${nodeVersion}`);
   const declared = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
   for (const tool of ['c8', 'eslint']) {
-    const installed = JSON.parse(await readFile(require.resolve(`${tool}/package.json`), 'utf8'));
+    let installed;
+    try {
+      installed = JSON.parse(await readFile(require.resolve(`${tool}/package.json`), 'utf8'));
+    } catch (error) {
+      throw new Error(`${tool} quality tool unavailable: ${error.message}; run node .github/scripts/dashboard-quality/install.mjs`, { cause: error });
+    }
     if (installed.version !== declared.devDependencies[tool]) throw new Error(`${tool} ${installed.version}; expected ${declared.devDependencies[tool]}; run node .github/scripts/dashboard-quality/install.mjs`);
   }
   // npm's dependency graph catches missing secondary tools, not only the two CLIs.
@@ -29,28 +36,6 @@ async function verifyTools() {
   const check = spawnSync(npm, ['ls', '--all', '--omit=optional'], { cwd: toolRoot, encoding: 'utf8', shell: process.platform === 'win32' });
   if (check.error || check.status !== 0) throw new Error(`Quality dependencies incomplete; run node .github/scripts/dashboard-quality/install.mjs: ${check.error?.message ?? check.stderr}`);
   return { node: nodeVersion, ...declared.devDependencies };
-}
-
-async function rawFunctions(directory) {
-  const byFile = new Map();
-  for (const name of await readdir(directory)) {
-    if (!name.endsWith('.json')) continue;
-    const data = JSON.parse(await readFile(path.join(directory, name), 'utf8'));
-    for (const script of data.result ?? []) {
-      if (!script.url.startsWith('file:')) continue;
-      const file = fileURLToPath(script.url);
-      const functions = byFile.get(file) ?? new Map();
-      byFile.set(file, functions);
-      for (const fn of script.functions) {
-        const range = fn.ranges[0];
-        const key = `${range.startOffset}:${range.endOffset}`;
-        const merged = functions.get(key) ?? { ...range, count: 0 };
-        merged.count += range.count;
-        functions.set(key, merged);
-      }
-    }
-  }
-  return byFile;
 }
 
 async function run() {

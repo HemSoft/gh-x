@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -15,6 +15,70 @@ test('the installer refuses dependency source inside the Go checkout', () => {
   assert.match(child.stderr, /Quality tools must be installed outside the source checkout/);
 });
 
+async function copyRunner(root, names) {
+  const scripts = path.join(root, '.github/scripts/dashboard-quality');
+  await mkdir(scripts, { recursive: true });
+  for (const name of names) await copyFile(new URL(name, import.meta.url), path.join(scripts, name));
+  return scripts;
+}
+
+test('a symlinked tools destination cannot install into the checkout', async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dashboard-symlink-tools-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const checkout = path.join(root, 'checkout');
+  const scripts = await copyRunner(checkout, ['install.mjs', 'tools.mjs']);
+  const inside = path.join(checkout, 'dependencies');
+  await mkdir(inside);
+  const alias = path.join(root, 'alias');
+  await symlink(inside, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  // The nonexistent child also proves resolution through an existing symlinked ancestor.
+  const child = spawnSync(process.execPath, [path.join(scripts, 'install.mjs')], {
+    encoding: 'utf8', env: { ...process.env, GH_X_DASHBOARD_QUALITY_TOOLS: path.join(alias, 'new-tools') },
+  });
+  assert.equal(child.status, 1);
+  assert.match(child.stderr, /Quality tools must be installed outside the source checkout/);
+  assert.deepEqual(await readdir(inside), []);
+});
+
+test('a failed npm install retains its exit status without a success message', async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dashboard-install-failure-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const checkout = path.join(root, 'checkout');
+  const scripts = await copyRunner(checkout, ['install.mjs', 'tools.mjs']);
+  await writeFile(path.join(checkout, 'package.json'), '{}');
+  await writeFile(path.join(checkout, 'package-lock.json'), '{}');
+  const bin = path.join(root, 'bin');
+  await mkdir(bin);
+  const npm = path.join(bin, process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  await writeFile(npm, process.platform === 'win32' ? '@exit /b 23\r\n' : '#!/bin/sh\nexit 23\n');
+  await chmod(npm, 0o755);
+  const child = spawnSync(process.execPath, [path.join(scripts, 'install.mjs')], {
+    encoding: 'utf8', env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GH_X_DASHBOARD_QUALITY_TOOLS: path.join(root, 'tools') },
+  });
+  assert.equal(child.status, 23, child.stdout + child.stderr);
+  assert.match(child.stderr, /Locked npm ci failed: exit 23/);
+  assert.doesNotMatch(child.stdout, /Isolated dashboard quality tools:/);
+});
+
+test('missing direct tools report the installer command', async context => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dashboard-no-tools-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const scripts = await copyRunner(root, ['run.mjs', 'tools.mjs', 'failure.mjs', 'raw.mjs']);
+  await copyFile(new URL('../../../package.json', import.meta.url), path.join(root, 'package.json'));
+  await writeFile(path.join(root, '.node-version'), process.versions.node);
+  const output = path.join(root, 'reports');
+  await mkdir(path.join(output, 'v8'), { recursive: true });
+  await writeFile(path.join(output, 'v8', 'stale.json'), 'previous run coverage');
+  const child = spawnSync(process.execPath, [path.join(scripts, 'run.mjs'), output], {
+    encoding: 'utf8', env: { ...process.env, GH_X_DASHBOARD_QUALITY_TOOLS: root },
+  });
+  assert.equal(child.status, 1);
+  assert.match(child.stderr, /c8 quality tool unavailable/);
+  const failure = JSON.parse(await readFile(path.join(output, 'failure.json'), 'utf8'));
+  assert.match(failure.error, /run node \.github\/scripts\/dashboard-quality\/install\.mjs/);
+  await assert.rejects(readFile(path.join(output, 'v8', 'stale.json')), { code: 'ENOENT' });
+});
+
 test('missing secondary tooling fails before tests and preserves a failure report', async context => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'dashboard-missing-dependency-'));
   context.after(() => rm(root, { recursive: true, force: true }));
@@ -23,6 +87,7 @@ test('missing secondary tooling fails before tests and preserves a failure repor
   await copyFile(new URL('./run.mjs', import.meta.url), path.join(scriptDirectory, 'run.mjs'));
   await copyFile(new URL('./tools.mjs', import.meta.url), path.join(scriptDirectory, 'tools.mjs'));
   await copyFile(new URL('./failure.mjs', import.meta.url), path.join(scriptDirectory, 'failure.mjs'));
+  await copyFile(new URL('./raw.mjs', import.meta.url), path.join(scriptDirectory, 'raw.mjs'));
   const declared = JSON.parse(await readFile(new URL('../../../package.json', import.meta.url), 'utf8'));
   await writeFile(path.join(root, 'package.json'), JSON.stringify(declared));
   await writeFile(path.join(root, '.node-version'), process.versions.node);
@@ -47,7 +112,7 @@ test('failed dashboard tests remain the primary error when coverage is missing',
   context.after(() => rm(root, { recursive: true, force: true }));
   const scripts = path.join(root, '.github/scripts/dashboard-quality');
   await mkdir(scripts, { recursive: true });
-  for (const name of ['run.mjs', 'tools.mjs', 'failure.mjs']) {
+  for (const name of ['run.mjs', 'tools.mjs', 'failure.mjs', 'raw.mjs']) {
     await copyFile(new URL(name, import.meta.url), path.join(scripts, name));
   }
   await writeFile(path.join(scripts, 'measure.mjs'), "export const sourceRoots = ['src/codex-dashboard']; export const fixtureExclusions = [];\n");

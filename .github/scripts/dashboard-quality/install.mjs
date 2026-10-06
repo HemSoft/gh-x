@@ -1,12 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { copyFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { repositoryRoot, toolsDirectory } from './tools.mjs';
+import { assertExternalToolsDirectory, repositoryRoot, toolsDirectory } from './tools.mjs';
 
-const output = await toolsDirectory();
-const relative = path.relative(repositoryRoot, output);
-if (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) throw new Error('Quality tools must be installed outside the source checkout');
+let output = await assertExternalToolsDirectory(await toolsDirectory());
 await mkdir(output, { recursive: true });
+output = await assertExternalToolsDirectory(output);
 for (const name of ['package.json', 'package-lock.json']) {
   await copyFile(path.join(repositoryRoot, name), path.join(output, name));
 }
@@ -16,4 +15,8 @@ const result = spawnSync(npm, ['ci', '--ignore-scripts', '--no-fund', '--no-audi
 });
 if (result.error) throw result.error;
 process.exitCode = result.status ?? 1;
-console.log(`Isolated dashboard quality tools: ${output}`);
+if (result.status === 0) {
+  console.log(`Isolated dashboard quality tools: ${output}`);
+} else {
+  console.error(`Locked npm ci failed: ${result.signal ? `signal ${result.signal}` : `exit ${result.status}`}; tools remain incomplete at ${output}`);
+}

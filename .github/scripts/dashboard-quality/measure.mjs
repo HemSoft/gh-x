@@ -26,11 +26,17 @@ export function inventoryFunctions(source, file) {
         report({ node, data }) {
           const method = node.parent?.type === 'MethodDefinition' ||
             (node.parent?.type === 'Property' && node.parent.method);
-          const location = method ? node.parent.loc : node.loc;
+          const initializer = data.name === 'Class field initializer';
+          const staticBlock = node.type === 'StaticBlock';
+          const location = method || initializer ? node.parent.loc : node.loc;
           functions.push({
             file, name: data.name, location, complexity: data.complexity,
             range: method ? node.parent.range : node.range,
-            bodyStart: (node.body ?? node).range[0],
+            bodyStart: node.body?.range?.[0] ?? node.range[0],
+            initializer: initializer || staticBlock
+              ? (staticBlock || node.parent.static ? '<static_initializer>' : '<instance_members_initializer>')
+              : null,
+            initializerRange: initializer ? node.parent.parent.range : staticBlock ? node.parent.range : null,
           });
         },
       });
@@ -52,8 +58,10 @@ function owner(functions, location) {
 }
 
 function functionHit(fn, rawFunctions) {
-  const matches = rawFunctions.filter(entry => entry.endOffset === fn.range[1] &&
-    entry.startOffset >= fn.range[0] && entry.startOffset <= fn.bodyStart);
+  const matches = rawFunctions.filter(entry => !entry.scriptRoot && (fn.initializer
+    ? entry.functionName === fn.initializer && entry.startOffset <= fn.range[0] && entry.endOffset >= fn.range[1] &&
+      entry.startOffset >= fn.initializerRange[0] && entry.endOffset <= fn.initializerRange[1]
+    : entry.endOffset === fn.range[1] && entry.startOffset >= fn.range[0] && entry.startOffset <= fn.bodyStart));
   if (matches.length > 1) throw new Error(`Ambiguous function coverage: ${fn.file}:${fn.location.start.line}`);
   return matches.length ? matches[0].count : 0;
 }
@@ -89,6 +97,7 @@ export function measureModule(file, source, coverage, rawFunctions) {
     fn.hits = functionHit(fn, rawFunctions);
     const hits = branches.get(fn);
     fn.coverageBasis = hits.length ? 'V8 block branches; nested functions excluded' : 'function execution (no owned V8 branches)';
+    if (fn.initializer) fn.coverageBasis = `V8 grouped class initializer execution; ${fn.coverageBasis}`;
     fn.coverage = fn.hits > 0 ? (hits.length ? percent(hits.filter(hit => hit > 0).length, hits.length) : 100) : 0;
     fn.branchCovered = hits.filter(hit => hit > 0).length;
     fn.branchTotal = hits.length;

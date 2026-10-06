@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { inventoryFunctions, measureModule, aggregate, policyFindings } from './measure.mjs';
+import { rawFunctions } from './raw.mjs';
 
 const file = 'src/codex-dashboard/fixture.mjs';
 const source = 'function same(value = 1) { if (value) return 1; return 0; }\nfunction outer() { return () => true; }';
@@ -84,4 +89,49 @@ test('same function names in separate modules keep independent risk evidence', (
   assert.equal(covered.functions[0].crap, 3);
   assert.equal(uncovered.functions[0].crap, 12);
   assert.equal(uncovered.functions[0].coverage, 0);
+});
+
+async function nativeModule(context, code) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dashboard-native-v8-'));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const modulePath = path.join(root, 'fixture.mjs');
+  const directory = path.join(root, 'raw');
+  await mkdir(directory);
+  await writeFile(modulePath, code);
+  const child = spawnSync(process.execPath, [modulePath], {
+    encoding: 'utf8', env: { ...process.env, NODE_V8_COVERAGE: directory },
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const raw = [...(await rawFunctions(directory)).get(modulePath).values()];
+  return measureModule(file, code, { statementMap: {}, s: {}, branchMap: {}, b: {} }, raw);
+}
+
+test('script execution cannot cover an uncalled function with identical offsets', async context => {
+  const module = await nativeModule(context, 'function only() {}');
+  assert.equal(module.functions.length, 1);
+  assert.equal(module.functions[0].hits, 0);
+  assert.equal(module.metrics.functions.percent, 0);
+});
+
+test('native grouped class fields and static blocks preserve separate callback execution', async context => {
+  const module = await nativeModule(context, `class Example {
+    first = 1;
+    callback = () => 2;
+    static one = 3;
+    static two = 4;
+    static { if (true) this.extra = 5; }
+  }
+  new Example();
+  class Never { first = 1; second = 2; }`);
+  const fields = module.functions.filter(fn => fn.initializer);
+  assert.equal(fields.length, 7);
+  assert.deepEqual(fields.map(fn => fn.hits), [1, 1, 1, 1, 1, 0, 0]);
+  assert.equal(module.functions.find(fn => !fn.initializer).hits, 0);
+  assert.equal(fields.find(fn => fn.name === 'Class static block').complexity, 2);
+  assert.ok(fields.every(fn => fn.coverageBasis.startsWith('V8 grouped class initializer execution;')));
+});
+
+test('nested class fields cannot borrow the enclosing initializer execution', async context => {
+  const module = await nativeModule(context, 'class Outer { value = class Inner { first = 1; second = 2; }; } new Outer();');
+  assert.deepEqual(module.functions.map(fn => fn.hits), [1, 0, 0]);
 });

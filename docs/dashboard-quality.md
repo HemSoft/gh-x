@@ -12,6 +12,11 @@ The installer runs locked `npm ci` in a temporary directory identified by the
 lockfile digest. It keeps dependency source outside the checkout so recursive Go
 commands retain their repository scope. `GH_X_DASHBOARD_QUALITY_TOOLS` may select
 another external tools directory.
+Canonical destination and checkout paths are checked before directory creation
+and again before copying. Installation uses the resolved path so a symlink or
+junction alias cannot direct dependency writes into the checkout. A failed npm
+install retains its actual exit status and reports incomplete tools without a
+success message.
 
 The same commands run in the required CI Quality Gate and the local Perfection
 audit. Node is pinned in `.node-version`; c8 and ESLint have exact development
@@ -19,6 +24,7 @@ dependency versions and a committed npm lock. Runtime dashboards remain free
 of npm dependencies. The runner checks the Node version, installed direct tool
 versions and the complete npm dependency graph before measuring. A missing
 secondary dependency fails with an instruction to rerun the isolated installer.
+Missing direct tools also name that installer command.
 
 ## Scope and measurement
 
@@ -47,6 +53,12 @@ V8 execution ranges by full module path and source offsets, including anonymous
 callbacks. c8's named-function map alone omits anonymous callbacks and cannot
 qualify this inventory. Nested functions have separate execution and complexity
 records. Function identity never depends on a name or basename alone.
+Script-root execution is excluded even when its offsets equal an uncalled
+function's offsets. Implicit class fields and static blocks use V8's grouped
+initializer range for their owning class. A callback created by a field has
+its own execution record. Grouped initializer execution cannot distinguish
+individual sequential initializers interrupted by an exception; each such
+record explicitly labels this coverage basis.
 
 Cyclomatic complexity uses the pinned ESLint
 [classic complexity rule](https://eslint.org/docs/latest/rules/complexity),
@@ -73,6 +85,8 @@ qualify the metrics they produced. Local audits retain this output in their
 artifact directory after failures; CI uploads it with `if: always()` for 14 days.
 The runner clears only its own prior report files before a new measurement so a
 failed rerun cannot leave a stale successful report.
+Raw V8 files are cleared before checking tools, including when a missing tool
+prevents c8 from starting.
 
 Regression fixtures reject missing or newly unreviewed modules, coverage loss,
 worst-function CRAP growth and incomplete secondary tooling. Additional behavior

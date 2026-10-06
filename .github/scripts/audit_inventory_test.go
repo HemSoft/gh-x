@@ -138,6 +138,66 @@ func TestDashboardQualityGateCannotBeDisabled(t *testing.T) {
 	}
 }
 
+func TestDashboardInfrastructureContract(t *testing.T) {
+	contents, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeCases := []struct {
+		name   string
+		mutate func(*workflowStep)
+	}{
+		{"mutable tag", func(step *workflowStep) { step.Uses = "actions/setup-node@v6" }},
+		{"conditional setup", func(step *workflowStep) { step.If = "false" }},
+		{"allowed setup failure", func(step *workflowStep) { step.ContinueOnError = true }},
+	}
+	for _, jobName := range []string{"build-and-test", "quality", "performance"} {
+		for _, test := range nodeCases {
+			t.Run(jobName+"/"+test.name, func(t *testing.T) {
+				var ci workflow
+				if err := yaml.Unmarshal(contents, &ci); err != nil {
+					t.Fatal(err)
+				}
+				job := ci.Jobs[jobName]
+				for index := range job.Steps {
+					if strings.HasPrefix(job.Steps[index].Uses, "actions/setup-node@") {
+						test.mutate(&job.Steps[index])
+					}
+				}
+				ci.Jobs[jobName] = job
+				if dashboardQualityReady(ci) {
+					t.Fatal("unlocked Node setup was accepted")
+				}
+			})
+		}
+	}
+	uploadCases := []struct {
+		name   string
+		mutate func(*workflowStep)
+	}{
+		{"allowed upload failure", func(step *workflowStep) { step.ContinueOnError = true }},
+		{"conditional upload", func(step *workflowStep) { step.If = "success()" }},
+		{"wrong artifact name", func(step *workflowStep) { step.With["name"] = "wrong" }},
+		{"wrong artifact path", func(step *workflowStep) { step.With["path"] = "wrong" }},
+		{"wrong retention", func(step *workflowStep) { step.With["retention-days"] = "1" }},
+		{"mutable uploader", func(step *workflowStep) { step.Uses = "actions/upload-artifact@v7" }},
+	}
+	for _, test := range uploadCases {
+		t.Run(test.name, func(t *testing.T) {
+			var ci workflow
+			if err := yaml.Unmarshal(contents, &ci); err != nil {
+				t.Fatal(err)
+			}
+			job := ci.Jobs["quality"]
+			mutateWorkflowStep(&job, "Upload dashboard quality evidence", test.mutate)
+			ci.Jobs["quality"] = job
+			if dashboardQualityReady(ci) {
+				t.Fatal("weakened evidence upload was accepted")
+			}
+		})
+	}
+}
+
 func TestHiddenHelperQualityScopes(t *testing.T) {
 	contents, err := os.ReadFile("../workflows/ci.yml")
 	if err != nil {

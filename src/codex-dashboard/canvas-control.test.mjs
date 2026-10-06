@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -41,10 +41,16 @@ test("rejects sessions without Canvas rendering", async () => {
     );
 });
 
-test("rejects incomplete Canvas control inputs before publishing a marker", async () => {
+test("rejects incomplete Canvas control inputs before publishing a marker", async (context) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "canvas-invalid-"));
+    context.after(() => rm(directory, { recursive: true, force: true }));
     await assert.rejects(createCanvasControl(), /openCanvas is required/);
-    await assert.rejects(createCanvasControl({ openCanvas() {} }), /workingDirectory is required/);
-    await assert.rejects(createCanvasControl({ openCanvas() {}, workingDirectory: " " }), /workingDirectory is required/);
+    await assert.rejects(createCanvasControl({ directory }), /openCanvas is required/);
+    assert.deepEqual(await readdir(directory), []);
+    await assert.rejects(createCanvasControl({ directory, openCanvas() {} }), /workingDirectory is required/);
+    assert.deepEqual(await readdir(directory), []);
+    await assert.rejects(createCanvasControl({ directory, openCanvas() {}, workingDirectory: " " }), /workingDirectory is required/);
+    assert.deepEqual(await readdir(directory), []);
 });
 
 test("Canvas control defaults produce a unique private marker and preserve callback errors", async (context) => {
