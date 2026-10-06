@@ -140,6 +140,10 @@ directory. `-ReportPath <existing-directory>/audit.json` selects another report
 path. Build and coverage artifacts are cleaned up after all gates. The source
 checkout receives no generated audit output.
 
+The Windows standalone launcher lifecycle is a hosted check that a Linux audit
+cannot qualify. The local dashboard suite also executes it on Windows; Linux
+reports its platform skip.
+
 CodeQL setup/upload, PR dependency review, current-head Codex review and the
 aggregate GitHub Quality Gate are listed as hosted-only, not run locally. A
 successful local audit never claims those checks passed and performs no GitHub

@@ -221,6 +221,7 @@ go run ./.github/scripts/release-targets build`, "CI must build the canonical re
 	gate := ci.Jobs["gate"]
 	require(gate.Name == "Quality Gate", "CI must publish the Quality Gate check")
 	require(windowsInstallerGateReady(ci.Jobs["windows-installer"], gate), "Quality Gate must require Windows PowerShell 5.1 installer regression tests")
+	require(windowsLauncherGateReady(ci.Jobs["windows-installer"], gate), "Quality Gate must execute the standalone launcher lifecycle on Windows with pinned Node")
 	require(equal(gate.Needs, "build-and-test", "windows-installer", "lint", "quality", "mutation", "security-analysis", "dependency-review", "codex-review", "performance"), "Quality Gate must depend on every build, quality, security, review, and performance job")
 	gateStep := namedStep(gate, "Evaluate all gates")
 	gateRun := gateStep.Run
@@ -391,6 +392,13 @@ func windowsInstallerGateReady(installer, gate workflowJob) bool {
 		slices.Contains(gate.Needs, "windows-installer") && gate.If == "always()" &&
 		unconditionalRequiredStep(evaluator) &&
 		strings.Contains(evaluator.Run, `"${{ needs.windows-installer.result }}" != "success"`)
+}
+
+func windowsLauncherGateReady(installer, gate workflowJob) bool {
+	step, found := findWorkflowStep(installer, "Test Windows standalone launcher")
+	return found && windowsInstallerGateReady(installer, gate) && dashboardNodePinReady(installer) &&
+		step.Shell == "pwsh" && unconditionalRequiredStep(step) &&
+		strings.TrimSpace(step.Run) == "node --test src/codex-dashboard/launcher.test.mjs"
 }
 
 func validateRuleset(configuredRuleset ruleset) error {
