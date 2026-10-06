@@ -189,6 +189,46 @@ test("expands a session row with the last assistant message and newest tool call
     assert.equal(elements.get("sessions").children[1].hidden, false);
 });
 
+test("session refresh restores only disclosure focus and provides removal fallbacks", () => {
+    const elements = new Map([
+        ["sessions", fakeElement("tbody")],
+        ["sessions-empty", fakeElement("div")],
+        ["refresh", fakeElement("button")],
+    ]);
+    const documentRef = {
+        activeElement: null,
+        createElement: (tag) => {
+            const element = fakeElement(tag);
+            element.focus = (options) => {
+                assert.deepEqual(options, { preventScroll: true });
+                documentRef.activeElement = element;
+            };
+            return element;
+        },
+        createTextNode: (text) => ({ textContent: text }),
+        getElementById: (id) => elements.get(id),
+    };
+    elements.get("refresh").focus = () => { documentRef.activeElement = elements.get("refresh"); };
+    const sessions = ["first", "second", "third"].map((sessionId) => ({ sessionId, status: "Idle", activity: [] }));
+    const button = (index) => elements.get("sessions").children[index * 2].children[0].children[0];
+    renderSessions(documentRef, sessions);
+    documentRef.activeElement = button(1);
+    button(1).dispatch("click", { detail: 0 });
+    renderSessions(documentRef, [sessions[1], sessions[0], sessions[2]]);
+    assert.equal(documentRef.activeElement, button(0));
+    assert.equal(button(0).ariaExpanded, "true");
+    assert.equal(button(0).getAttribute("aria-controls"), elements.get("sessions").children[1].id);
+    renderSessions(documentRef, [sessions[0], sessions[2]]);
+    assert.equal(documentRef.activeElement, button(0));
+    documentRef.activeElement = button(1);
+    renderSessions(documentRef, [sessions[0]]);
+    assert.equal(documentRef.activeElement, button(0));
+    renderSessions(documentRef, []);
+    assert.equal(documentRef.activeElement, elements.get("refresh"));
+    renderSessions(documentRef, sessions);
+    assert.equal(documentRef.activeElement, elements.get("refresh"));
+});
+
 test("illustrates projected weekly usage on the current-usage progress bar", () => {
     const now = Date.now();
     const ids = [
@@ -649,6 +689,7 @@ function flushRefresh() {
 function fakeElement(tagName) {
     const classes = new Set();
     const listeners = new Map();
+    const attributes = new Map();
     return {
         tagName,
         children: [],
@@ -672,6 +713,12 @@ function fakeElement(tagName) {
         hidden: false,
         style: {},
         textContent: "",
+        setAttribute(name, value) {
+            attributes.set(name, value);
+        },
+        getAttribute(name) {
+            return attributes.get(name) ?? null;
+        },
         append(...children) {
             this.children.push(...children);
         },

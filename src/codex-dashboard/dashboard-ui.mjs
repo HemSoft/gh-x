@@ -304,6 +304,10 @@ const expandedSessionRows = new WeakMap();
 
 export function renderSessions(documentRef, sessions) {
     const body = documentRef.getElementById("sessions");
+    const oldRows = Array.from(body.children).filter((row) => row.dataset.sessionId);
+    const focusedIndex = oldRows.findIndex((row) => row.children[0].children[0] === documentRef.activeElement);
+    const focusedSessionId = oldRows[focusedIndex]?.dataset.sessionId;
+    const disclosures = new Map();
     const previousState = sessionTableState.get(body) || new Map();
     const expandedRows = expandedSessionRows.get(body) || new Set();
     const currentState = new Map();
@@ -340,6 +344,7 @@ export function renderSessions(documentRef, sessions) {
             row.classList.add("row-updated");
         }
         const disclosure = statusCell(documentRef, session.status, detailId, expanded);
+        disclosures.set(session.sessionId, disclosure.button);
         row.append(disclosure.cell);
         for (const value of [
             session.project,
@@ -394,6 +399,13 @@ export function renderSessions(documentRef, sessions) {
     sessionTableState.set(body, currentState);
     expandedSessionRows.set(body, expandedRows);
     documentRef.getElementById("sessions-empty").hidden = sessions.length > 0;
+    if (focusedSessionId !== undefined) {
+        const fallbackIndex = Math.min(focusedIndex, sessions.length - 1);
+        const target = disclosures.get(focusedSessionId)
+            || disclosures.get(sessions[fallbackIndex]?.sessionId)
+            || documentRef.getElementById("refresh");
+        target.focus({ preventScroll: true });
+    }
 }
 
 function statusCell(documentRef, status, detailId, expanded) {
@@ -402,7 +414,7 @@ function statusCell(documentRef, status, detailId, expanded) {
     button.type = "button";
     button.className = "row-toggle";
     button.ariaExpanded = String(expanded);
-    button.ariaControls = detailId;
+    button.setAttribute("aria-controls", detailId);
     button.ariaLabel = `${expanded ? "Collapse" : "Expand"} ${status.toLowerCase()} session activity`;
     const badge = documentRef.createElement("span");
     badge.className = `status-badge ${status.toLowerCase()}`;
