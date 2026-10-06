@@ -100,6 +100,44 @@ func auditSetupAction(uses string) bool {
 	return false
 }
 
+func TestDashboardQualityGateCannotBeDisabled(t *testing.T) {
+	contents, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name := range dashboardQualityCommands["quality"] {
+		for _, disguise := range []string{"comment", "disabled", "allowed failure"} {
+			t.Run(name+"/"+disguise, func(t *testing.T) {
+				var ci workflow
+				if err := yaml.Unmarshal(contents, &ci); err != nil {
+					t.Fatal(err)
+				}
+				if !dashboardQualityReady(ci) {
+					t.Fatal("current JavaScript gate is incomplete")
+				}
+				job := ci.Jobs["quality"]
+				for i := range job.Steps {
+					if job.Steps[i].Name != name {
+						continue
+					}
+					switch disguise {
+					case "comment":
+						job.Steps[i].Run = "# " + job.Steps[i].Run
+					case "disabled":
+						job.Steps[i].If = "false"
+					case "allowed failure":
+						job.Steps[i].ContinueOnError = true
+					}
+				}
+				ci.Jobs["quality"] = job
+				if dashboardQualityReady(ci) {
+					t.Fatal("disabled JavaScript gate was accepted")
+				}
+			})
+		}
+	}
+}
+
 func TestHiddenHelperQualityScopes(t *testing.T) {
 	contents, err := os.ReadFile("../workflows/ci.yml")
 	if err != nil {

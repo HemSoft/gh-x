@@ -18,6 +18,7 @@ coverage.out
 .idea/
 .vscode/
 coverage/
+node_modules/
 
 # Playwright MCP debug artifacts
 .playwright-mcp/

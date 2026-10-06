@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "maximumActionableCrap": 30,
+  "minimum": {
+    "lines": 89.44467994913099,
+    "statements": 89.44467994913099,
+    "branches": 86.04651162790698,
+    "functions": 88.11881188118812
+  },
+  "modules": {
+    "src/codex-dashboard/canvas-control.mjs": {
+      "minimum": {
+        "lines": 96.92307692307692,
+        "statements": 96.92307692307692,
+        "branches": 84.375,
+        "functions": 100
+      },
+      "maximumCrap": 12.28125
+    },
+    "src/codex-dashboard/codex-adapter.mjs": {
+      "minimum": {
+        "lines": 96.86274509803921,
+        "statements": 96.86274509803921,
+        "branches": 91.75257731958763,
+        "functions": 95.1219512195122
+      },
+      "maximumCrap": 28.589030803906837
+    },
+    "src/codex-dashboard/dashboard-entry.mjs": {
+      "minimum": {
+        "lines": 0,
+        "statements": 0,
+        "branches": 0,
+        "functions": 100
+      },
+      "maximumCrap": 0
+    },
+    "src/codex-dashboard/dashboard-server.mjs": {
+      "minimum": {
+        "lines": 88.29787234042553,
+        "statements": 88.29787234042553,
+        "branches": 83.60655737704919,
+        "functions": 90.9090909090909
+      },
+      "maximumCrap": 29.71504172603297
+    },
+    "src/codex-dashboard/dashboard-ui.mjs": {
+      "minimum": {
+        "lines": 91.6256157635468,
+        "statements": 91.6256157635468,
+        "branches": 85.23809523809524,
+        "functions": 87.14285714285714
+      },
+      "maximumCrap": 21.188046647230323
+    },
+    "src/codex-dashboard/isolated-snapshot-reader.mjs": {
+      "minimum": {
+        "lines": 100,
+        "statements": 100,
+        "branches": 92.85714285714286,
+        "functions": 93.33333333333333
+      },
+      "maximumCrap": 10
+    },
+    "src/codex-dashboard/main.mjs": {
+      "minimum": {
+        "lines": 86.66666666666667,
+        "statements": 86.66666666666667,
+        "branches": 57.142857142857146,
+        "functions": 60
+      },
+      "maximumCrap": 2.5
+    },
+    "src/codex-dashboard/snapshot-reader-process.mjs": {
+      "minimum": {
+        "lines": 71.42857142857143,
+        "statements": 71.42857142857143,
+        "branches": 66.66666666666667,
+        "functions": 60
+      },
+      "maximumCrap": 12
+    },
+    "src/codex-dashboard/snapshot-reader-thread.mjs": {
+      "minimum": {
+        "lines": 61.111111111111114,
+        "statements": 61.111111111111114,
+        "branches": 66.66666666666667,
+        "functions": 100
+      },
+      "maximumCrap": 13.125
+    },
+    "src/codex-dashboard/snapshot-worker.mjs": {
+      "minimum": {
+        "lines": 97.29729729729729,
+        "statements": 97.29729729729729,
+        "branches": 92.85714285714286,
+        "functions": 100
+      },
+      "maximumCrap": 13.125
+    },
+    "src/dashboard-hub/copilot-adapter.mjs": {
+      "minimum": {
+        "lines": 94.39252336448598,
+        "statements": 94.39252336448598,
+        "branches": 76.47058823529412,
+        "functions": 77.77777777777777
+      },
+      "maximumCrap": 30
+    },
+    "src/dashboard-hub/hub-server.mjs": {
+      "minimum": {
+        "lines": 87.05035971223022,
+        "statements": 87.05035971223022,
+        "branches": 80.23255813953489,
+        "functions": 100
+      },
+      "maximumCrap": 25.556851311953352
+    },
+    "src/dashboard-hub/main.mjs": {
+      "minimum": {
+        "lines": 0,
+        "statements": 0,
+        "branches": 0,
+        "functions": 0
+      },
+      "maximumCrap": 6
+    }
+  }
+}

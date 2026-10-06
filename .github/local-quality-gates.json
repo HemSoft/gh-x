@@ -27,7 +27,9 @@
     { "id": "mutation-fixtures", "tools": ["bash"], "needs": [], "ci": ["mutation/Verify mutation threshold fixtures"] },
     { "id": "mutation", "tools": ["go", "gremlins"], "needs": [], "ci": ["mutation/Enforce: mutation efficacy ≥ 90% and mutator coverage ≥ 90%"] },
     { "id": "performance-tests", "tools": ["node"], "needs": [], "ci": ["performance/Test performance gate"] },
-    { "id": "performance", "tools": ["go", "node", "git"], "needs": [], "ci": ["performance/Detect performance workload changes", "performance/Measure critical local paths"] }
+    { "id": "performance", "tools": ["go", "node", "git"], "needs": [], "ci": ["performance/Detect performance workload changes", "performance/Measure critical local paths"] },
+    {"id": "dashboard-quality-fixtures", "tools": ["node", "npm"], "needs": [], "ci": ["quality/Test dashboard quality gate"]},
+    {"id": "dashboard-quality", "tools": ["node", "npm"], "needs": ["dashboard-quality-fixtures"], "ci": ["quality/Enforce dashboard JavaScript quality"]}
   ],
   "hosted": [
     { "step": "windows-installer/Test Windows PowerShell installer", "reason": "Requires the hosted Windows PowerShell 5.1 runtime; a Linux local audit cannot qualify it. The same offline fixtures also run locally under Windows when available." },
@@ -42,6 +44,7 @@
     { "step": "lint/Install lint tools", "reason": "Local analyzers must already be installed at quality-tools.env pins; the audit verifies versions without installing." },
     { "step": "quality/Install quality tools", "reason": "Local analyzers must already be installed at quality-tools.env pins." },
     { "step": "mutation/Install gremlins", "reason": "Local Gremlins must already match quality-tools.env." },
-    { "step": "quality/Settle before retry", "reason": "GitHub artifact propagation only; local gates use the fresh local coverage file." }
+    { "step": "quality/Settle before retry", "reason": "GitHub artifact propagation only; local gates use the fresh local coverage file." },
+    {"step": "quality/Install dashboard quality tools", "reason": "Run npm ci from the authoritative package-lock.json before a local audit; the measurement verifies direct pins and the full secondary dependency graph without installing."}
   ]
 }

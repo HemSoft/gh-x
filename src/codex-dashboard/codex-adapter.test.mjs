@@ -306,6 +306,61 @@ function fakeSqliteLoader(rows) {
     });
 }
 
+test("normalizes incomplete usage and rate-limit records without inventing balances", async () => {
+    const cases = [
+        { rates: "invalid", usage: null, expected: null },
+        { rates: {}, usage: { total_token_usage: {}, last_token_usage: {} }, expected: { limitId: null, limitName: null, planType: null, primary: null, secondary: null, credits: null, spendControlReached: false, reachedType: null } },
+        { rates: { credits: {} }, usage: { total_token_usage: { input_tokens: 1, cached_input_tokens: 2, output_tokens: 3, reasoning_output_tokens: 4, total_tokens: 5 } }, expectedCredits: { hasCredits: false, unlimited: false, balance: null } },
+        { rates: { credits: { has_credits: true, unlimited: true, balance: 0 }, primary: {}, secondary: {}, limit_id: "limit", limit_name: "Window", plan_type: "pro", spend_control_reached: true, rate_limit_reached_type: "credits" }, usage: {}, expectedCredits: { hasCredits: true, unlimited: true, balance: "0" } },
+        { rates: { credits: { balance: null } }, usage: {}, expectedCredits: { hasCredits: false, unlimited: false, balance: null } },
+        { rates: { credits: "invalid" }, usage: {}, expectedCredits: null },
+    ];
+    for (const [index, entry] of cases.entries()) {
+        const adapter = createCodexAdapter({
+            codexHome: "/synthetic", now: () => new Date("2026-08-18T16:30:00Z"),
+            sqliteModuleLoader: fakeSqliteLoader(() => [snapshotRow(`fixture-${index}`)]),
+            stat: () => ({ size: 1, mtimeMs: 1 }),
+            readLines: async function* () {
+                yield { timestamp: "2026-08-18T16:00:00Z", payload: { type: "token_count", info: entry.usage, rate_limits: entry.rates } };
+            },
+        });
+        const snapshot = await adapter.getSnapshot();
+        assert.equal(snapshot.available, true);
+        if ("expected" in entry) assert.deepEqual(snapshot.rateLimits, entry.expected);
+        if ("expectedCredits" in entry) assert.deepEqual(snapshot.rateLimits.credits, entry.expectedCredits);
+        assert.equal(snapshot.sessions[0].context, null);
+    }
+});
+
+test("empty thrown values still produce unavailable snapshot diagnostics", async () => {
+    const adapter = createCodexAdapter({ codexHome: "/synthetic", sqliteModuleLoader: async () => { throw null; } });
+    const snapshot = await adapter.getSnapshot();
+    assert.equal(snapshot.available, false);
+    assert.equal(snapshot.diagnostics.code, "codex_dashboard_unavailable");
+    assert.equal(snapshot.diagnostics.message, "Unable to read Codex session data.");
+});
+
+test("rollout parsing tolerates incomplete events and invalid timestamps", async () => {
+    const rollout = await parseRollout("synthetic", async function* () {
+        yield null;
+        yield {};
+        yield { timestamp: "invalid", type: "event_msg", payload: { type: "user_message", message: "Question" } };
+        yield { payload: { type: "task_started" } };
+        yield { payload: { type: "turn_aborted" } };
+        yield { type: "response_item", payload: { type: "function_call", name: "" } };
+        yield { type: "response_item", payload: { type: "custom_tool_call", name: "tool" } };
+        yield { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Answer" }] } };
+        yield { payload: { type: "token_count", info: null, rate_limits: {} } };
+    });
+    assert.equal(rollout.latestUserPrompt, "Question");
+    assert.equal(rollout.latestUserPromptAt, null);
+    assert.equal(rollout.taskStarts, 1);
+    assert.equal(rollout.toolCalls, 2);
+    assert.equal(rollout.recentToolCalls[0].timestamp, null);
+    assert.equal(rollout.latestAssistantMessage.timestamp, null);
+    assert.equal(rollout.usage, null);
+});
+
 function event(timestamp, type, payloadType) {
     return {
         timestamp,

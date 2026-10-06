@@ -711,12 +711,14 @@ always measures the full workload rather than applying CI's changed-path filter.
 The runner tests and `.github/local-quality-gates.json` inventory are checked in
 CI; an unclassified new or removed CI step fails the inventory test.
 
-Install Go from `go.mod`, Node 24, PowerShell 7, Git, GitHub CLI, Bash with its
+Install Go from `go.mod`, Node from `.node-version`, PowerShell 7, Git, GitHub CLI, Bash with its
 standard Unix utilities, and the pinned analyzers from `.github/quality-tools.env`.
 Race tests require Go's supported C compiler setup. Git Bash supplies the shell
 utilities on Windows; CI runs these checks on Ubuntu. Changelog validation needs
 read access to this repository's releases through `gh`. The runner does not
 install Go analyzers or modify GitHub. Markdown lint uses the pinned `npx` command.
+Install the locked JavaScript development tools with `npm ci --ignore-scripts`
+before running the audit.
 
 A JSON report and performance evidence are retained in a unique system temporary
 directory, printed at completion. Use `-ReportPath <existing-directory>/audit.json`
@@ -727,6 +729,13 @@ Local success does not replace GitHub qualification. The report separately lists
 CodeQL setup/analysis, PR dependency review, current-head Codex review and the
 required aggregate `Quality Gate` as hosted checks not run locally. The audit
 never uploads source, requests reviews, posts comments or dispatches workflows.
+
+Dashboard JavaScript also has an all-source coverage and per-function complexity
+gate, with reviewed aggregate/per-module coverage floors and worst-function CRAP
+ceilings. CRAP above 30 fails; scores from 15 through 30 form the review queue.
+The [dashboard quality policy](docs/dashboard-quality.md) documents exact tools,
+scope, source-range joins, zero-coverage entry modules, baselines and retained
+failure reports. These JavaScript limits are separate from the Go limits below.
 
 | Gate | Limit |
 | --- | ---: |
