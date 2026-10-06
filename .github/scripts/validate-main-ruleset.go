@@ -107,6 +107,29 @@ type workflowStep struct {
 }
 
 func main() {
+	if err := validateRepository(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// Configuration assertions stop at the first invalid invariant. Convert only
+// those expected failures to errors; programming panics must still propagate.
+func validateRepository() (err error) {
+	defer func() {
+		if failure := recover(); failure != nil {
+			if validationErr, ok := failure.(validationError); ok {
+				err = validationErr
+				return
+			}
+			panic(failure)
+		}
+	}()
+	validateVersionedWorkflows()
+	return nil
+}
+
+func validateVersionedWorkflows() {
 	var configuredRuleset ruleset
 	loadJSON(".github/rulesets/main.json", &configuredRuleset)
 	ci, ciContent := loadWorkflowWithContent(".github/workflows/ci.yml")
@@ -122,6 +145,17 @@ func main() {
 	require(equal(ci.On.PullRequest.Types, "opened", "synchronize", "reopened", "ready_for_review", "edited"), "CI pull-request events changed")
 	require(equal(ci.On.Push.Branches, "main"), "CI must report status for the main branch badge")
 
+	validateSecurityCI(ci, ciContent)
+	validateReviewCI(ci)
+	validateBuildCI(ci)
+	releaseJob := validateReleaseConfiguration(ci, autoRelease, qualityToolsContent)
+	validateReleasePublication(releaseJob, autoReleaseContent)
+	validateExistingRelease(releaseJob)
+	validateChangelogDelivery(releaseJob, authoritativeRunContent)
+	fmt.Fprintln(os.Stdout, "main ruleset and release workflows are consistent")
+}
+
+func validateSecurityCI(ci workflow, ciContent string) {
 	security := ci.Jobs["security-analysis"]
 	require(security.Name == "CodeQL Analysis (${{ matrix.language }})", "CI must publish per-language CodeQL checks")
 	require(reflect.DeepEqual(security.Permissions, map[string]string{
@@ -151,7 +185,9 @@ func main() {
 	requirePinnedAction(ciContent, reviewStep, "actions/dependency-review-action", "v5")
 	require(reviewStep.With["fail-on-severity"] == "high", "dependency review must block high and critical vulnerabilities")
 	require(namedStep(dependencyReview, "Skip dependency review outside pull requests").If == "github.event_name != 'pull_request'", "non-PR runs must complete dependency review without a bypass")
+}
 
+func validateReviewCI(ci workflow) {
 	changelogCheck := namedStep(ci.Jobs["lint"], "Validate changelog release links")
 	require(changelogCheck.Env["GH_TOKEN"] == "${{ github.token }}", "changelog validation must authenticate GitHub Release queries")
 	require(strings.TrimSpace(changelogCheck.Run) == "go run ./.github/scripts/changelog-check", "CI must run the tested changelog validator")
@@ -168,7 +204,10 @@ func main() {
 	require(codexStep.Env["REVIEW_SETUP_AT"] == "${{ github.event.pull_request.updated_at }}", "ordinary review setup must bind the triggering pull request update")
 	require(codexStep.Env["EXPECTED_HEAD"] == "${{ inputs.changelog_head || github.event.pull_request.head.sha || github.sha }}", "Codex review must bind the immutable head")
 	require(strings.Contains(codexStep.Run, `REVIEW_SCOPE="$review_scope" go run ./.github/scripts/changelog-merge review`), "Codex verification must select explicit ordinary or changelog scope")
+}
 
+func validateBuildCI(ci workflow) {
+	require(helperQualityScopesReady(ci), "all maintained Go helpers must participate in shared quality gates")
 	crossBuild := namedStep(ci.Jobs["build-and-test"], "Build all release targets")
 	require(reflect.DeepEqual(crossBuild.Env, map[string]string{
 		"RELEASE_VERSION":    "ci",
@@ -197,7 +236,9 @@ go run ./.github/scripts/release-targets build`, "CI must build the canonical re
 	require(strings.Contains(gateRun, `"${{ needs.performance.result }}" != "success"`), "Quality Gate must reject failed performance budgets")
 	require(strings.Contains(gateRun, "::error::One or more quality gates failed"), "Quality Gate must report a failed dependency")
 	require(strings.Contains(gateRun, "exit 1"), "Quality Gate must fail when a dependency is unsuccessful")
+}
 
+func validateReleaseConfiguration(ci, autoRelease workflow, qualityToolsContent string) workflowJob {
 	require(equal(autoRelease.On.WorkflowRun.Workflows, "CI Quality Gates"), "auto-release must follow CI Quality Gates")
 	require(equal(autoRelease.On.WorkflowRun.Types, "completed"), "auto-release must follow completed CI runs")
 	require(equal(autoRelease.On.WorkflowRun.Branches, "main"), "auto-release must follow main-branch CI runs")
@@ -227,6 +268,10 @@ go run ./.github/scripts/release-targets build`, "CI must build the canonical re
 
 	validateTrustedReleaseHelper(releaseJob)
 
+	return releaseJob
+}
+
+func validateReleasePublication(releaseJob workflowJob, autoReleaseContent string) {
 	check := namedStep(releaseJob, "Check whether release is needed")
 	require(stepIndex(releaseJob, "Load trusted release helpers") < stepIndex(releaseJob, "Check whether release is needed"), "trusted release helpers must load before any release decision")
 	require(check.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release check must receive the validated SHA through env")
@@ -269,7 +314,9 @@ go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the tr
 	require(create.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "release creation must receive the validated SHA through env")
 	require(create.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "release creation must receive the new or resumed release tag")
 	require(strings.TrimSpace(create.Run) == `go run "$RUNNER_TEMP/release-plan.go" create`, "release creation must use the trusted release-plan command")
+}
 
+func validateExistingRelease(releaseJob workflowJob) {
 	existingNotes := namedStep(releaseJob, "Load existing release notes")
 	require(existingNotes.ID == "existing_release", "existing release notes step must expose its outcome")
 	require(existingNotes.If == "steps.check.outputs.release_tag != ''", "tagged release runs must check for existing release notes")
@@ -288,7 +335,9 @@ go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the tr
 	require(changelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog update must receive the new or resumed release tag")
 	require(strings.Contains(changelog.Run, "git switch --detach origin/main"), "changelog reconciliation must start from current main")
 	require(strings.Contains(changelog.Run, `go run "$RUNNER_TEMP/release-plan.go" changelog`), "release workflow must use the trusted changelog updater")
+}
 
+func validateChangelogDelivery(releaseJob workflowJob, authoritativeRunContent string) {
 	mergeChangelog := namedStep(releaseJob, "Queue guarded changelog auto-merge and await completion")
 	require(mergeChangelog.If == "steps.check.outputs.skip == 'false' || steps.existing_release.outputs.found == 'true'", "changelog pull request must run for new and confirmed existing releases")
 	require(mergeChangelog.Env["RELEASE_TAG"] == "${{ steps.version.outputs.tag || steps.check.outputs.release_tag }}", "changelog pull request must receive the new or resumed release tag")
@@ -321,8 +370,6 @@ go run "$RUNNER_TEMP/release-targets.go" build`, "release builds must use the tr
 	noDiffDispatch := strings.Index(noDiffBranch, "gh workflow run ci.yml --ref main")
 	noDiffExit := strings.Index(noDiffBranch, "exit 0")
 	require(noDiffDispatch >= 0 && noDiffExit >= 0 && noDiffDispatch < noDiffExit, "already-current changelog retries must dispatch main CI before returning")
-
-	fmt.Fprintln(os.Stdout, "main ruleset and release workflows are consistent")
 }
 
 type rulesetValidation struct {
@@ -492,10 +539,11 @@ func require(condition bool, message string) {
 	}
 }
 
-func fail(message string) {
-	fmt.Fprintln(os.Stderr, message)
-	os.Exit(1)
-}
+type validationError string
+
+func (err validationError) Error() string { return string(err) }
+
+func fail(message string) { panic(validationError(message)) }
 
 var actionSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
@@ -526,4 +574,76 @@ func actionVersionComment(workflowContent, action string) (string, bool) {
 		return "", false
 	}
 	return matches[1], true
+}
+
+func helperQualityScopesReady(ci workflow) bool {
+	for job, steps := range helperQualityCommands {
+		for name, command := range steps {
+			step, found := findWorkflowStep(ci.Jobs[job], name)
+			if !found || strings.TrimSpace(step.Run) != command {
+				return false
+			}
+		}
+	}
+	crap, _ := findWorkflowStep(ci.Jobs["quality"], "Enforce: CRAP score < 30")
+	return crap.Shell == "pwsh"
+}
+
+func findWorkflowStep(job workflowJob, name string) (workflowStep, bool) {
+	for _, step := range job.Steps {
+		if step.Name == name {
+			return step, true
+		}
+	}
+	return workflowStep{}, false
+}
+
+// Keep these commands canonical: a comment or unrelated command containing a
+// helper path cannot stand in for an analyzer's actual arguments.
+var helperQualityCommands = map[string]map[string]string{
+	"build-and-test": {
+		"Build": `go build -o "$RUNNER_TEMP/bin/" ./... ./.github/scripts/...`,
+		"Vet":   `go vet ./... ./.github/scripts/...`,
+		"Test Go packages (race detection enabled)": `go list ./... ./.github/scripts/... | grep -v '/tests/behavior$' > "$RUNNER_TEMP/go-packages.list"
+mapfile -t packages < "$RUNNER_TEMP/go-packages.list"
+go test -race -count=1 -coverprofile=coverage.out "${packages[@]}"`,
+	},
+	"lint": {
+		"Staticcheck":                       `staticcheck ./... ./.github/scripts/...`,
+		"Gocritic (anti-pattern detection)": `gocritic check ./... ./.github/scripts/...`,
+		"Errcheck (unchecked errors)":       `errcheck -exclude .errcheck_excludes ./... ./.github/scripts/...`,
+		"Dead code detection": `output=$(deadcode ./... ./.github/scripts/... 2>&1 || true)
+if [ -n "$output" ]; then
+  echo "::error::Dead code detected:"
+  echo "$output"
+  exit 1
+fi`,
+		"Vulnerability scan": `govulncheck ./... ./.github/scripts/...`,
+	},
+	"quality": {
+		"Enforce: cyclomatic complexity ≤ 10": `if ! command -v gocyclo &>/dev/null; then
+  echo "::error::gocyclo not installed"
+  exit 1
+fi
+violations=$(gocyclo -over 10 -ignore "_test\.go" . .github/scripts 2>&1 || true)
+if [ -n "$violations" ]; then
+  count=$(echo "$violations" | wc -l)
+  echo "::error::${count} function(s) exceed cyclomatic complexity 10:"
+  echo "$violations"
+  exit 1
+fi`,
+		"Enforce: cognitive complexity ≤ 15": `if ! command -v gocognit &>/dev/null; then
+  echo "::error::gocognit not installed"
+  exit 1
+fi
+violations=$(gocognit -over 15 -ignore "_test\.go" . .github/scripts 2>&1 || true)
+if [ -n "$violations" ]; then
+  count=$(echo "$violations" | wc -l)
+  echo "::error::${count} function(s) exceed cognitive complexity 15:"
+  echo "$violations"
+  exit 1
+fi`,
+		"Enforce: CRAP score < 30": `. ./.agents/skills/perfection/scripts/perfection-audit.ps1
+Assert-CrapThreshold coverage.out 30.0`,
+	},
 }

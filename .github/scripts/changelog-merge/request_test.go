@@ -382,13 +382,14 @@ func TestOrdinaryActivityTimeIgnoresProseAndRejectsAmbiguity(t *testing.T) {
 		URL:    "activity-url",
 	}
 	state := reviewState{HeadRefOID: testHead}
+	state.TimelineItems.Nodes = []timelineItem{{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}}}
 	state.Comments.Nodes = []reviewComment{comment}
-	activity, err := currentHeadCodexActivity(state, testHead)
+	activity, err := currentHeadOrdinaryCodexActivity(state, testHead)
 	if err != nil || !activity.CreatedAt.Equal(started) {
 		t.Fatalf("activity=%v err=%v", activity.CreatedAt, err)
 	}
 	state.Comments.Nodes[0].Body += "\n| 📝 **Code Review** | completed <relative-time datetime=\"2099-01-01T00:00:00Z\">later</relative-time> | `" + testHead[:7] + "` | Manual request |"
-	if _, err := currentHeadCodexActivity(state, testHead); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+	if _, err := currentHeadOrdinaryCodexActivity(state, testHead); err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("duplicate activity rows must fail closed: %v", err)
 	}
 }

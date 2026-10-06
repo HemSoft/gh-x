@@ -113,7 +113,9 @@ PowerShell executor regression tests. The local runner executes:
 7. Scan all Go files for forbidden suppressions and production `fmt.Print*` calls.
 8. Run pinned Markdown lint with the same CI exclusions.
 9. Enforce statement coverage >=70%, cyclomatic complexity <=10, cognitive
-   complexity <=15 and CRAP <30 with the existing Go analyzer scopes.
+   complexity <=15 and CRAP <30 with both `./...` and the explicit hidden `./.github/scripts/...` scopes.
+    Production complexity scans include `.github/scripts`; CRAP joins use full
+    relative paths and declaration lines rather than basenames.
 10. Run mutation fixtures and Gremlins against the package scope and 90% floors
     in `.github/quality-tools.env`, including integer-ratio boundary checks.
 11. Run performance gate tests and all versioned benchmark budgets. Local audits

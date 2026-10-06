@@ -700,3 +700,38 @@ func TestExpiredReviewDoesNotPollOrRequest(t *testing.T) {
 		t.Fatalf("expected canceled review, got %v", err)
 	}
 }
+
+func TestReviewDecisionClearing(t *testing.T) {
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	finding := review{State: "CHANGES_REQUESTED", SubmittedAt: when, Author: actor{Login: "reviewer"}}
+	finding.Commit.OID = testHead
+	tests := []struct {
+		name, author, head, state string
+		after                     time.Duration
+		want                      bool
+		missingTimestamp          bool
+	}{
+		{name: "missing finding timestamp", author: "reviewer", head: testHead, state: "APPROVED", after: time.Minute, missingTimestamp: true},
+		{name: "later approval", author: "reviewer", head: testHead, state: "APPROVED", after: time.Minute, want: true},
+		{name: "later dismissal", author: "reviewer", head: testHead, state: "DISMISSED", after: time.Minute, want: true},
+		{name: "different author", author: "other", head: testHead, state: "APPROVED", after: time.Minute},
+		{name: "different head", author: "reviewer", head: "other", state: "APPROVED", after: time.Minute},
+		{name: "same timestamp", author: "reviewer", head: testHead, state: "APPROVED"},
+		{name: "later comment", author: "reviewer", head: testHead, state: "COMMENTED", after: time.Minute},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			later := review{State: test.state, SubmittedAt: when.Add(test.after), Author: actor{Login: test.author}}
+			later.Commit.OID = test.head
+			state := reviewState{}
+			candidate := finding
+			if test.missingTimestamp {
+				candidate.SubmittedAt = time.Time{}
+			}
+			state.Reviews.Nodes = []review{candidate, later}
+			if got := clearedReviewDecision(state, candidate); got != test.want {
+				t.Fatalf("cleared = %v, want %v", got, test.want)
+			}
+		})
+	}
+}

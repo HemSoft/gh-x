@@ -41,37 +41,42 @@ type buildConfig struct {
 }
 
 func main() {
-	if len(os.Args) != 2 || (os.Args[1] != "list" && os.Args[1] != "build") {
-		fatal("usage: release-targets <list|build>")
+	if err := runTargets(os.Args[1:]); err != nil {
+		fatal(err.Error())
 	}
+}
 
-	supported, err := loadSupportedTargets()
-	if err != nil {
-		fatal(err.Error())
+func runTargets(args []string) error {
+	if len(args) != 1 || (args[0] != "list" && args[0] != "build") {
+		return errors.New("usage: release-targets <list|build>")
 	}
-	manifest, err := manifestPath()
+	targets, err := configuredTargets()
 	if err != nil {
-		fatal(err.Error())
+		return err
 	}
-	targets, err := loadTargets(manifest, supported)
-	if err != nil {
-		fatal(err.Error())
-	}
-
-	if os.Args[1] == "list" {
+	if args[0] == "list" {
 		for _, target := range targets {
 			fmt.Fprintf(os.Stdout, "%s -> %s\n", target.id(), target.asset())
 		}
-		return
+		return nil
 	}
-
 	config, err := loadBuildConfig()
 	if err != nil {
-		fatal(err.Error())
+		return err
 	}
-	if err := buildTargets(targets, config); err != nil {
-		fatal(err.Error())
+	return buildTargets(targets, config)
+}
+
+func configuredTargets() ([]releaseTarget, error) {
+	supported, err := loadSupportedTargets()
+	if err != nil {
+		return nil, err
 	}
+	manifest, err := manifestPath()
+	if err != nil {
+		return nil, err
+	}
+	return loadTargets(manifest, supported)
 }
 
 func manifestPath() (string, error) {

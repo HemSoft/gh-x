@@ -155,25 +155,21 @@ func reviewReady(state reviewState, head string) (bool, bool, error) {
 	if state.HeadRefOID != head {
 		return false, false, errors.New("review response head does not match expected head")
 	}
-	if state.Comments.PageInfo.HasPreviousPage || state.Reviews.PageInfo.HasPreviousPage || state.ReviewThreads.PageInfo.HasNextPage || state.TimelineItems.PageInfo.HasPreviousPage {
-		return false, false, errors.New("review evidence truncated; manual review required")
+	if err := validateReviewPagination(state); err != nil {
+		return false, false, err
 	}
 	if ambiguousCodexReview(state, head) {
 		return false, true, errors.New("current-head Codex evidence lacks a timestamp")
 	}
-	for _, comment := range state.Comments.Nodes {
-		if codexActor(comment.Author.Login) && strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") && strings.Contains(comment.Body, "`"+head[:7]+"`") && strings.Contains(comment.Body, "**Running**") {
-			return false, true, nil
-		}
+	if codexReviewRunning(state, head) {
+		return false, true, nil
 	}
 	clean, latest, requested := codexEvidence(state, head)
 	if outstandingReviewDecision(state, head) {
 		return false, requested, nil
 	}
-	for _, thread := range state.ReviewThreads.Nodes {
-		if !thread.IsResolved {
-			return false, requested, nil
-		}
+	if unresolvedReviewThreads(state) {
+		return false, requested, nil
 	}
 	return !clean.IsZero() && clean.After(latest), requested, nil
 }
@@ -182,17 +178,8 @@ func ordinaryReviewReady(state reviewState, head string) (bool, bool, error) {
 	if state.HeadRefOID != head {
 		return false, false, errors.New("review response head does not match expected head")
 	}
-	if state.Comments.PageInfo.HasPreviousPage {
-		validated, err := hasCurrentHeadCodexSummary(state.Comments.Nodes, head)
-		if err != nil {
-			return false, false, err
-		}
-		if !validated {
-			return false, false, errors.New("review evidence truncated; manual review required")
-		}
-	}
-	if state.Reviews.PageInfo.HasPreviousPage || state.ReviewThreads.PageInfo.HasNextPage || state.TimelineItems.PageInfo.HasPreviousPage {
-		return false, false, errors.New("review evidence truncated; manual review required")
+	if err := validateOrdinaryReviewPagination(state, head); err != nil {
+		return false, false, err
 	}
 	clean, latest, requested, err := ordinaryCodexEvidence(state, head)
 	if err != nil {
@@ -201,10 +188,8 @@ func ordinaryReviewReady(state reviewState, head string) (bool, bool, error) {
 	if outstandingReviewDecision(state, head) {
 		return false, requested, nil
 	}
-	for _, thread := range state.ReviewThreads.Nodes {
-		if !thread.IsResolved {
-			return false, requested, nil
-		}
+	if unresolvedReviewThreads(state) {
+		return false, requested, nil
 	}
 	return !clean.IsZero() && clean.After(latest), requested, nil
 }
@@ -265,25 +250,6 @@ func codexEvidence(state reviewState, head string) (time.Time, time.Time, bool) 
 		}
 	}
 	return clean, latest, requested
-}
-
-func currentHeadCodexActivity(state reviewState, head string) (reviewComment, error) {
-	candidates := make([]reviewComment, 0, len(state.Comments.Nodes)+len(state.Reviews.Nodes))
-	for _, comment := range state.Comments.Nodes {
-		candidate, matched, err := codexCommentActivity(comment, head)
-		if err != nil {
-			return reviewComment{}, err
-		}
-		if matched {
-			candidates = append(candidates, candidate)
-		}
-	}
-	for _, item := range state.Reviews.Nodes {
-		if codexActor(item.Author.Login) && item.Commit.OID == head {
-			candidates = append(candidates, reviewComment{Body: item.Body, CreatedAt: item.SubmittedAt, Author: item.Author, Clean: item.State == "APPROVED"})
-		}
-	}
-	return latestCodexActivity(candidates)
 }
 
 func currentHeadOrdinaryCodexActivity(state reviewState, head string) (reviewComment, error) {
@@ -445,7 +411,7 @@ func timelineBindsComment(state reviewState, comment reviewComment, head string)
 		return false, errors.New("pull request timeline is truncated; cannot bind Codex evidence to current head")
 	}
 	if comment.URL == "" {
-		return false, errors.New("Codex receipt lacks a timeline identity")
+		return false, errors.New("codex receipt lacks a timeline identity")
 	}
 	var timelineHead string
 	for _, item := range state.TimelineItems.Nodes {
@@ -456,7 +422,7 @@ func timelineBindsComment(state reviewState, comment reviewComment, head string)
 			continue
 		}
 		if timelineHead == "" {
-			return false, errors.New("Codex receipt cannot be bound to a head timeline event")
+			return false, errors.New("codex receipt cannot be bound to a head timeline event")
 		}
 		return timelineHead == head, nil
 	}
@@ -631,4 +597,45 @@ func newerCheck(candidate, current checkRun) (bool, error) {
 		return false, errors.New("cannot order repeated review checks; manual review required")
 	}
 	return a.After(b), nil
+}
+
+func codexReviewRunning(state reviewState, head string) bool {
+	for _, comment := range state.Comments.Nodes {
+		if codexActor(comment.Author.Login) && strings.Contains(comment.Body, "<!-- codex-pull-request-review-summary -->") && strings.Contains(comment.Body, "`"+head[:7]+"`") && strings.Contains(comment.Body, "**Running**") {
+			return true
+		}
+	}
+	return false
+}
+
+func unresolvedReviewThreads(state reviewState) bool {
+	for _, thread := range state.ReviewThreads.Nodes {
+		if !thread.IsResolved {
+			return true
+		}
+	}
+	return false
+}
+
+func validateOrdinaryReviewPagination(state reviewState, head string) error {
+	if state.Comments.PageInfo.HasPreviousPage {
+		validated, err := hasCurrentHeadCodexSummary(state.Comments.Nodes, head)
+		if err != nil {
+			return err
+		}
+		if !validated {
+			return errors.New("review evidence truncated; manual review required")
+		}
+	}
+	if state.Reviews.PageInfo.HasPreviousPage || state.ReviewThreads.PageInfo.HasNextPage || state.TimelineItems.PageInfo.HasPreviousPage {
+		return errors.New("review evidence truncated; manual review required")
+	}
+	return nil
+}
+
+func validateReviewPagination(state reviewState) error {
+	if state.Comments.PageInfo.HasPreviousPage || state.Reviews.PageInfo.HasPreviousPage || state.ReviewThreads.PageInfo.HasNextPage || state.TimelineItems.PageInfo.HasPreviousPage {
+		return errors.New("review evidence truncated; manual review required")
+	}
+	return nil
 }

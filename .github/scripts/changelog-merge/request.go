@@ -72,7 +72,7 @@ func requestRefusal(state reviewState, request reviewComment) (reviewComment, st
 			continue
 		}
 		fix := refusalCorrection(c.Body)
-		if fix == "" || (!c.CreatedAt.IsZero() && c.CreatedAt.Before(request.CreatedAt)) {
+		if refusalPredatesRequest(c, request, fix) {
 			continue
 		}
 		if c.CreatedAt.IsZero() || c.CreatedAt.Equal(request.CreatedAt) {
@@ -224,7 +224,7 @@ func latestBoundOrdinaryRequest(state reviewState, head string, after time.Time)
 			continue
 		}
 		if boundary < 0 {
-			return reviewComment{}, errors.New("Codex request cannot be bound to a current-head timeline event")
+			return reviewComment{}, errors.New("codex request cannot be bound to a current-head timeline event")
 		}
 		if i > boundary {
 			latest = reviewComment{Body: item.Body, URL: item.URL, CreatedAt: item.CreatedAt, Author: item.Author, Request: true}
@@ -256,7 +256,7 @@ func ordinaryRequestTimelineItem(item timelineItem) (bool, error) {
 		return false, nil
 	}
 	if item.CreatedAt.IsZero() {
-		return false, errors.New("Codex request timeline item lacks a timestamp")
+		return false, errors.New("codex request timeline item lacks a timestamp")
 	}
 	return true, nil
 }
@@ -280,16 +280,8 @@ func currentOrdinaryRequestAllowsClean(state reviewState, cfg config, number str
 	if correction != "" && (response.CreatedAt.IsZero() || !clean.After(response.CreatedAt)) {
 		return false, reviewBlocked(cfg, number, activity, response.URL, "Codex refused this review; "+correction)
 	}
-	if activity.CreatedAt.After(clean) {
-		return false, pendingOrdinaryReview(state, cfg, number, time.Now())
-	}
-	if activity.CreatedAt.Equal(clean) && activity.Request {
-		return false, pendingOrdinaryReview(state, cfg, number, time.Now())
-	}
-	if activity.CreatedAt.Equal(clean) && !activity.Clean {
-		return false, errors.New("latest current-head Codex activity is not the clean review receipt")
-	}
-	return true, nil
+	return activityAllowsClean(state, cfg, number, activity, clean)
+
 }
 
 func currentRequestAllowsClean(state reviewState, cfg config, number string) (bool, error) {
@@ -374,4 +366,21 @@ func ensureRequest(gh command, cfg config, number string) error {
 	body := "@codex review\n\n" + requestMarker("codex", cfg.head)
 	_, err = gh("pr", "comment", number, "--repo", cfg.repo, "--body", body)
 	return err
+}
+
+func refusalPredatesRequest(response, request reviewComment, correction string) bool {
+	return correction == "" || (!response.CreatedAt.IsZero() && response.CreatedAt.Before(request.CreatedAt))
+}
+
+func activityAllowsClean(state reviewState, cfg config, number string, activity reviewComment, clean time.Time) (bool, error) {
+	if activity.CreatedAt.After(clean) {
+		return false, pendingOrdinaryReview(state, cfg, number, time.Now())
+	}
+	if activity.CreatedAt.Equal(clean) && activity.Request {
+		return false, pendingOrdinaryReview(state, cfg, number, time.Now())
+	}
+	if activity.CreatedAt.Equal(clean) && !activity.Clean {
+		return false, errors.New("latest current-head Codex activity is not the clean review receipt")
+	}
+	return true, nil
 }

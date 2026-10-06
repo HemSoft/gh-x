@@ -99,3 +99,88 @@ func auditSetupAction(uses string) bool {
 	}
 	return false
 }
+
+func TestHiddenHelperQualityScopes(t *testing.T) {
+	contents, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct{ job, name, scope string }{
+		{"build-and-test", "Build", "./.github/scripts/..."},
+		{"build-and-test", "Vet", "./.github/scripts/..."},
+		{"build-and-test", "Test Go packages (race detection enabled)", "./.github/scripts/..."},
+		{"lint", "Staticcheck", "./.github/scripts/..."},
+		{"lint", "Gocritic (anti-pattern detection)", "./.github/scripts/..."},
+		{"lint", "Errcheck (unchecked errors)", "./.github/scripts/..."},
+		{"lint", "Dead code detection", "./.github/scripts/..."},
+		{"lint", "Vulnerability scan", "./.github/scripts/..."},
+		{"quality", "Enforce: cyclomatic complexity ≤ 10", ".github/scripts"},
+		{"quality", "Enforce: cognitive complexity ≤ 15", ".github/scripts"},
+		{"quality", "Enforce: CRAP score < 30", "Assert-CrapThreshold"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var ci workflow
+			if err := yaml.Unmarshal(contents, &ci); err != nil {
+				t.Fatal(err)
+			}
+			if !helperQualityScopesReady(ci) {
+				t.Fatal("current CI omits helper gates")
+			}
+			job := ci.Jobs[test.job]
+			for i := range job.Steps {
+				if job.Steps[i].Name == test.name {
+					job.Steps[i].Run = strings.ReplaceAll(job.Steps[i].Run, test.scope, "")
+				}
+			}
+			ci.Jobs[test.job] = job
+			if helperQualityScopesReady(ci) {
+				t.Fatal("removing helper scope did not fail validator")
+			}
+		})
+	}
+}
+
+func TestHelperScopeCannotComeFromCommentsOrUnrelatedCommands(t *testing.T) {
+	contents, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for jobName, steps := range helperQualityCommands {
+		for name := range steps {
+			for _, disguise := range []string{"comment", "echo", "disabled", "missing step"} {
+				t.Run(name+"/"+disguise, func(t *testing.T) {
+					var ci workflow
+					if err := yaml.Unmarshal(contents, &ci); err != nil {
+						t.Fatal(err)
+					}
+					job := ci.Jobs[jobName]
+					for i := range job.Steps {
+						if job.Steps[i].Name != name {
+							continue
+						}
+						scope := "./.github/scripts/..."
+						if jobName == "quality" {
+							scope = ".github/scripts"
+						}
+						job.Steps[i].Run = strings.ReplaceAll(job.Steps[i].Run, scope, "")
+						switch disguise {
+						case "comment":
+							job.Steps[i].Run += "\n# " + scope
+						case "echo":
+							job.Steps[i].Run += "\necho " + scope
+						case "disabled":
+							job.Steps[i].Run = "if false; then\n" + steps[name] + "\nfi"
+						case "missing step":
+							job.Steps[i].Name = "renamed step"
+						}
+					}
+					ci.Jobs[jobName] = job
+					if helperQualityScopesReady(ci) {
+						t.Fatal("disguised or missing helper scope was accepted")
+					}
+				})
+			}
+		}
+	}
+}

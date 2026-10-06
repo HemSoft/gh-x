@@ -38,7 +38,7 @@ jobs:
           node-version: 24
 
       - name: Build
-        run: go build -o "$RUNNER_TEMP/bin/" ./...
+        run: go build -o "$RUNNER_TEMP/bin/" ./... ./.github/scripts/...
 
       - name: Build all release targets
         env:
@@ -50,11 +50,11 @@ jobs:
           go run ./.github/scripts/release-targets build
 
       - name: Vet
-        run: go vet ./...
+        run: go vet ./... ./.github/scripts/...
 
       - name: Test Go packages (race detection enabled)
         run: |
-          go list ./... | grep -v '/tests/behavior$' > "$RUNNER_TEMP/go-packages.list"
+          go list ./... ./.github/scripts/... | grep -v '/tests/behavior$' > "$RUNNER_TEMP/go-packages.list"
           mapfile -t packages < "$RUNNER_TEMP/go-packages.list"
           go test -race -count=1 -coverprofile=coverage.out "${packages[@]}"
 
@@ -109,7 +109,7 @@ jobs:
 
       - name: Check formatting (gofmt)
         run: |
-          unformatted=$(gofmt -l .)
+          unformatted=$(gofmt -l . .github/scripts)
           if [ -n "$unformatted" ]; then
             echo "::error::Files not formatted with gofmt:"
             echo "$unformatted"
@@ -142,17 +142,17 @@ jobs:
         run: bash .github/scripts/install-quality-tools.sh lint
 
       - name: Staticcheck
-        run: staticcheck ./...
+        run: staticcheck ./... ./.github/scripts/...
 
       - name: Gocritic (anti-pattern detection)
-        run: gocritic check ./...
+        run: gocritic check ./... ./.github/scripts/...
 
       - name: Errcheck (unchecked errors)
-        run: errcheck -exclude .errcheck_excludes ./...
+        run: errcheck -exclude .errcheck_excludes ./... ./.github/scripts/...
 
       - name: Dead code detection
         run: |
-          output=$(deadcode ./... 2>&1 || true)
+          output=$(deadcode ./... ./.github/scripts/... 2>&1 || true)
           if [ -n "$output" ]; then
             echo "::error::Dead code detected:"
             echo "$output"
@@ -160,7 +160,7 @@ jobs:
           fi
 
       - name: Vulnerability scan
-        run: govulncheck ./...
+        run: govulncheck ./... ./.github/scripts/...
 
       - name: No lint suppressions allowed
         run: |
@@ -298,7 +298,7 @@ jobs:
             echo "::error::gocyclo not installed"
             exit 1
           fi
-          violations=$(gocyclo -over 10 -ignore "_test\.go" . 2>&1 || true)
+          violations=$(gocyclo -over 10 -ignore "_test\.go" . .github/scripts 2>&1 || true)
           if [ -n "$violations" ]; then
             count=$(echo "$violations" | wc -l)
             echo "::error::${count} function(s) exceed cyclomatic complexity 10:"
@@ -312,7 +312,7 @@ jobs:
             echo "::error::gocognit not installed"
             exit 1
           fi
-          violations=$(gocognit -over 15 -ignore "_test\.go" . 2>&1 || true)
+          violations=$(gocognit -over 15 -ignore "_test\.go" . .github/scripts 2>&1 || true)
           if [ -n "$violations" ]; then
             count=$(echo "$violations" | wc -l)
             echo "::error::${count} function(s) exceed cognitive complexity 15:"
@@ -321,87 +321,10 @@ jobs:
           fi
 
       - name: "Enforce: CRAP score < 30"
+        shell: pwsh
         run: |
-          python3 << 'CRAP_SCRIPT'
-          import subprocess, sys
-
-          THRESHOLD = 30.0
-
-          # Get per-function cyclomatic complexity (production code only)
-          proc = subprocess.run(
-              ["gocyclo", "-ignore", "_test\\.go", "."],
-              capture_output=True, text=True
-          )
-          if proc.returncode != 0 and not proc.stdout.strip():
-              print(f"gocyclo failed: {proc.stderr}", file=sys.stderr)
-              sys.exit(1)
-
-          complexity = {}
-          for line in proc.stdout.strip().split('\n'):
-              if not line.strip():
-                  continue
-              parts = line.split()
-              if len(parts) < 4:
-                  continue
-              try:
-                  comp = int(parts[0])
-              except ValueError:
-                  continue
-              func_name = parts[2]
-              # Normalize gocyclo method format "(Type).Method" to just "Method"
-              # to match go cover's output which omits the receiver type
-              if func_name.startswith('(') and ').' in func_name:
-                  func_name = func_name.split(').', 1)[1]
-              elif '.' in func_name:
-                  func_name = func_name.split('.', 1)[1]
-              file_name = parts[3].split(':')[0].split('/')[-1]
-              complexity[(file_name, func_name)] = comp
-
-          # Get per-function coverage
-          proc = subprocess.run(
-              ["go", "tool", "cover", "-func=coverage.out"],
-              capture_output=True, text=True
-          )
-          if proc.returncode != 0:
-              print(f"go tool cover failed: {proc.stderr}", file=sys.stderr)
-              sys.exit(1)
-
-          coverage = {}
-          for line in proc.stdout.strip().split('\n'):
-              if 'total:' in line or not line.strip():
-                  continue
-              parts = line.split()
-              if len(parts) < 3:
-                  continue
-              full_path = parts[0].rstrip(':')
-              func_name = parts[1]
-              cov_str = parts[-1].rstrip('%')
-              file_name = full_path.split('/')[-1].split(':')[0]
-              try:
-                  coverage[(file_name, func_name)] = float(cov_str)
-              except ValueError:
-                  pass
-
-          # CRAP(f) = comp² × (1 - cov/100)³ + comp
-          failures = []
-          for (file_name, func_name), comp in complexity.items():
-              cov = coverage.get((file_name, func_name), 0.0)
-              uncov = 1 - cov / 100
-              crap = (comp ** 2) * (uncov ** 3) + comp
-              if crap >= THRESHOLD:
-                  failures.append((crap, comp, cov, func_name, file_name))
-
-          if failures:
-              failures.sort(reverse=True)
-              print(f"Functions with CRAP score >= {THRESHOLD}:")
-              print(f"{'CRAP':>8} {'Comp':>6} {'Cov':>6}  {'Function':<30} {'File'}")
-              print(f"{'----':>8} {'----':>6} {'---':>6}  {'--------':<30} {'----'}")
-              for crap, comp, cov, fn, f in failures:
-                  print(f"{crap:8.1f} {comp:6d} {cov:5.1f}%  {fn:<30} {f}")
-              sys.exit(1)
-          else:
-              print(f"All functions have CRAP score below {THRESHOLD}")
-          CRAP_SCRIPT
+          . ./.agents/skills/perfection/scripts/perfection-audit.ps1
+          Assert-CrapThreshold coverage.out 30.0
 
   # ── Mutation Testing ───────────────────────────────────────────
   mutation:

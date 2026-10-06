@@ -86,6 +86,18 @@ func TestReleaseHelperFailure(t *testing.T) {
         $fixtureResults = @(Invoke-AuditPlan $fixtureInventory $implementations @{ Root = $fixture })
         Assert-Equal ($fixtureResults.Status -join ',') 'fail,pass' 'Real helper failure preserves independent gate'
         Assert-Equal (Get-AuditExitCode $fixtureResults) 1 'Real failing helper exits nonzero'
+        Set-Content (Join-Path $fixture 'main.go') "package main`nfunc main() {}`n" -Encoding utf8
+        Set-Content (Join-Path $fixture '.github/scripts/main.go') "package main`nfunc main() {} `nfunc hidden() { _ = missingSymbol }`n" -Encoding utf8
+        (Get-Content (Join-Path $fixture '.github/scripts/failure_test.go') -Raw).Replace('package fixture', 'package main') | Set-Content (Join-Path $fixture '.github/scripts/failure_test.go')
+        $scopeContext = @{ Root = $fixture; Temp = $fixture; Coverage = (Join-Path $fixture 'scope-coverage.out') }
+        $scopeInventory = [pscustomobject]@{ gates = @(
+            (New-TestGate 'build' -Tools @('go')),
+            (New-TestGate 'vet' -Tools @('go')),
+            (New-TestGate 'unit-tests' -Tools @('go'))
+        ) }
+        $scopeResults = @(Invoke-AuditPlan $scopeInventory $implementations $scopeContext)
+        Assert-Equal ($scopeResults.Status -join ',') 'fail,fail,fail' 'Hidden helper compile fixture fails all shared package gates'
+
     } finally {
         Pop-Location
     }
@@ -93,3 +105,26 @@ func TestReleaseHelperFailure(t *testing.T) {
     Remove-Item -LiteralPath $fixture -Recurse -Force
 }
 Write-Host 'Audit executor tests passed: failure, continuation, prerequisites, missing tools, service blocks, success and inventory.'
+
+# Coverage must not leak between repeated helper main.go files or methods.
+$collisionFindings = @(Get-CrapFindings @(
+    '6 main run .github/scripts/first/main.go:10:1',
+    '6 main run .github/scripts/second/main.go:10:1',
+    '6 main (First).Load src/shared.go:20:1',
+    '6 main (Second).Load src/shared.go:40:1'
+) @(
+    'auditfixture/.github/scripts/first/main.go:10: run 100.0%',
+    'auditfixture/.github/scripts/second/main.go:10: run 0.0%',
+    'auditfixture/src/shared.go:20: Load 100.0%',
+    'auditfixture/src/shared.go:40: Load 0.0%',
+    'total: (statements) 70.0%'
+) 'auditfixture' 30.0)
+Assert-Equal $collisionFindings.Count 2 'Full file and declaration identity must preserve uncovered functions'
+Assert-Equal ($collisionFindings.File -join ',') '.github/scripts/second/main.go,src/shared.go' 'Never borrow same-named function coverage'
+foreach ($finding in $collisionFindings) {
+    Assert-Equal $finding.CRAP 42.0 'Uncovered fixture exceeds unchanged CRAP threshold'
+}
+
+# Actions propagates LASTEXITCODE from the intentional failing Go fixture.
+# Reaching this point proves every assertion and required cleanup succeeded.
+exit 0

@@ -203,3 +203,62 @@ func setValidBuildEnvironment(t *testing.T) {
 		t.Setenv(name, value)
 	}
 }
+
+func TestRunTargets(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		manifest string
+		wantErr  string
+	}{
+		{name: "missing command", wantErr: "usage"},
+		{name: "unknown command", args: []string{"other"}, wantErr: "usage"},
+		{name: "list canonical targets", args: []string{"list"}},
+		{name: "missing manifest", args: []string{"list"}, manifest: "missing.json", wantErr: "read release target manifest"},
+		{name: "build without version", args: []string{"build"}, wantErr: "RELEASE_VERSION"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Chdir("../../..")
+			t.Setenv(manifestEnv, test.manifest)
+			t.Setenv("RELEASE_VERSION", "")
+			output, err := captureTargetOutput(t, func() error { return runTargets(test.args) })
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := strings.ReplaceAll(strings.Join(repositoryTargets, "\n"), "=", " -> ") + "\n"
+				if output != want {
+					t.Fatalf("target listing = %q, want %q", output, want)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("error = %v, want %s", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func captureTargetOutput(t *testing.T, run func() error) (string, error) {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "target-output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := os.Stdout
+	os.Stdout = file
+	t.Cleanup(func() {
+		os.Stdout = previous
+		if err := file.Close(); err != nil {
+			t.Errorf("close captured output: %v", err)
+		}
+	})
+	runErr := run()
+	os.Stdout = previous
+	output, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output), runErr
+}
