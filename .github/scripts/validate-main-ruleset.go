@@ -396,9 +396,27 @@ func windowsInstallerGateReady(installer, gate workflowJob) bool {
 
 func windowsLauncherGateReady(installer, gate workflowJob) bool {
 	step, found := findWorkflowStep(installer, "Test Windows standalone launcher")
-	return found && windowsInstallerGateReady(installer, gate) && dashboardNodePinReady(installer) &&
+	return found && windowsInstallerGateReady(installer, gate) && windowsLauncherSetupReady(installer) &&
 		step.Shell == "pwsh" && unconditionalRequiredStep(step) &&
 		strings.TrimSpace(step.Run) == "node --test src/codex-dashboard/launcher.test.mjs"
+}
+
+func windowsLauncherSetupReady(job workflowJob) bool {
+	checkout := requiredActionIndex(job, "actions/checkout")
+	node := requiredActionIndex(job, "actions/setup-node")
+	launcher := slices.IndexFunc(job.Steps, func(step workflowStep) bool {
+		return step.Name == "Test Windows standalone launcher"
+	})
+	return checkout >= 0 && node > checkout && launcher > node && dashboardNodePinReady(job)
+}
+
+func requiredActionIndex(job workflowJob, action string) int {
+	for index, step := range job.Steps {
+		if isPinnedAction(step.Uses, action) && unconditionalRequiredStep(step) {
+			return index
+		}
+	}
+	return -1
 }
 
 func validateRuleset(configuredRuleset ruleset) error {

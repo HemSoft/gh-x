@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -50,6 +51,21 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 		{name: "ignored Node setup failure", mutate: func(job, _ *workflowJob) {
 			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.ContinueOnError = true })
 		}},
+		{name: "Node setup after launcher", mutate: func(job, _ *workflowJob) {
+			reorderLauncherSetup(job, "actions/setup-node", "Test Windows standalone launcher")
+		}},
+		{name: "checkout after Node setup", mutate: func(job, _ *workflowJob) {
+			reorderLauncherSetup(job, "actions/checkout", "actions/setup-node")
+		}},
+		{name: "missing checkout", mutate: func(job, _ *workflowJob) {
+			job.Steps = slices.DeleteFunc(job.Steps, func(step workflowStep) bool { return strings.HasPrefix(step.Uses, "actions/checkout@") })
+		}},
+		{name: "conditional checkout", mutate: func(job, _ *workflowJob) {
+			job.Steps[0].If = "false"
+		}},
+		{name: "ignored checkout failure", mutate: func(job, _ *workflowJob) {
+			job.Steps[0].ContinueOnError = true
+		}},
 		{name: "Linux cannot qualify lifecycle", mutate: func(job, _ *workflowJob) { job.RunsOn = "ubuntu-latest" }},
 		{name: "aggregate dependency missing", mutate: func(_, gate *workflowJob) {
 			gate.Needs = slices.DeleteFunc(gate.Needs, func(name string) bool { return name == "windows-installer" })
@@ -84,4 +100,15 @@ func mutateLauncherNodeSetup(job *workflowJob, mutate func(*workflowStep)) {
 		}
 	}
 	panic("missing Windows launcher Node setup")
+}
+
+func reorderLauncherSetup(job *workflowJob, action, after string) {
+	from := slices.IndexFunc(job.Steps, func(step workflowStep) bool { return strings.HasPrefix(step.Uses, action+"@") })
+	to := slices.IndexFunc(job.Steps, func(step workflowStep) bool { return step.Name == after || strings.HasPrefix(step.Uses, after+"@") })
+	if from < 0 || to < 0 || from >= to {
+		panic("invalid setup ordering fixture")
+	}
+	setup := job.Steps[from]
+	copy(job.Steps[from:to], job.Steps[from+1:to+1])
+	job.Steps[to] = setup
 }
