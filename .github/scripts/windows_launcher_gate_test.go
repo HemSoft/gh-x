@@ -60,6 +60,33 @@ func TestWindowsLauncherGateReady(t *testing.T) {
 		{name: "ignored Node setup failure", mutate: func(job, _ *workflowJob) {
 			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.ContinueOnError = true })
 		}},
+		{name: "rewrite inputs between checkout and Node", mutate: func(job, _ *workflowJob) {
+			index := slices.IndexFunc(job.Steps, func(step workflowStep) bool { return strings.HasPrefix(step.Uses, "actions/setup-node@") })
+			job.Steps = slices.Insert(job.Steps, index, workflowStep{Name: "Rewrite inputs", Run: "Set-Content .node-version 18"})
+		}},
+		{name: "Windows job overrides execution context", mutate: func(job, _ *workflowJob) {
+			job.Additional = map[string]any{"defaults": map[string]any{"run": map[string]any{"working-directory": "other"}}}
+		}},
+		{name: "launcher overrides working directory", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Additional = map[string]any{"working-directory": "other"} })
+		}},
+		{name: "Node setup has unvalidated execution fields", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.Additional = map[string]any{"parallel": true} })
+		}},
+		{name: "Windows job allows failure", mutate: func(job, _ *workflowJob) { job.ContinueOnError = true }},
+		{name: "aggregate job allows failure", mutate: func(_, gate *workflowJob) { gate.ContinueOnError = true }},
+		{name: "background checkout", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.Background = true })
+		}},
+		{name: "background Node setup", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.Background = true })
+		}},
+		{name: "background launcher", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Background = true })
+		}},
+		{name: "background Windows installer", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows PowerShell installer", func(step *workflowStep) { step.Background = true })
+		}},
 		{name: "PATH override between Node and launcher", mutate: func(job, _ *workflowJob) {
 			insertBeforeLauncher(job, workflowStep{Name: "Replace Node path", Run: "'C:/unqualified-node' >> $env:GITHUB_PATH"})
 		}},
@@ -193,4 +220,20 @@ func TestLauncherNodeMutationsFollowPinChanges(t *testing.T) {
 func insertBeforeLauncher(job *workflowJob, step workflowStep) {
 	index := slices.IndexFunc(job.Steps, func(candidate workflowStep) bool { return candidate.Name == "Test Windows standalone launcher" })
 	job.Steps = slices.Insert(job.Steps, index, step)
+}
+
+func TestLauncherRejectsGlobalRuntimeOverrides(t *testing.T) {
+	data, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range []string{"env:\n  PATH: other\n", "defaults:\n  run:\n    working-directory: other\n"} {
+		var ci workflow
+		if err := yaml.Unmarshal(append([]byte(prefix), data...), &ci); err != nil {
+			t.Fatal(err)
+		}
+		if windowsLauncherWorkflowReady(ci) {
+			t.Fatal("global runtime overrides must not qualify the checked-out launcher")
+		}
+	}
 }
