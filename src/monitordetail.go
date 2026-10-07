@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -25,6 +27,8 @@ func monitorDetailMetadata(row monitorRow) []monitorDetailLine {
 			monitorDetailLine{label: "Branch", value: row.Branch},
 			monitorDetailLine{label: "State", value: detailMonitorState(row)},
 			monitorDetailLine{label: "Reviews", value: detailMonitorReview(row)},
+			monitorDetailLine{label: "Review", value: row.Review},
+			monitorDetailLine{label: "AI", value: row.AIReview},
 			monitorDetailLine{label: "Checks", value: row.Checks},
 			monitorDetailLine{label: "Comments", value: row.Comments},
 		)
@@ -63,42 +67,55 @@ func detailMonitorReview(row monitorRow) string {
 }
 
 // renderMonitorDetail renders the bottom pane: title, metadata grid, body.
-func renderMonitorDetail(row monitorRow, width, height int, focused bool) string {
+func renderMonitorDetail(row monitorRow, width, height int, focused bool, offset int, theme monitorTheme) string {
 	if row.Number == 0 {
-		return monitorStyleDim.Render("No selection")
+		return theme.Muted.Render("No selection")
 	}
-	bodyWidth := maxInt(width-2, 10)
-	metadataLines := renderMonitorMetadataLines(monitorDetailMetadata(row), bodyWidth)
-	bodyLines := wrapMonitorBody(row.Body, bodyWidth)
-
-	title := truncateMonitorCell(strconv.Itoa(row.Number)+" "+row.Title, bodyWidth-1)
-	var sb strings.Builder
-	sb.WriteString(renderDetailTitle(title, focused))
-	sb.WriteString("\n")
-	for _, line := range metadataLines {
-		sb.WriteString(line)
-		sb.WriteString("\n")
+	lines := monitorDetailContent(row, width, theme)
+	bodyHeight := maxInt(height-1, 1)
+	offset = clampInt(offset, 0, maxInt(len(lines)-bodyHeight, 0))
+	title := strconv.Itoa(row.Number) + " " + monitorPlainCell(row.Title)
+	hint := " " + strconv.Itoa(offset+1) + "/" + strconv.Itoa(maxInt(len(lines), 1))
+	title = fitMonitorLine(theme.Heading.Render(truncateMonitorCell(title, maxInt(width-len(hint), 1))), maxInt(width-len(hint), 0)) + theme.Muted.Render(hint)
+	if focused {
+		title = theme.Surface.Render(title)
 	}
-	remaining := height - 1 - len(metadataLines)
-	for i := 0; i < remaining; i++ {
-		if i < len(bodyLines) {
-			sb.WriteString(bodyLines[i])
-		}
-		sb.WriteString("\n")
-	}
-	return sb.String()
+	visible := append([]string{title}, lines[offset:minInt(offset+bodyHeight, len(lines))]...)
+	return strings.Join(padToMonitorLines(visible, height), "\n")
 }
 
-func renderDetailTitle(title string, focused bool) string {
-	if focused {
-		return monitorStyleActive.Render(title)
+func monitorDetailContent(row monitorRow, width int, theme monitorTheme) []string {
+	metadata := renderMonitorMetadataLines(monitorDetailMetadata(row), width, theme)
+	var lines []string
+	line := ""
+	for _, item := range metadata {
+		item = strings.TrimSpace(item)
+		if line != "" && lipgloss.Width(line+" · "+item) > width {
+			lines = append(lines, line)
+			line = ""
+		}
+		if line != "" {
+			line += " · "
+		}
+		line += item
 	}
-	return title
+	if line != "" {
+		lines = append(lines, line)
+	}
+	lines = append(lines, "")
+	body := wrapMonitorBody(ansi.Strip(row.Body), maxInt(width, 10))
+	if len(body) == 0 {
+		body = []string{"No description provided."}
+	}
+	for _, text := range body {
+		lines = append(lines, theme.Text.Render(text))
+	}
+	return lines
 }
 
 // renderMonitorMetadataLines renders each non-empty entry, with labels
 // padded to a shared column so values line up.
-func renderMonitorMetadataLines(metadata []monitorDetailLine, width int) []string {
+func renderMonitorMetadataLines(metadata []monitorDetailLine, width int, theme monitorTheme) []string {
 	items := make([]monitorDetailLine, 0, len(metadata))
 	labelWidth := 0
 	for _, item := range metadata {
@@ -112,15 +129,15 @@ func renderMonitorMetadataLines(metadata []monitorDetailLine, width int) []strin
 	}
 	lines := make([]string, 0, len(items))
 	for _, item := range items {
-		lines = append(lines, renderMonitorMetadataItem(item, labelWidth, width))
+		lines = append(lines, renderMonitorMetadataItem(item, labelWidth, width, theme))
 	}
 	return lines
 }
 
-func renderMonitorMetadataItem(item monitorDetailLine, labelWidth, width int) string {
+func renderMonitorMetadataItem(item monitorDetailLine, labelWidth, width int, theme monitorTheme) string {
 	pad := labelWidth - runewidth.StringWidth(item.label)
-	label := monitorStyleDim.Render(item.label+":") + strings.Repeat(" ", pad+1)
+	label := theme.Muted.Render(item.label+":") + strings.Repeat(" ", pad+1)
 	valueWidth := maxInt(width-labelWidth-2, 10)
-	value := truncateMonitorCell(item.value, valueWidth)
+	value := theme.semantic(item.value).Render(truncateMonitorCell(monitorPlainCell(item.value), valueWidth))
 	return label + value
 }

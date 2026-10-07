@@ -362,7 +362,7 @@ func TestRenderSettingsScreenContent(t *testing.T) {
 }
 
 func TestCenteringHelpers(t *testing.T) {
-	block := blockCentered("line1\nline2", 40)
+	block := centerMonitorBlock("line1\nline2", 40, 2)
 	if !strings.HasPrefix(block, " ") {
 		t.Fatal("block not indented")
 	}

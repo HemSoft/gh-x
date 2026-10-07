@@ -1,0 +1,248 @@
+package main
+
+import (
+	"fmt"
+	"image/color"
+	"math"
+	"regexp"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+)
+
+func TestMonitorWholeScreenBounds(t *testing.T) {
+	states := []struct {
+		name  string
+		apply func(*monitorModel)
+	}{
+		{"populated PRs", func(m *monitorModel) {}},
+		{"issues", func(m *monitorModel) { m.tab = monitorTabIssues }},
+		{"loading", func(m *monitorModel) { m.data = nil }},
+		{"empty", func(m *monitorModel) { m.filter.SetValue("no-match") }},
+		{"settings", func(m *monitorModel) { m.settings.open(m.cfg); m.settings.errText = strings.Repeat("invalid ", 20) }},
+		{"help", func(m *monitorModel) { m.helpOpen = true }},
+		{"error", func(m *monitorModel) { m.refreshErr = strings.Repeat("connection failed ", 20) }},
+		{"warning", func(m *monitorModel) { m.refreshWarn = "host unavailable; last successful data retained" }},
+	}
+	for _, size := range [][2]int{{60, 16}, {80, 24}, {120, 40}, {160, 50}} {
+		for _, state := range states {
+			t.Run(fmt.Sprintf("%dx%d/%s", size[0], size[1], state.name), func(t *testing.T) {
+				m := modelWithData()
+				m.subTab = 0
+				m.layout = computeMonitorLayout(size[0], size[1])
+				m.theme = newMonitorTheme(true, false)
+				m.applyMonitorTheme()
+				m.data.PRSections[0].Rows[0].Title = "Review 界面 👩‍💻 e\u0301 " + strings.Repeat("long ", 50)
+				state.apply(&m)
+				lines := strings.Split(m.renderScreen(), "\n")
+				if len(lines) != size[1] {
+					t.Fatalf("screen height = %d, want %d", len(lines), size[1])
+				}
+				for i, line := range lines {
+					if got := lipgloss.Width(line); got > size[0] {
+						t.Fatalf("line %d width = %d > %d: %q", i, got, size[0], line)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestMonitorSemanticColorsAndMonochrome(t *testing.T) {
+	colorSGR := regexp.MustCompile("\x1b\\[[0-9;]*(?:3[0-9]|4[0-9]|9[0-9]|10[0-7])(?:;[0-9]+)*m")
+	for _, dark := range []bool{false, true} {
+		for _, noColor := range []bool{false, true} {
+			t.Run(fmt.Sprintf("dark=%v/noColor=%v", dark, noColor), func(t *testing.T) {
+				theme := newMonitorTheme(dark, noColor)
+				output := renderMonitorTable(monitorTableRenderInput{
+					Kind: monitorKindPR, Width: 120, Height: 4, Cursor: -1, Theme: theme,
+					Rows: []monitorRow{{Number: 1, Title: "Passing", State: "open", Checks: "pass", Review: "approved"},
+						{Number: 2, Title: "Failing", State: "draft", Checks: "fail", Review: "changes"},
+						{Number: 3, Title: "Waiting", State: "open", Checks: "pending"}},
+				})
+				for _, status := range []string{"pass", "fail", "pending", "draft", "approved", "changes"} {
+					if !strings.Contains(stripANSIForTest(output), status) {
+						t.Fatalf("textual status %q lost: %q", status, output)
+					}
+				}
+				if colorSGR.MatchString(output) == noColor {
+					t.Fatalf("color sequences do not match mode: noColor=%v output=%q", noColor, output)
+				}
+				if !noColor && theme.Success.GetForeground() == theme.Error.GetForeground() {
+					t.Fatal("success and failure share a color")
+				}
+			})
+		}
+	}
+}
+
+func TestMonitorDetailsScrollToFinalLineAndResetOnSelection(t *testing.T) {
+	m := modelWithData()
+	m.subTab = 0
+	m.focus = monitorFocusDetail
+	var body []string
+	for i := range 35 {
+		body = append(body, fmt.Sprintf("body-line-%02d", i))
+	}
+	m.data.PRSections[0].Rows[0].Body = strings.Join(body, "\n")
+	before := strings.Join(m.detailLines(), "\n")
+	m.jumpToPaneEdge(1)
+	after := strings.Join(m.detailLines(), "\n")
+	if before == after || !strings.Contains(after, "body-line-34") || strings.Contains(before, "body-line-34") {
+		t.Fatalf("final body line is not reachable: before=%q after=%q", before, after)
+	}
+	m.setCursor(1)
+	if m.detailScroll != 0 {
+		t.Fatalf("new selection kept old scroll offset %d", m.detailScroll)
+	}
+}
+
+func TestMonitorMouseTracksRenderedSlotsAndHeaders(t *testing.T) {
+	for _, width := range []int{80, 120, 160} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			m := modelWithData()
+			m.subTab = 0
+			m.layout = computeMonitorLayout(width, 40)
+			model, _ := m.handleClick(tea.Mouse{X: m.layout.MainLeft + monitorTabSlotWidth + 1, Y: m.layout.TabTop})
+			m = model.(monitorModel)
+			if m.tab != monitorTabIssues {
+				t.Fatal("rendered Issues tab did not select issues")
+			}
+			m.tab = monitorTabPRs
+			m.subTab = 0
+			model, _ = m.handleClick(tea.Mouse{X: m.layout.MainLeft + 2, Y: m.layout.ListTop})
+			if model.(monitorModel).cursor != m.cursor {
+				t.Fatal("table header selected a row")
+			}
+			model, _ = m.handleClick(tea.Mouse{X: m.layout.MainLeft + 2, Y: m.layout.ListTop + 2})
+			if model.(monitorModel).cursor != 1 {
+				t.Fatal("second rendered row did not select second item")
+			}
+			model, _ = m.handleClick(tea.Mouse{X: m.layout.Width - 1, Y: m.layout.FooterTop})
+			if model.(monitorModel).focus != m.focus {
+				t.Fatal("footer click changed pane focus")
+			}
+		})
+	}
+}
+
+func TestMonitorBackgroundReplyAndNoColorEnvironment(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	m := newTestMonitorModel()
+	model, _ := m.Update(tea.BackgroundColorMsg{Color: color.RGBA{R: 255, G: 255, B: 255, A: 255}})
+	updated := model.(monitorModel)
+	if updated.theme.Dark || !updated.theme.NoColor {
+		t.Fatal("background reply lost monochrome preference")
+	}
+}
+
+func TestMonitorManySectionsRemainVisibleAndClickable(t *testing.T) {
+	m := sizedModel()
+	m.layout = computeMonitorLayout(80, 24)
+	m.cfg.PRSections = nil
+	for i := range 12 {
+		m.cfg.PRSections = append(m.cfg.PRSections, monitorSection{Title: fmt.Sprintf("Section%d", i)})
+	}
+	m.subTab = 10
+	first := m.firstVisibleSection()
+	if !strings.Contains(stripANSIForTest(m.renderSubTabRow()), "Section10") {
+		t.Fatal("active section disappeared")
+	}
+	model, _ := m.handleClick(tea.Mouse{X: 1, Y: m.layout.SubTabTop})
+	if model.(monitorModel).subTab != first {
+		t.Fatal("section click ignored scrolled origin")
+	}
+}
+
+func TestMonitorBodyCannotInjectTerminalCommands(t *testing.T) {
+	row := monitorRow{Number: 1, Title: "Safe", Body: "before\x1b[2Jafter"}
+	text := renderMonitorDetail(row, 60, 10, false, 0, newMonitorTheme(true, true))
+	if strings.Contains(text, "\x1b[2J") || !strings.Contains(text, "beforeafter") {
+		t.Fatalf("unsafe body render: %q", text)
+	}
+}
+
+func TestMonitorPaletteReadability(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		dark       bool
+		background color.Color
+	}{
+		{"dark", true, lipgloss.Color("#171a21")},
+		{"light", false, lipgloss.Color("#f8fafc")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			theme := newMonitorTheme(test.dark, false)
+			for _, style := range []lipgloss.Style{theme.Text, theme.Muted, theme.Accent, theme.Success, theme.Warning, theme.Error} {
+				foreground := monitorTestLuminance(style.GetForeground())
+				background := monitorTestLuminance(test.background)
+				contrast := (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05)
+				if contrast < 4.5 {
+					t.Fatalf("palette text contrast %.2f < 4.5", contrast)
+				}
+			}
+		})
+	}
+}
+
+func monitorTestLuminance(c color.Color) float64 {
+	r, g, b, _ := c.RGBA()
+	channel := func(value uint32) float64 {
+		v := float64(value) / 65535
+		if v <= 0.04045 {
+			return v / 12.92
+		}
+		return math.Pow((v+0.055)/1.055, 2.4)
+	}
+	return 0.2126*channel(r) + 0.7152*channel(g) + 0.0722*channel(b)
+}
+
+func TestMonitorTableFitsItsPaneAndPreservesNextRow(t *testing.T) {
+	rows := []monitorRow{{Number: 1, Title: "first"}, {Number: 2, Title: "second"}, {Number: 3, Title: "third"}}
+	text := renderMonitorTable(monitorTableRenderInput{Kind: monitorKindPR, Rows: rows, Width: 80, Height: 3, Cursor: -1})
+	if got := len(strings.Split(text, "\n")); got != 3 {
+		t.Fatalf("pane height=%d, want 3", got)
+	}
+	if !strings.Contains(text, "second") || strings.Contains(text, "third") {
+		t.Fatalf("unexpected visible slice: %q", text)
+	}
+	text = renderMonitorTable(monitorTableRenderInput{Kind: monitorKindPR, Rows: rows, Width: 80, Height: 3, Offset: 1, Cursor: -1})
+	if !strings.Contains(text, "third") || strings.Contains(text, "first") {
+		t.Fatalf("unexpected scrolled slice: %q", text)
+	}
+}
+
+func TestMonitorMonochromeScreensKeepTextAndFocus(t *testing.T) {
+	m := modelWithData()
+	m.subTab = 0
+	m.theme = newMonitorTheme(true, true)
+	m.applyMonitorTheme()
+	for _, test := range []struct {
+		name  string
+		apply func(*monitorModel)
+	}{
+		{"main", func(m *monitorModel) {}},
+		{"filter", func(m *monitorModel) { m.filtering = true; m.filter.Focus() }},
+		{"settings", func(m *monitorModel) { m.settings.open(m.cfg) }},
+		{"help", func(m *monitorModel) { m.helpOpen = true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			copy := m
+			test.apply(&copy)
+			output := copy.renderScreen()
+			if regexp.MustCompile("\x1b\\[[0-9;]*(?:3[0-9]|4[0-9]|9[0-9]|10[0-7])(?:;[0-9]+)*m").MatchString(output) {
+				t.Fatalf("monochrome screen emitted color: %q", output)
+			}
+		})
+	}
+	m.settings.open(m.cfg)
+	if !strings.Contains(stripANSIForTest(m.renderSettingsScreen()), "> Repositories") {
+		t.Fatal("focused settings field has no text cue")
+	}
+	m.settings.cycleFocus(1)
+	if !strings.Contains(stripANSIForTest(m.renderSettingsScreen()), "> Rows per section") {
+		t.Fatal("settings focus cue did not move")
+	}
+}

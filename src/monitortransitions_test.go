@@ -96,7 +96,7 @@ func TestMonitorUpdateTransitions(t *testing.T) {
 		{
 			name:  "mouse click dispatch",
 			model: modelWithData,
-			msg:   tea.MouseClickMsg(tea.Mouse{X: 5, Y: 4}),
+			msg:   tea.MouseClickMsg(tea.Mouse{X: 5, Y: 3}),
 			check: func(t *testing.T, m monitorModel, cmd tea.Cmd) {
 				if m.repoIdx != 1 || cmd != nil {
 					t.Fatalf("mouse click = repo %d, cmd %v", m.repoIdx, cmd)

@@ -9,7 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	"os"
 )
 
 // Focus targets for pane navigation.
@@ -26,6 +26,7 @@ type monitorModel struct {
 	configPath string
 	statePath  string
 
+	theme  monitorTheme
 	layout monitorLayout
 	ready  bool
 
@@ -76,6 +77,7 @@ func newMonitorModel(cfg *monitorConfig, configPath, statePath string, state mon
 	refreshContext, cancelRefresh := context.WithCancel(context.Background())
 	model := monitorModel{
 		cfg:            cfg,
+		theme:          newMonitorTheme(true, os.Getenv("NO_COLOR") != ""),
 		refreshContext: refreshContext,
 		cancelRefresh:  cancelRefresh,
 		refreshState:   newMonitorRefreshState(),
@@ -94,12 +96,12 @@ func newMonitorModel(cfg *monitorConfig, configPath, statePath string, state mon
 		filter:         filter,
 		settings:       newMonitorSettingsModel(),
 	}
-	model.applyDefaultSubTab()
+	model.applyMonitorTheme()
 	return model
 }
 
 func (m monitorModel) Init() tea.Cmd {
-	return m.initialMonitorCmd()
+	return tea.Batch(m.initialMonitorCmd(), tea.RequestBackgroundColor)
 }
 
 // sectionsForTab returns the active tab's configured sections.
@@ -215,47 +217,6 @@ func formatMonitorClock(t time.Time) string {
 	return t.Local().Format("15:04:05")
 }
 
-func (m monitorModel) footerLine() string {
-	width := maxInt(m.layout.Width, 12)
-	left := fmt.Sprintf("%s · %s · %d/%d rows", monitorTabLabel(m.tab), m.currentSection().Title,
-		len(m.visibleRows()), monitorSectionTotal(m.data, m.tab, m.subTab))
-	right := fmt.Sprintf("rate %d · last %s", m.data.RateRemainingSafe(), formatMonitorClock(m.lastRefresh))
-	if hidden := hiddenReposSummary(m.cfg.Repos, m.data); hidden != "" {
-		right += " · " + hidden
-	}
-	if m.refreshing {
-		right = "refreshing…"
-	}
-	if m.refreshErr != "" {
-		return monitorStyleError.Render(truncateMonitorCell("error: "+m.refreshErr, maxInt(width-4, 10)))
-	}
-	if m.refreshWarn != "" {
-		return monitorStyleChanged.Render(truncateMonitorCell("warning: "+m.refreshWarn, maxInt(width-4, 10)))
-	}
-	middle := summarizeMonitorChanges(m.lastChanges, 2)
-
-	fit := func(text string, budget int) (string, int) {
-		if w := lipgloss.Width(text); w <= budget {
-			return text, w
-		}
-		text = truncateMonitorCell(text, maxInt(budget, 1))
-		return text, lipgloss.Width(text)
-	}
-	lw := lipgloss.Width(left)
-	rw := lipgloss.Width(right)
-	middle, mw := fit(middle, width-lw-rw-4)
-	left, lw = fit(left, width-rw-mw-2)
-
-	total := width - lw - rw - mw
-	if total < 2 { // left+right alone overflow: drop the middle summary
-		middle, mw = "", 0
-		total = maxInt(width-lw-rw, 1)
-	}
-	gapLeft := total / 2
-	return left + strings.Repeat(" ", gapLeft) + middle + strings.Repeat(" ", total-gapLeft) + right
-}
-
-// hiddenReposSummary names configured repos the active account cannot see.
 func hiddenReposSummary(repos []string, data *monitorFetchResult) string {
 	if data == nil || len(data.Accessible) == 0 {
 		return ""
@@ -270,9 +231,9 @@ func hiddenReposSummary(repos []string, data *monitorFetchResult) string {
 	case 0:
 		return ""
 	case 1:
-		return monitorStyleError.Render(truncateMonitorCell(hidden[0]+" hidden", 40))
+		return truncateMonitorCell(hidden[0]+" hidden", 40)
 	default:
-		return monitorStyleError.Render(fmt.Sprintf("%d repos hidden", len(hidden)))
+		return fmt.Sprintf("%d repos hidden", len(hidden))
 	}
 }
 

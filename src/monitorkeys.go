@@ -203,6 +203,9 @@ func (m *monitorModel) moveRepoSelection(delta int) {
 }
 
 func (m *monitorModel) setCursor(index int) {
+	if index != m.cursor {
+		m.detailScroll = 0
+	}
 	m.cursor = clampInt(index, 0, maxInt(len(m.visibleRows())-1, 0))
 	m.ensureCursorVisible()
 	if row, ok := m.selectedRow(); ok {
@@ -232,7 +235,7 @@ func (m monitorModel) scrollDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *monitorModel) scrollDetailBy(delta int) {
-	m.detailScroll = clampInt(m.detailScroll+delta, 0, detailBodyLineCount(*m)-1)
+	m.detailScroll = clampInt(m.detailScroll+delta, 0, maxInt(detailBodyLineCount(*m)-maxInt(m.layout.DetailHeight-2, 1), 0))
 }
 
 func detailBodyLineCount(m monitorModel) int {
@@ -240,8 +243,8 @@ func detailBodyLineCount(m monitorModel) int {
 	if !ok {
 		return 0
 	}
-	width := maxInt(m.layout.Width-m.layout.SidebarWidth-6, 10)
-	return len(wrapMonitorBody(row.Body, width))
+	width := maxInt(m.layout.Width-m.layout.MainLeft, 10)
+	return len(monitorDetailContent(row, width, m.theme))
 }
 
 func (m monitorModel) escapeMonitor() (tea.Model, tea.Cmd) {
@@ -274,22 +277,27 @@ func waitForRefreshThenQuit(state *monitorRefreshState) tea.Cmd {
 
 // handleClick resolves mouse clicks against the layout.
 func (m monitorModel) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
+	if m.settings.active || m.helpOpen || m.filtering {
+		return m, nil
+	}
 	hit := hitMonitorLocation(m.layout, mouse.X, mouse.Y)
 	switch hit.area {
+	case "scope":
+		return m.selectSidebarIndex((m.repoIdx + 1) % (len(m.cfg.Repos) + 1)), nil
 	case "sidebar":
-		return m.selectSidebarIndex(hit.index), nil
+		return m.selectSidebarIndex(hit.index + monitorSidebarFirst(m.repoIdx, m.layout.FooterTop-1)), nil
 	case "tab":
 		return m.selectTabByClick(hit.index), nil
 	case "subtab":
-		return m.selectSubTabByClick(hit.index)
+		return m.selectSubTabByClick(hit.index + m.firstVisibleSection())
 	case "list":
 		m.focus = monitorFocusList
 		m.setCursor(hit.index + m.offset)
 		return m, nil
-	default:
+	case "detail":
 		m.focus = monitorFocusDetail
-		return m, nil
 	}
+	return m, nil
 }
 
 func (m monitorModel) selectSidebarIndex(index int) tea.Model {
@@ -303,7 +311,10 @@ func (m monitorModel) selectSidebarIndex(index int) tea.Model {
 }
 
 func (m monitorModel) selectTabByClick(slot int) tea.Model {
-	tab := clampInt(slot, 0, monitorTabCount-1)
+	if slot < 0 || slot >= monitorTabCount {
+		return m
+	}
+	tab := slot
 	if tab == m.tab {
 		return m
 	}

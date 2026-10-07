@@ -51,23 +51,26 @@ func countMonitorRowsByRepo(result *monitorFetchResult, repos []string) map[stri
 	return counts
 }
 
-func renderMonitorSidebar(repos []string, selected int, counts map[string]monitorRepoCounts, height int, width int, focused bool) string {
-	header := monitorStyleDim.Render("REPOS")
+func renderMonitorSidebar(repos []string, selected int, counts map[string]monitorRepoCounts, height int, width int, focused bool, theme monitorTheme) string {
+	if width == 0 {
+		return ""
+	}
+	headerStyle := theme.Muted
 	if focused {
-		header = monitorStyleActive.Render("REPOS")
+		headerStyle = theme.Accent
 	}
-	lines := []string{
-		header,
-		renderMonitorSidebarEntry(monitorRepoAll, selected == 0, monitorRepoCounts{Accessible: true}, true, true, width),
+	lines := []string{headerStyle.Render(" REPOSITORIES")}
+	labels := append([]string{monitorRepoAll}, repos...)
+	for i := monitorSidebarFirst(selected, height); i < len(labels); i++ {
+		all := i == 0
+		accessible := all || accessibleForDisplay(counts, labels[i])
+		lines = append(lines, renderMonitorSidebarEntry(labels[i], i == selected, counts[labels[i]], all, accessible, width, theme))
 	}
-	for i, repo := range repos {
-		accessible := accessibleForDisplay(counts, repo)
-		lines = append(lines, renderMonitorSidebarEntry(repo, selected == i+1, counts[repo], false, accessible, width))
-	}
-	if len(lines) > maxInt(height, 1) {
-		lines = lines[:height]
-	}
-	return strings.Join(lines, "\n")
+	return strings.Join(padToMonitorLines(lines, height), "\n")
+}
+
+func monitorSidebarFirst(selected, height int) int {
+	return maxInt(selected-maxInt(height-2, 0), 0)
 }
 
 // accessibleForDisplay reports visibility for badge rendering; unknown
@@ -76,21 +79,21 @@ func accessibleForDisplay(counts map[string]monitorRepoCounts, repo string) bool
 	return counts[repo].Accessible
 }
 
-func renderMonitorSidebarEntry(label string, isSelected bool, counts monitorRepoCounts, isAll bool, accessible bool, width int) string {
-	badge := sidebarBadge(counts, isAll, accessible)
+func renderMonitorSidebarEntry(label string, isSelected bool, counts monitorRepoCounts, isAll bool, accessible bool, width int, theme monitorTheme) string {
+	badge := sidebarBadge(counts, isAll, accessible, theme)
 	badgeWidth := lipgloss.Width(badge)
 	nameWidth := width
 	if badgeWidth > 0 {
 		nameWidth = width - badgeWidth - 1
 	}
-	name := truncateMonitorRepoName(label, nameWidth)
+	name := truncateMonitorRepoName(monitorPlainCell(label), nameWidth)
 	gap := width - runewidth.StringWidth(name) - badgeWidth
 	if gap < 0 {
 		gap = 0
 	}
 	line := name + strings.Repeat(" ", gap) + badge
 	if isSelected {
-		return monitorStyleSelected.Render(line)
+		return theme.Selected.Render(fitMonitorLine(line, width))
 	}
 	return line
 }
@@ -143,12 +146,12 @@ func ellipsizeMonitorLeft(text string, width int) string {
 
 // sidebarBadge renders the right-aligned hint: counts, "all", or an access
 // marker for repos this account cannot see (the footer names them).
-func sidebarBadge(counts monitorRepoCounts, isAll bool, accessible bool) string {
+func sidebarBadge(counts monitorRepoCounts, isAll bool, accessible bool, theme monitorTheme) string {
 	switch {
 	case isAll:
-		return monitorStyleDim.Render("all")
+		return theme.Muted.Render("all")
 	case !accessible:
-		return monitorStyleError.Render("×")
+		return theme.Error.Render("×")
 	case counts.PRs > 0 || counts.Issues > 0:
 		parts := make([]string, 0, 2)
 		if counts.PRs > 0 {
@@ -157,7 +160,7 @@ func sidebarBadge(counts monitorRepoCounts, isAll bool, accessible bool) string 
 		if counts.Issues > 0 {
 			parts = append(parts, strconv.Itoa(counts.Issues)+"is")
 		}
-		return monitorStyleDim.Render(strings.Join(parts, " "))
+		return theme.Muted.Render(strings.Join(parts, " "))
 	default:
 		return ""
 	}

@@ -382,9 +382,9 @@ func TestHelpToggleAndAnyKeyCloses(t *testing.T) {
 }
 
 func TestTabsDefaultToAllOpen(t *testing.T) {
-	m := newMonitorModel(monitorTestConfig(), "cfg.yml", "", monitorSessionState{SubTab: 1})
-	if got := m.currentSection().Title; got != "All open" {
-		t.Fatalf("stored sub-tab should be overridden, PRs should open on All open, got %q", got)
+	m := newMonitorModel(monitorTestConfig(), "cfg.yml", "", monitorSessionState{SubTab: 0})
+	if got := m.currentSection().Title; got != "Mine" {
+		t.Fatalf("stored sub-tab should be restored, got %q", got)
 	}
 
 	model, _ := m.switchTab(1)

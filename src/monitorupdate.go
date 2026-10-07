@@ -54,6 +54,8 @@ func (state *monitorRefreshState) waitIfStarted() {
 // Update dispatches messages; each branch delegates to a small handler.
 func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		return m.handleMonitorBackground(msg)
 	case tea.WindowSizeMsg:
 		return m.handleResize(msg)
 	case monitorFetchedMsg:
@@ -77,6 +79,8 @@ func (m monitorModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.layout = computeMonitorLayout(msg.Width, msg.Height)
 	m.ready = true
 	m.cursor = m.clampedCursor()
+	m.ensureCursorVisible()
+	m.applyMonitorTheme()
 	return m, nil
 }
 
@@ -203,6 +207,8 @@ func (m *monitorModel) clampSelections() {
 	m.subTab = clampInt(m.subTab, 0, maxInt(len(m.sectionsForTab())-1, 0))
 	m.repoIdx = clampInt(m.repoIdx, 0, len(m.cfg.Repos))
 	m.cursor = m.clampedCursor()
+	m.ensureCursorVisible()
+	m.applyMonitorTheme()
 	m.offset = clampInt(m.offset, 0, maxInt(len(m.visibleRows())-1, 0))
 }
 
