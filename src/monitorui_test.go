@@ -253,8 +253,8 @@ func TestMonitorRetryShowsRefreshAlongsideRetainedFailure(t *testing.T) {
 		apply func(*monitorModel)
 		cue   string
 	}{
-		{"error", func(m *monitorModel) { m.refreshErr = "offline" }, "error: offline"},
-		{"partial", func(m *monitorModel) { m.refreshWarn = "host unavailable" }, "warning: host unavailable"},
+		{"error", func(m *monitorModel) { m.refreshErr = "offline" }, "offline"},
+		{"partial", func(m *monitorModel) { m.refreshWarn = "host unavailable" }, "host unavailable"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := modelWithData()
@@ -284,5 +284,147 @@ func TestMonitorResizeKeepsDetailWheelResponsive(t *testing.T) {
 	updated = model.(monitorModel)
 	if before == strings.Join(updated.detailLines(), "\n") {
 		t.Fatal("detail wheel did not move after resize")
+	}
+}
+
+func TestMonitorSelectionAttributesCoverTitleStatusAndGaps(t *testing.T) {
+	for _, noColor := range []bool{false, true} {
+		for _, focused := range []bool{false, true} {
+			t.Run(fmt.Sprintf("mono=%v/focused=%v", noColor, focused), func(t *testing.T) {
+				text := renderMonitorTable(monitorTableRenderInput{Kind: monitorKindPR, Width: 100, Height: 3, Cursor: 0, Focused: focused, Theme: newMonitorTheme(true, noColor), Rows: []monitorRow{{Number: 101, Title: "SelectedTitle", State: "open", Checks: "pass"}, {Number: 102, Title: "OtherTitle", Checks: "fail"}}})
+				number := monitorTestAttributesAt(t, text, "101")
+				for _, target := range []string{"SelectedTitle", "open", "pass"} {
+					attrs := monitorTestAttributesAt(t, text, target)
+					if attrs != number {
+						t.Fatalf("selection lost at %q: %+v vs %+v", target, attrs, number)
+					}
+				}
+				other := monitorTestAttributesAt(t, text, "OtherTitle")
+				if noColor {
+					if number.reverse != focused || !number.bold || number.background != "" {
+						t.Fatalf("monochrome selection=%+v", number)
+					}
+				} else if number.background == "" || number.background == other.background {
+					t.Fatalf("selection has no distinct background: selected=%+v other=%+v", number, other)
+				}
+			})
+		}
+	}
+}
+
+type monitorTestAttributes struct {
+	background    string
+	bold, reverse bool
+}
+
+// Interpret the emitted SGR stream at a visible word, including inner resets.
+func monitorTestAttributesAt(t *testing.T, text, target string) monitorTestAttributes {
+	t.Helper()
+	position := strings.Index(text, target)
+	if position < 0 {
+		t.Fatalf("missing %q in %q", target, text)
+	}
+	var style monitorTestAttributes
+	for _, sequence := range regexp.MustCompile("\x1b\\[[0-9;]*m").FindAllString(text[:position], -1) {
+		params := strings.Split(strings.TrimSuffix(strings.TrimPrefix(sequence, "\x1b["), "m"), ";")
+		for i := 0; i < len(params); i++ {
+			switch params[i] {
+			case "", "0":
+				style = monitorTestAttributes{}
+			case "1":
+				style.bold = true
+			case "22":
+				style.bold = false
+			case "7":
+				style.reverse = true
+			case "27":
+				style.reverse = false
+			case "49":
+				style.background = ""
+			case "38", "48":
+				count := 2
+				if i+1 < len(params) && params[i+1] == "2" {
+					count = 4
+				}
+				if i+count < len(params) {
+					if params[i] == "48" {
+						style.background = strings.Join(params[i+1:i+count+1], ";")
+					}
+					i += count
+				}
+			}
+		}
+	}
+	return style
+}
+
+func TestMonitorResizeReclaimsListSpace(t *testing.T) {
+	m := modelWithData()
+	m.subTab = 0
+	m.focus = monitorFocusList
+	m.layout = computeMonitorLayout(80, 24)
+	m.data.PRSections[0].Rows = nil
+	for i := range 30 {
+		m.data.PRSections[0].Rows = append(m.data.PRSections[0].Rows, monitorRow{Number: i + 1, Title: fmt.Sprintf("row%02d", i+1)})
+	}
+	m.jumpToPaneEdge(1)
+	model, _ := m.handleResize(tea.WindowSizeMsg{Width: 160, Height: 50})
+	m = model.(monitorModel)
+	want := maxInt(30-(m.layout.ListHeight-1), 0)
+	if m.offset != want {
+		t.Fatalf("expanded pane kept offset %d, want %d", m.offset, want)
+	}
+	m.data.PRSections[0].Rows = m.data.PRSections[0].Rows[:3]
+	model, _ = m.handleResize(tea.WindowSizeMsg{Width: 160, Height: 50})
+	m = model.(monitorModel)
+	if m.offset != 0 || m.cursor != 2 {
+		t.Fatalf("shortened list kept invalid scroll: cursor%d offset%d", m.cursor, m.offset)
+	}
+}
+
+func TestMonitorDetailIndicatorReachesEnd(t *testing.T) {
+	row := monitorRow{Number: 1, Title: "ScrollTitle", Body: strings.Repeat("body\n", 20)}
+	text := renderMonitorDetail(row, 80, 6, true, 999, newMonitorTheme(true, false))
+	total := len(monitorDetailContent(row, 80, newMonitorTheme(true, false)))
+	if !strings.Contains(stripANSIForTest(strings.Split(text, "\n")[0]), fmt.Sprintf("%d/%d", total, total)) {
+		t.Fatalf("detail range does not show end: %q", text)
+	}
+	if monitorTestAttributesAt(t, text, "ScrollTitle").background == "" {
+		t.Fatal("detail title surface missing")
+	}
+}
+
+func TestMonitorHelpAndLongErrorKeepEssentialActions(t *testing.T) {
+	m := modelWithData()
+	m.layout = computeMonitorLayout(60, 16)
+	m.helpOpen = true
+	for _, target := range []string{"1–9", "/ enter esc", "left/right", "pgup/pgdown", "mouse / wheel", "esc clears filter"} {
+		if !strings.Contains(stripANSIForTest(m.renderScreen()), target) {
+			t.Fatalf("help missing %q", target)
+		}
+	}
+	m.helpOpen = false
+	m.refreshing = false
+	m.refreshErr = strings.Repeat("long failure ", 30)
+	if !strings.Contains(stripANSIForTest(m.footerLine()), "r retry") {
+		t.Fatal("long failure hides retry action")
+	}
+}
+
+func TestMonitorFetchedTextCannotMoveCursorOrRingBell(t *testing.T) {
+	row := monitorRow{Number: 1, Title: "Safe\aTitle", Body: "first\r\nsecond\rthird\tcolumn\a\x1b[2J"}
+	text := renderMonitorDetail(row, 80, 12, false, 0, newMonitorTheme(true, true))
+	if strings.ContainsAny(text, "\r\t\a") {
+		t.Fatalf("terminal control survived: %q", text)
+	}
+	for _, word := range []string{"SafeTitle", "first", "second", "third    column"} {
+		if !strings.Contains(stripANSIForTest(text), word) {
+			t.Fatalf("normalized text lost %q", word)
+		}
+	}
+	m := modelWithData()
+	m.refreshErr = "host\a\x1b[2J\r\nfailed"
+	if strings.ContainsAny(m.footerLine(), "\a\r\n") || strings.Contains(m.footerLine(), "\x1b[2J") {
+		t.Fatal("error footer permits terminal controls")
 	}
 }

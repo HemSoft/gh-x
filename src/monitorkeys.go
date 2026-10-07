@@ -216,6 +216,7 @@ func (m *monitorModel) setCursor(index int) {
 // ensureCursorVisible keeps the cursor row inside the scroll window.
 func (m *monitorModel) ensureCursorVisible() {
 	height := maxInt(m.layout.ListHeight-1, 1)
+	m.offset = clampInt(m.offset, 0, maxInt(len(m.visibleRows())-height, 0))
 	if m.cursor < m.offset {
 		m.offset = m.cursor
 	}

@@ -5,6 +5,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"strconv"
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -70,7 +71,16 @@ func fitMonitorLine(line string, width int) string {
 }
 
 func monitorPlainCell(text string) string {
-	return strings.Join(strings.Fields(ansi.Strip(text)), " ")
+	return strings.Join(strings.Fields(monitorSafeText(text)), " ")
+}
+
+func monitorSafeText(text string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && !unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, ansi.Strip(text))
 }
 
 func (m monitorModel) dashboardHeading() string {
@@ -116,10 +126,10 @@ func (m monitorModel) footerLine() string {
 		notice = "refreshing… · "
 	}
 	if m.refreshErr != "" {
-		return m.theme.Error.Render(fitMonitorLine(" "+notice+"error: "+m.refreshErr+" · r retry · last data retained", width))
+		return m.theme.Error.Render(fitMonitorLine(" "+notice+"error: r retry · data retained · "+monitorPlainCell(m.refreshErr), width))
 	}
 	if m.refreshWarn != "" {
-		return m.theme.Warning.Render(fitMonitorLine(" "+notice+"warning: "+m.refreshWarn+" · partial data", width))
+		return m.theme.Warning.Render(fitMonitorLine(" "+notice+"warning: r retry · partial data · "+monitorPlainCell(m.refreshWarn), width))
 	}
 	if hidden := hiddenReposSummary(m.cfg.Repos, m.data); hidden != "" {
 		left += " · " + hidden
@@ -355,17 +365,17 @@ func centerMonitorText(text string, width int) string {
 var monitorHelpLines = []string{
 	"gh x monitor — keys",
 	"",
-	"  tab              cycle focus: list → detail → sidebar",
-	"  j/k or arrows    move in the focused pane (rows / scroll / repos)",
-	"  g/G home/end     jump to top/bottom of focused pane",
-	"  r                refresh now",
-	"  o                open selected in browser",
-	"  y                copy URL",
-	"  Y                copy checkout command",
-	"  s                settings (repos, limit, interval)",
-	"  e                edit config file in $EDITOR",
-	"  ?                toggle this help",
-	"  q or esc         quit",
+	"  tab / shift+tab   focus list, details, or repositories",
+	"  j/k up/down       move pane; g/G home/end jump edges",
+	"  left/right        PR/issue tabs; 1–9 select section",
+	"  / enter esc       type/apply/clear filter",
+	"  pgup/pgdown       scroll details",
+	"  mouse / wheel     select; scroll focused pane",
+	"  r                 refresh / retry",
+	"  o y Y             open / copy URL / copy checkout",
+	"  s e               settings / edit YAML",
+	"  q ctrl+c          quit; esc clears filter or quits",
+	"  ?                 open help",
 	"",
 	"  press any key to close",
 }

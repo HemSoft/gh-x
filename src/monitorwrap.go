@@ -16,7 +16,9 @@ func wrapMonitorBody(text string, width int) []string {
 		width = 10
 	}
 	var wrapped []string
-	for _, paragraph := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+	text = strings.ReplaceAll(text, "\t", "    ")
+	for _, paragraph := range strings.Split(text, "\n") {
 		wrapped = append(wrapped, wrapMonitorLine(paragraph, width)...)
 	}
 	return wrapped

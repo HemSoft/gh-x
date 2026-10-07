@@ -233,7 +233,7 @@ func renderMonitorTable(input monitorTableRenderInput) string {
 	lines := []string{fitMonitorLine(renderMonitorHeaderLine(planned, input.Theme.resolved()), input.Width)}
 	last := minInt(input.Offset+maxInt(input.Height-1, 0), len(input.Rows))
 	for i := input.Offset; i < last; i++ {
-		line := renderMonitorRowLine(planned, cells[i], input.Theme.resolved())
+		line := renderMonitorRowLine(planned, cells[i], input.Theme.resolved(), monitorRowSelection(input, i))
 		lines = append(lines, decorateMonitorRowLine(line, input.Rows[i], input, i))
 	}
 	return strings.Join(padToMonitorLines(lines, input.Height), "\n")
@@ -259,36 +259,43 @@ func padTo(width int, text string) string {
 	return strings.Repeat(" ", padding)
 }
 
-func renderMonitorRowLine(planned []monitorColumn, cells []string, theme monitorTheme) string {
+func renderMonitorRowLine(planned []monitorColumn, cells []string, theme monitorTheme, selection lipgloss.Style) string {
 	parts := make([]string, len(planned))
 	for i, col := range planned {
 		text := ""
 		if i < len(cells) {
 			text = truncateMonitorCell(cells[i], col.Width)
 		}
-		parts[i] = monitorCellStyle(theme, col.Title, cells[i]).Render(text + padTo(col.Width, text))
+		parts[i] = monitorCellStyle(theme, col.Title, cells[i]).Inherit(selection).Render(text + padTo(col.Width, text))
 	}
-	return strings.Join(parts, strings.Repeat(" ", monitorCellGap))
+	return strings.Join(parts, selection.Render(strings.Repeat(" ", monitorCellGap)))
 }
 
 // decorateMonitorRowLine applies selection, glow, and marker styling.
 func decorateMonitorRowLine(line string, row monitorRow, input monitorTableRenderInput, index int) string {
 	theme := input.Theme.resolved()
-	marker := " "
+	selection := monitorRowSelection(input, index)
+	marker := selection.Render(" ")
 	switch {
 	case input.AddedKeys[row.key()]:
-		marker = theme.Success.Render(monitorAddedMarker)
+		marker = theme.Success.Inherit(selection).Render(monitorAddedMarker)
 	case input.ChangedKeys[row.key()]:
-		marker = theme.Warning.Render(monitorChangedMarker)
+		marker = theme.Warning.Inherit(selection).Render(monitorChangedMarker)
 	}
-	if index == input.Cursor {
-		style := theme.Selection
-		if input.Focused {
-			style = theme.Selected
-		}
-		return style.Render(fitMonitorLine(marker+line, input.Width))
+	text := marker + line
+	padding := selection.Render(strings.Repeat(" ", maxInt(input.Width-lipgloss.Width(text), 0)))
+	return fitMonitorLine(text+padding, input.Width)
+}
+
+func monitorRowSelection(input monitorTableRenderInput, index int) lipgloss.Style {
+	if index != input.Cursor {
+		return lipgloss.NewStyle()
 	}
-	return fitMonitorLine(marker+line, input.Width)
+	theme := input.Theme.resolved()
+	if input.Focused {
+		return theme.Selected
+	}
+	return theme.Selection
 }
 
 // Compact views keep decision fields; the detail view retains every other field.

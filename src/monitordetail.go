@@ -1,11 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -75,11 +75,13 @@ func renderMonitorDetail(row monitorRow, width, height int, focused bool, offset
 	bodyHeight := maxInt(height-1, 1)
 	offset = clampInt(offset, 0, maxInt(len(lines)-bodyHeight, 0))
 	title := strconv.Itoa(row.Number) + " " + monitorPlainCell(row.Title)
-	hint := " " + strconv.Itoa(offset+1) + "/" + strconv.Itoa(maxInt(len(lines), 1))
-	title = fitMonitorLine(theme.Heading.Render(truncateMonitorCell(title, maxInt(width-len(hint), 1))), maxInt(width-len(hint), 0)) + theme.Muted.Render(hint)
-	if focused {
-		title = theme.Surface.Render(title)
+	hint := fmt.Sprintf(" %d–%d/%d", offset+1, minInt(offset+bodyHeight, len(lines)), maxInt(len(lines), 1))
+	budget := maxInt(width-lipgloss.Width(hint), 0)
+	heading := theme.Heading
+	if focused && theme.NoColor {
+		heading = heading.Reverse(true)
 	}
+	title = heading.Render(fitMonitorLine(truncateMonitorCell(title, budget), budget)) + theme.Muted.Inherit(heading).Render(hint)
 	visible := append([]string{title}, lines[offset:minInt(offset+bodyHeight, len(lines))]...)
 	return strings.Join(padToMonitorLines(visible, height), "\n")
 }
@@ -103,7 +105,7 @@ func monitorDetailContent(row monitorRow, width int, theme monitorTheme) []strin
 		lines = append(lines, line)
 	}
 	lines = append(lines, "")
-	body := wrapMonitorBody(ansi.Strip(row.Body), maxInt(width, 10))
+	body := wrapMonitorBody(monitorSafeText(row.Body), maxInt(width, 10))
 	if len(body) == 0 {
 		body = []string{"No description provided."}
 	}
