@@ -383,8 +383,9 @@ host's authenticated `gh` account. If no shortcuts are configured, the monitor
 uses `GH_HOST` or `github.com`. Owner discovery failures report an error and
 retain the last account-wide snapshot while successful shortcuts remain
 available. Failed shortcut queries also retain their own last snapshot and
-show an unavailable state. All repos never falls back to a configured selection. Each section still obeys its row limit; the footer shows loaded and
-matching counts. If either section list is empty or omitted,
+show an unavailable state. All repos never falls back to a configured selection.
+Each section still obeys its row limit; the footer shows loaded and matching
+counts. If either section list is empty or omitted,
 the monitor restores its generated default sections.
 
 Press `s` to edit repositories, the default row limit, and the refresh interval
