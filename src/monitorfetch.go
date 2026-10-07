@@ -22,8 +22,7 @@ type monitorSectionData struct {
 
 // monitorFetchResult is the complete payload for one refresh cycle.
 type monitorFetchResult struct {
-	SectionLayout    monitorSectionLayout
-	RepositoryConfig []string
+	monitorQueryConfig
 	// Pinned retains per-repository results independently of the global cap.
 	Error         string
 	Incomplete    bool
@@ -147,7 +146,7 @@ func buildMonitorHostQueries(cfg *monitorConfig) ([]monitorHostQuery, error) {
 		return nil, err
 	}
 	if len(repositories) == 0 {
-		return []monitorHostQuery{{Host: legacyMonitorHost()}}, nil
+		return []monitorHostQuery{{Host: monitorDefaultHost(cfg)}}, nil
 	}
 
 	groups := groupMonitorRepositories(repositories)
@@ -333,6 +332,9 @@ func executeMonitorHostQuery(ctx context.Context, host, query string) (bytes.Buf
 			}
 		}
 	}
+	if ctx != nil && ctx.Err() != nil {
+		return bytes.Buffer{}, bytes.Buffer{}, githubContextError(ctx.Err())
+	}
 	args := []string{"api", "--hostname", host, "graphql", "-f", fmt.Sprintf("query=%s", query)}
 	return monitorGHExecFunc(ctx, args...)
 }
@@ -374,12 +376,11 @@ func unsupportedHierarchyMessage(message string) bool {
 
 func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResult {
 	result := &monitorFetchResult{
-		FetchedAt:        now,
-		Accessible:       map[string]bool{},
-		SectionLayout:    newMonitorSectionLayout(cfg),
-		RepositoryConfig: append([]string(nil), cfg.Repos...),
-		PRSections:       make([]monitorSectionData, len(cfg.PRSections)),
-		IssueSections:    make([]monitorSectionData, len(cfg.IssueSections)),
+		FetchedAt:          now,
+		Accessible:         map[string]bool{},
+		monitorQueryConfig: newMonitorQueryConfig(cfg),
+		PRSections:         make([]monitorSectionData, len(cfg.PRSections)),
+		IssueSections:      make([]monitorSectionData, len(cfg.IssueSections)),
 	}
 	for i := range result.PRSections {
 		result.PRSections[i].Kind = monitorKindPR

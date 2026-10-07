@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -414,8 +415,15 @@ func TestMonitorInFlightRepositoryEditsTriggerFreshFetch(t *testing.T) {
 			change(cfg)
 			model, cmd := m.handleFetched(monitorFetchedMsg{result: old})
 			updated := model.(monitorModel)
-			if cmd == nil || !updated.refreshing || updated.data != nil {
+			if cmd == nil || !updated.refreshing {
 				t.Fatal("repository/host edit accepted an old result instead of immediately fetching the new configuration")
+			}
+			if name == "host" {
+				if updated.data == old || !updated.data.FetchedAt.IsZero() || updated.data.Error == "" {
+					t.Fatal("changed host retained an incompatible global snapshot")
+				}
+			} else if updated.data != old {
+				t.Fatal("same-host shortcut edit discarded the valid global snapshot")
 			}
 			if old.RepositoryConfig[0] != "owner/pinned" {
 				t.Fatal("query generation retained a mutable configuration slice")
@@ -606,6 +614,13 @@ func TestMonitorAllScopesShareFourAPICalls(t *testing.T) {
 }
 
 func TestMonitorQueuedAPICallHonorsCancellation(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	invoked := false
+	monitorGHExecFunc = func(context.Context, ...string) (bytes.Buffer, bytes.Buffer, error) {
+		invoked = true
+		return bytes.Buffer{}, bytes.Buffer{}, errors.New("queued API call was dispatched")
+	}
 	ctx, cancel := context.WithCancel(monitorQueryContext(context.Background()))
 	slots := ctx.Value(monitorQuerySlotsKey{}).(chan struct{})
 	for range monitorQueryConcurrency {
@@ -613,8 +628,35 @@ func TestMonitorQueuedAPICallHonorsCancellation(t *testing.T) {
 	}
 	cancel()
 	_, _, err := executeMonitorHostQuery(ctx, defaultGitHubHost, "must not run")
-	if err == nil {
-		t.Fatal("canceled queued call did not report cancellation")
+	if invoked || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled queued call must preserve cancellation without dispatch: invoked=%v, err=%v", invoked, err)
+	}
+}
+
+func TestMonitorFailureWithoutSnapshotReportsUnavailableInsteadOfLoading(t *testing.T) {
+	for _, edited := range []bool{false, true} {
+		t.Run(fmt.Sprint(edited), func(t *testing.T) {
+			cfg := defaultMonitorConfig("owner/pinned")
+			m := newMonitorModel(cfg, "", "", monitorSessionState{})
+			defer m.cancelRefresh()
+			if edited {
+				m.applyFetchResult(newMonitorFetchResult(cfg, time.Now()))
+				cfg.Defaults.Limit = 1
+			}
+			model, _ := m.handleFetched(monitorFetchedMsg{err: errBoom()})
+			updated := model.(monitorModel)
+			updated.layout = computeMonitorLayout(120, 40)
+			if updated.data != nil || !strings.Contains(updated.listLines(), "data unavailable") || strings.Contains(updated.listLines(), "Loading") {
+				t.Fatal("failed fetch without a compatible snapshot still looks like loading")
+			}
+			if !strings.Contains(updated.footerLine(), "data unavailable") || strings.Contains(updated.footerLine(), "data retained") || updated.tabTotal(monitorTabPRs) != -1 {
+				t.Fatal("unavailable data was presented as retained or successfully empty")
+			}
+			updated.refreshing = true
+			if !strings.Contains(updated.listLines(), "Loading") {
+				t.Fatal("active retry did not show loading progress")
+			}
+		})
 	}
 }
 
@@ -632,5 +674,120 @@ func TestMonitorScopeWarningsAndChangesAreDeduplicated(t *testing.T) {
 	mergeMonitorFetchResult(dst, src, true, "ghe.example.com")
 	if len(dst.Warnings) != 1 || dst.Warnings[0] != warning || !dst.Incomplete {
 		t.Fatalf("nested scope warning/partial marker: %+v", dst)
+	}
+}
+
+func TestMonitorStaleFailureImmediatelyFetchesCurrentSettings(t *testing.T) {
+	changes := map[string]func(*monitorConfig){
+		"section": func(cfg *monitorConfig) { cfg.PRSections[0].Filters = "is:open label:bug" },
+		"pin":     func(cfg *monitorConfig) { cfg.Repos = append(cfg.Repos, "team/new") },
+		"host":    func(cfg *monitorConfig) { cfg.Repos[0] = "ghe.example.com/owner/pinned" },
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			cfg := defaultMonitorConfig("owner/pinned")
+			m := newMonitorModel(cfg, "", "", monitorSessionState{})
+			defer m.cancelRefresh()
+			captured := newMonitorQueryConfig(cfg)
+			m.refreshing = true
+			m.backoff = 20 * time.Second
+			change(cfg)
+			model, cmd := m.handleFetched(monitorFetchedMsg{err: errBoom(), queryConfig: &captured})
+			updated := model.(monitorModel)
+			if cmd == nil || !updated.refreshing || updated.refreshErr != "" || updated.backoff != 20*time.Second {
+				t.Fatal("stale failure entered backoff instead of fetching the current settings")
+			}
+		})
+	}
+}
+
+func TestMonitorFetchCommandCapturesConfigBeforeExecution(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	cfg := defaultMonitorConfig("owner/pinned")
+	cmd := newMonitorFetchCmd(context.Background(), *cfg, newMonitorRefreshState())
+	cfg.Repos[0] = "other/changed"
+	cfg.PRSections[0].Filters = "label:changed"
+	cfg.IssueSections[0].Filters = "label:changed"
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		query := strings.Join(args, " ")
+		if strings.Contains(query, "other/changed") || strings.Contains(query, "label:changed") {
+			t.Error("command used configuration mutated after its creation")
+		}
+		return bytes.Buffer{}, bytes.Buffer{}, errBoom()
+	}
+	msg := cmd().(monitorFetchedMsg)
+	if msg.err == nil || msg.queryConfig == nil || msg.queryConfig.RepositoryConfig[0] != "owner/pinned" || !monitorFetchedConfigStale(msg, cfg) {
+		t.Fatal("failed command lost the original request configuration")
+	}
+}
+
+func TestMonitorFetchCommandCapturesDefaultHost(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	t.Setenv("GH_HOST", "github.com")
+	cfg := defaultMonitorConfig("")
+	cmd := newMonitorFetchCmd(context.Background(), *cfg, newMonitorRefreshState())
+	t.Setenv("GH_HOST", "ghe.example.com")
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		if args[2] != "github.com" {
+			t.Errorf("command dispatched to a host changed after its creation: %v", args)
+		}
+		return bytes.Buffer{}, bytes.Buffer{}, errBoom()
+	}
+	msg := cmd().(monitorFetchedMsg)
+	if msg.err == nil || msg.queryConfig == nil || msg.queryConfig.HostScope[0] != "github.com" || !monitorFetchedConfigStale(msg, cfg) {
+		t.Fatal("failed command lost its resolved default host")
+	}
+}
+
+func TestMonitorShortcutEditsPreserveCompatibleSnapshots(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	cfg.Repos = append(cfg.Repos, "owner/removed")
+	m := newMonitorModel(cfg, "", "", monitorSessionState{})
+	defer m.cancelRefresh()
+	old := newMonitorFetchResult(cfg, time.Now())
+	pin := newMonitorFetchResult(cfg, time.Now())
+	old.Pinned = map[string]*monitorFetchResult{"owner/pinned": pin, "owner/removed": pin}
+	m.data = old
+	cfg.Repos = []string{"OWNER/PINNED", "owner/new"}
+	cfg.Defaults.Interval = "30s"
+	m.invalidateMonitorConfigSnapshot()
+	if m.data != old || len(m.data.Pinned) != 1 || m.data.Pinned["OWNER/PINNED"] != pin {
+		t.Fatal("shortcut edit discarded compatible global or pin snapshots")
+	}
+	failed := unavailableMonitorScope(cfg, errBoom())
+	failed.Pinned = map[string]*monitorFetchResult{"OWNER/PINNED": unavailableMonitorScope(cfg, errBoom())}
+	retainMonitorScopeSnapshots(failed, old)
+	if failed.FetchedAt.IsZero() || failed.Pinned["OWNER/PINNED"].FetchedAt.IsZero() {
+		t.Fatal("same-host failure discarded retained global or case-insensitive pin snapshots")
+	}
+	cfg.Repos = append(cfg.Repos, "ghe.example.com/team/added")
+	changedHost := unavailableMonitorScope(cfg, errBoom())
+	changedHost.Pinned = map[string]*monitorFetchResult{"OWNER/PINNED": unavailableMonitorScope(cfg, errBoom())}
+	retainMonitorScopeSnapshots(changedHost, old)
+	if !changedHost.FetchedAt.IsZero() || changedHost.Pinned["OWNER/PINNED"].FetchedAt.IsZero() {
+		t.Fatal("host change must discard global data and retain unchanged pins independently")
+	}
+	m.invalidateMonitorConfigSnapshot()
+	if !m.data.FetchedAt.IsZero() || m.data.Pinned["OWNER/PINNED"] != pin {
+		t.Fatal("host change invalidated an independent compatible pin")
+	}
+}
+
+func TestMonitorAlreadyCanceledAPICallDoesNotDispatch(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	monitorGHExecFunc = func(context.Context, ...string) (bytes.Buffer, bytes.Buffer, error) {
+		t.Error("already-canceled API call dispatched despite a free slot")
+		return bytes.Buffer{}, bytes.Buffer{}, errBoom()
+	}
+	ctx, cancel := context.WithCancel(monitorQueryContext(context.Background()))
+	cancel()
+	for range 20 {
+		_, _, err := executeMonitorHostQuery(ctx, defaultGitHubHost, "must not run")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("lost cancellation: %v", err)
+		}
 	}
 }

@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -249,18 +251,100 @@ func monitorSectionLayoutsEqual(a, b monitorSectionLayout) bool {
 }
 
 func (m *monitorModel) invalidateMonitorConfigSnapshot() {
-	if m.data == nil || monitorResultMatchesConfig(m.data, m.cfg) {
+	if m.data == nil {
 		return
 	}
-	m.data = nil
+	if !monitorSectionLayoutsEqual(m.data.SectionLayout, newMonitorSectionLayout(m.cfg)) {
+		m.data = nil
+		m.clearMonitorSnapshotChanges()
+		return
+	}
+	pins := compatibleMonitorPins(m.data.Pinned, m.cfg.Repos)
+	if !slices.Equal(m.data.HostScope, monitorConfigHosts(m.cfg)) {
+		m.data = unavailableMonitorScope(m.cfg, errors.New("repository host scope changed; refresh pending"))
+		m.clearMonitorSnapshotChanges()
+	}
+	m.data.Pinned = pins
+}
+
+func (m *monitorModel) clearMonitorSnapshotChanges() {
 	m.lastRefresh = time.Time{}
 	m.lastChanges = nil
 	m.changedKeys = nil
 	m.addedKeys = nil
 }
 
+type monitorQueryConfig struct {
+	SectionLayout    monitorSectionLayout
+	RepositoryConfig []string
+	HostScope        []string
+}
+
+func newMonitorQueryConfig(cfg *monitorConfig) monitorQueryConfig {
+	return monitorQueryConfig{SectionLayout: newMonitorSectionLayout(cfg), RepositoryConfig: slices.Clone(cfg.Repos), HostScope: monitorConfigHosts(cfg)}
+}
+
+func monitorQueryConfigMatches(snapshot monitorQueryConfig, cfg *monitorConfig) bool {
+	return monitorSectionLayoutsEqual(snapshot.SectionLayout, newMonitorSectionLayout(cfg)) && slices.Equal(snapshot.RepositoryConfig, cfg.Repos) && slices.Equal(snapshot.HostScope, monitorConfigHosts(cfg))
+}
+
 func monitorResultMatchesConfig(result *monitorFetchResult, cfg *monitorConfig) bool {
-	return monitorSectionLayoutsEqual(result.SectionLayout, newMonitorSectionLayout(cfg)) && slices.Equal(result.RepositoryConfig, cfg.Repos)
+	return monitorQueryConfigMatches(result.monitorQueryConfig, cfg)
+}
+
+func monitorFetchedConfigStale(msg monitorFetchedMsg, cfg *monitorConfig) bool {
+	if msg.queryConfig != nil {
+		return !monitorQueryConfigMatches(*msg.queryConfig, cfg)
+	}
+	return msg.result != nil && !monitorResultMatchesConfig(msg.result, cfg)
+}
+
+func monitorDefaultHost(cfg *monitorConfig) string {
+	if cfg.defaultHost != "" {
+		return cfg.defaultHost
+	}
+	return legacyMonitorHost()
+}
+
+func monitorConfigHosts(cfg *monitorConfig) []string {
+	if len(cfg.Repos) == 0 {
+		return []string{monitorDefaultHost(cfg)}
+	}
+	return monitorRepositoryHosts(cfg.Repos)
+}
+
+func monitorRepositoryHosts(repos []string) []string {
+	hosts := []string{}
+	for _, name := range repos {
+		repo, err := parseMonitorRepository(name)
+		if err == nil && !slices.Contains(hosts, repo.Host) {
+			hosts = append(hosts, repo.Host)
+		}
+	}
+	sort.Strings(hosts)
+	return hosts
+}
+
+func monitorPinnedScope(pins map[string]*monitorFetchResult, repo string) *monitorFetchResult {
+	for name, pin := range pins {
+		if strings.EqualFold(name, repo) {
+			return pin
+		}
+	}
+	return nil
+}
+
+func compatibleMonitorPins(pins map[string]*monitorFetchResult, repos []string) map[string]*monitorFetchResult {
+	if pins == nil {
+		return nil
+	}
+	compatible := make(map[string]*monitorFetchResult)
+	for _, repo := range repos {
+		if pin := monitorPinnedScope(pins, repo); pin != nil {
+			compatible[repo] = pin
+		}
+	}
+	return compatible
 }
 
 func retainMonitorScopeSnapshot(current, previous *monitorFetchResult) {
@@ -276,19 +360,24 @@ func retainMonitorScopeSnapshot(current, previous *monitorFetchResult) {
 }
 
 func retainMonitorScopeSnapshots(current, previous *monitorFetchResult) {
-	retainMonitorScopeSnapshot(current, previous)
 	if previous == nil {
 		return
 	}
+	if slices.Equal(current.HostScope, previous.HostScope) {
+		retainMonitorScopeSnapshot(current, previous)
+	}
 	for repo, pin := range current.Pinned {
-		retainMonitorScopeSnapshot(pin, previous.Pinned[repo])
+		retainMonitorScopeSnapshot(pin, monitorPinnedScope(previous.Pinned, repo))
 	}
 }
 
 func diffMonitorFetchScopes(previous, current *monitorFetchResult) []monitorChange {
-	changes := diffMonitorScope(previous, current)
+	var changes []monitorChange
+	if slices.Equal(previous.HostScope, current.HostScope) {
+		changes = diffMonitorScope(previous, current)
+	}
 	for repo, pin := range current.Pinned {
-		changes = append(changes, diffMonitorScope(previous.Pinned[repo], pin)...)
+		changes = append(changes, diffMonitorScope(monitorPinnedScope(previous.Pinned, repo), pin)...)
 	}
 	return uniqueMonitorScopeChanges(changes)
 }

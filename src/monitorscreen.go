@@ -111,7 +111,7 @@ func (m monitorModel) tabTotal(tab int) int {
 		return -1
 	}
 	data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos)
-	if (data == nil && m.repoIdx > 0) || (data != nil && data.Error != "" && data.FetchedAt.IsZero()) {
+	if data == nil || (data.Error != "" && data.FetchedAt.IsZero()) {
 		return -1
 	}
 	return monitorSectionTotal(data, tab, index)
@@ -153,7 +153,8 @@ func (m monitorModel) footerLine() string {
 		notice = "refreshing… · "
 	}
 	if m.refreshErr != "" {
-		return m.theme.Error.Render(fitMonitorLine(" "+notice+"error: r retry · data retained · "+monitorPlainCell(m.refreshErr), width))
+		status := monitorSnapshotStatus(monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos))
+		return m.theme.Error.Render(fitMonitorLine(" "+notice+"error: r retry · "+status+" · "+monitorPlainCell(m.refreshErr), width))
 	}
 	if data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos); data != nil && data.Error != "" {
 		return m.theme.Error.Render(fitMonitorLine(" "+notice+"unavailable: r retry · "+monitorPlainCell(data.Error), width))
@@ -169,6 +170,13 @@ func (m monitorModel) footerLine() string {
 	}
 	budget := maxInt(width-lipgloss.Width(right), 0)
 	return m.theme.Muted.Render(fitMonitorLine(left, budget) + fitMonitorLine(right, minInt(width, lipgloss.Width(right))))
+}
+
+func monitorSnapshotStatus(data *monitorFetchResult) string {
+	if data == nil || data.FetchedAt.IsZero() {
+		return "data unavailable"
+	}
+	return "data retained"
 }
 
 func sidebarAt(lines []string, y int) string {
@@ -262,7 +270,11 @@ func (m monitorModel) renderSubTabRow() string {
 func (m monitorModel) listLines() string {
 	rows := m.visibleRows()
 	if monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos) == nil {
-		return m.theme.Muted.Render(centeredDim("Loading GitHub data…", m.listWidth(), maxInt(m.layout.ListHeight, 1)))
+		message := "Loading GitHub data…"
+		if m.refreshErr != "" && !m.refreshing {
+			message = "GitHub data unavailable · r retry"
+		}
+		return m.theme.Muted.Render(centeredDim(message, m.listWidth(), maxInt(m.layout.ListHeight, 1)))
 	}
 	if len(rows) == 0 {
 		return m.theme.Muted.Render(centeredDim(m.emptyListMessage(), m.listWidth(), maxInt(m.layout.ListHeight, 1)))

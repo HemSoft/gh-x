@@ -65,9 +65,10 @@ type monitorModel struct {
 type monitorTickMsg time.Time
 
 type monitorFetchedMsg struct {
-	result *monitorFetchResult
-	err    error
-	at     time.Time
+	result      *monitorFetchResult
+	queryConfig *monitorQueryConfig
+	err         error
+	at          time.Time
 }
 
 func newMonitorModel(cfg *monitorConfig, configPath, statePath string, state monitorSessionState) monitorModel {
@@ -168,7 +169,7 @@ func computeVisibleRows(data *monitorFetchResult, tab, subTab, repoIdx int, repo
 // monitorDataForScope chooses independent pinned results without limiting All repos.
 func monitorDataForScope(data *monitorFetchResult, repoIdx int, repos []string) *monitorFetchResult {
 	if data != nil && repoIdx > 0 && repoIdx <= len(repos) && data.Pinned != nil {
-		return data.Pinned[repos[repoIdx-1]]
+		return monitorPinnedScope(data.Pinned, repos[repoIdx-1])
 	}
 	return data
 }

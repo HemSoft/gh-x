@@ -42,6 +42,7 @@ type monitorDefaults struct {
 
 // monitorConfig is the on-disk configuration for gh x monitor.
 type monitorConfig struct {
+	defaultHost   string
 	Version       int              `yaml:"version,omitempty"`
 	Repos         []string         `yaml:"repos"`
 	Defaults      monitorDefaults  `yaml:"defaults"`

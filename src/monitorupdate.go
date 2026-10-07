@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -104,17 +105,22 @@ func newMonitorFetchCmd(parent context.Context, cfg monitorConfig, state *monito
 	if parent == nil {
 		parent = context.Background()
 	}
+	cfg.defaultHost = monitorDefaultHost(&cfg)
+	cfg.Repos = slices.Clone(cfg.Repos)
+	cfg.PRSections = slices.Clone(cfg.PRSections)
+	cfg.IssueSections = slices.Clone(cfg.IssueSections)
+	queryConfig := newMonitorQueryConfig(&cfg)
 	return func() tea.Msg {
 		state.markStarted()
 		defer state.markDone()
 		timeout, err := configuredTimeout(monitorRefreshTimeoutEnv, defaultMonitorRefreshTimeout)
 		if err != nil {
-			return monitorFetchedMsg{err: err, at: monitorNowFunc()}
+			return monitorFetchedMsg{err: err, queryConfig: &queryConfig, at: monitorNowFunc()}
 		}
 		ctx, cancel := context.WithTimeout(parent, timeout)
 		defer cancel()
 		result, err := executeMonitorAllRepoFetch(ctx, &cfg, monitorNowFunc())
-		return monitorFetchedMsg{result: result, err: err, at: monitorNowFunc()}
+		return monitorFetchedMsg{result: result, err: err, queryConfig: &queryConfig, at: monitorNowFunc()}
 	}
 }
 
@@ -128,7 +134,7 @@ func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) 
 	m.refreshing = false
 	m.refreshState = nil
 	m.invalidateMonitorConfigSnapshot()
-	if msg.result != nil && !monitorResultMatchesConfig(msg.result, m.cfg) {
+	if monitorFetchedConfigStale(msg, m.cfg) {
 		return m.startRefresh()
 	}
 	if msg.err != nil {
