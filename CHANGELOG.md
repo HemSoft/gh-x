@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-07
+
+- feat: add global --clear terminal output flag (#196)
+- docs: record v0.16.0 release (#194)
+
 ## [0.16.0] - 2026-10-07
 
 - feat: include open Dependabot PRs in pr me (#192) (#193)
@@ -301,7 +306,8 @@ the published releases above.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.17.0
 [0.16.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.16.0
 [0.15.7]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.7
 [0.15.6]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.6
