@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -318,6 +319,28 @@ func TestValidateMonitorConfigErrors(t *testing.T) {
 	badSection.PRSections[0].Filters = ""
 	if err := validateMonitorConfig(badSection); err == nil {
 		t.Fatal("expected section filter error")
+	}
+}
+
+func TestMonitorSectionFiltersCannotExtendRepositoryScope(t *testing.T) {
+	for _, filters := range []string{"repo:outside/project", "is:open user:outside", "is:open org:outside", "is:open REPO:outside/project", "is:open (repo:outside/project)", "is:open -org:outside"} {
+		t.Run(filters, func(t *testing.T) {
+			cfg := defaultMonitorConfig("owner/repo")
+			cfg.PRSections[0].Filters = filters
+			if err := validateMonitorConfig(cfg); err == nil || !strings.Contains(err.Error(), "monitor supplies repository scope") {
+				t.Fatalf("scope-extending filter %q must be rejected: %v", filters, err)
+			}
+			cfg.PRSections = nil
+			cfg.IssueSections = []monitorSection{{Title: "Issues", Filters: filters}}
+			if err := validateMonitorConfig(cfg); err == nil {
+				t.Fatalf("issue filters must use the same scope restriction: %q", filters)
+			}
+		})
+	}
+	for _, filters := range []string{"is:open author:@me", "is:open label:repo:cleanup", `is:open "repo:outside/project"`} {
+		if err := validateMonitorSections([]monitorSection{{Title: "Valid", Filters: filters}}); err != nil {
+			t.Fatalf("ordinary filter %q rejected: %v", filters, err)
+		}
 	}
 }
 

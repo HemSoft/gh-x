@@ -374,8 +374,9 @@ issueSections:
 Section filters use GitHub search syntax and apply to both the account-wide
 view and sidebar shortcuts. All repos adds the active account and every
 organization returned by that host’s authenticated GitHub account, with
-pagination. Shortcut queries add their configured repository scope. Avoid
-`repo:` qualifiers in sections when you want the account-wide view. GitHub.com
+pagination. Shortcut queries add their configured repository scope. Section
+filters cannot contain `repo:`, `user:`, or `org:` qualifiers: GitHub's classic
+search unions those qualifiers rather than narrowing the monitor's scope. GitHub.com
 repositories use the compact `OWNER/REPO` form.
 Enterprise repositories keep their host prefix and are queried through that
 host's authenticated `gh` account. If no shortcuts are configured, the monitor

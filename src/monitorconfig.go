@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -172,6 +173,7 @@ func starterMonitorConfigYAML(cfg *monitorConfig) string {
 	sb.WriteString("# gh x monitor configuration.\n")
 	sb.WriteString("# All repos discovers your account and organization repositories.\n")
 	sb.WriteString("# repos lists optional sidebar shortcuts. Sections use GitHub search syntax.\n\n")
+	sb.WriteString("# Do not include repo:, user:, or org: qualifiers in section filters.\n\n")
 	fmt.Fprintf(&sb, "version: %d\n\n", monitorConfigVersion)
 	sb.WriteString("repos:\n")
 	for _, repo := range cfg.Repos {
@@ -411,6 +413,10 @@ func validateMonitorRepo(repo string) error {
 	return err
 }
 
+// GitHub's classic search unions ownership qualifiers, so sections must not
+// add a second scope to the account/organization or shortcut query.
+var monitorSectionScopeQualifier = regexp.MustCompile(`(?i)(?:^|[\s(])-?(repo|user|org):`)
+
 func validateMonitorSections(sections []monitorSection) error {
 	for i, section := range sections {
 		if strings.TrimSpace(section.Title) == "" {
@@ -418,6 +424,9 @@ func validateMonitorSections(sections []monitorSection) error {
 		}
 		if strings.TrimSpace(section.Filters) == "" {
 			return fmt.Errorf("section %q is missing filters", section.Title)
+		}
+		if monitorSectionScopeQualifier.MatchString(section.Filters) {
+			return fmt.Errorf("section %q must not include repo:, user:, or org: qualifiers; the monitor supplies repository scope", section.Title)
 		}
 		if section.Limit < 0 || section.Limit > maximumMonitorFetch {
 			return fmt.Errorf("section %q limit must be between 0 and %d", section.Title, maximumMonitorFetch)
