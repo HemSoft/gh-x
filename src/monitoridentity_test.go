@@ -47,12 +47,13 @@ func TestMonitorAccountChangeOnTotalFailureClearsOnlyAffectedHost(t *testing.T) 
 	failed := unavailableMonitorScope(cfg, errors.New("search failed"))
 	setMonitorDiscoveredIdentity(failed, defaultGitHubHost, []string{"user:bob", "org:team"})
 	failed.Pinned = map[string]*monitorFetchResult{"owner/pinned": unavailableMonitorScope(cfg, errors.New("pin failed"))}
+	failed.Pinned[cfg.Repos[1]] = unavailableMonitorScope(otherCfg, errors.New("enterprise pin failed"))
 	m := newMonitorModel(cfg, "", "", monitorSessionState{})
 	m.data = old
 	m.lastChanges = []monitorChange{{}}
 	updated, _ := m.handleFetched(monitorFetchedMsg{result: failed, err: errors.New("search failed")})
 	actual := updated.(monitorModel)
-	if len(actual.data.PRSections[2].Rows) != 0 || actual.data.Pinned["owner/pinned"] != nil || actual.data.Pinned[cfg.Repos[1]] != otherPin || len(actual.lastChanges) != 0 {
+	if len(actual.data.PRSections[2].Rows) != 0 || len(actual.data.Pinned["owner/pinned"].PRSections[2].Rows) != 0 || actual.data.Pinned[cfg.Repos[1]].FetchedAt != otherPin.FetchedAt || len(actual.lastChanges) != 0 {
 		t.Fatalf("account change leaked old data or discarded another host: %+v", actual.data)
 	}
 }
@@ -176,5 +177,39 @@ func TestMonitorUnknownBatchDoesNotHideKnownAccountChange(t *testing.T) {
 	mergeMonitorIdentities(mixed, current)
 	if !mixed.HostIdentities[defaultGitHubHost].Conflicted || !mixed.Incomplete {
 		t.Fatal("unknown batch erased a mixed-account conflict")
+	}
+}
+
+func TestMonitorTotalFailurePreservesScopeErrorsAndBackoff(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	old := identitySnapshot(cfg, "owner", "user:owner")
+	old.Pinned = map[string]*monitorFetchResult{"owner/pinned": identitySnapshot(cfg, "owner")}
+	failed := unavailableMonitorScope(cfg, errors.New("global search unavailable"))
+	failed.Pinned = map[string]*monitorFetchResult{"owner/pinned": unavailableMonitorScope(cfg, errors.New("shortcut search unavailable"))}
+	m := newMonitorModel(cfg, "", "", monitorSessionState{})
+	m.data = old
+	m.lastRefresh = old.FetchedAt
+	m.backoff = minimumMonitorInterval * 4
+	m.repoIdx = 1
+	updated, _ := m.handleFetched(monitorFetchedMsg{result: failed, err: errors.New("global search unavailable")})
+	actual := updated.(monitorModel)
+	pin := actual.data.Pinned["owner/pinned"]
+	if actual.data.Error != "global search unavailable" || pin.Error != "shortcut search unavailable" || len(pin.PRSections[2].Rows) != 1 || actual.refreshErr != "global search unavailable" || actual.backoff != minimumMonitorInterval*8 || actual.lastRefresh != old.FetchedAt {
+		t.Fatalf("scope failures lost state/backoff: %+v", actual)
+	}
+	if message := monitorScopeRefreshError(pin, actual.refreshErr); message != "shortcut search unavailable" {
+		t.Fatalf("selected failure hidden: %s", message)
+	}
+	if message := monitorScopeRefreshError(nil, actual.refreshErr); message != actual.refreshErr {
+		t.Fatal("global error lost without a scope")
+	}
+	fresh := newMonitorModel(cfg, "", "", monitorSessionState{})
+	// Reuse a separately constructed failure to avoid cached-row retention.
+	empty := unavailableMonitorScope(cfg, errors.New("global search unavailable"))
+	empty.Pinned = map[string]*monitorFetchResult{"owner/pinned": unavailableMonitorScope(cfg, errors.New("shortcut search unavailable"))}
+	updated, _ = fresh.handleFetched(monitorFetchedMsg{result: empty, err: errors.New("global search unavailable")})
+	actual = updated.(monitorModel)
+	if actual.data == nil || actual.data.Pinned["owner/pinned"].Error == "" || len(actual.lastChanges) != 0 {
+		t.Fatal("initial failures did not reach the UI")
 	}
 }

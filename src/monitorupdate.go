@@ -139,13 +139,26 @@ func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) 
 	}
 	m.invalidateMonitorOwnerSnapshot(msg.result)
 	if msg.err != nil {
+		m.retainMonitorFailedRefresh(msg.result)
 		m.refreshErr = sanitizeMonitorError(msg.err)
-		m.refreshWarn = ""
 		m.backoff = nextMonitorBackoff(m.backoff)
 		return m, scheduleMonitorTick(m.backoff)
 	}
 	m.applyFetchResult(msg.result)
 	return m, scheduleMonitorTick(m.interval)
+}
+
+func (m *monitorModel) retainMonitorFailedRefresh(result *monitorFetchResult) {
+	m.refreshWarn = ""
+	if result == nil || result.Error == "" {
+		return
+	}
+	previous := m.selectedRowKey()
+	retainMonitorScopeSnapshots(result, m.data)
+	m.data = result
+	m.refreshWarn = sanitizeMonitorMessage(strings.Join(result.Warnings, "; "))
+	m.clampSelections()
+	m.resetDetailIfSelectionChanged(previous)
 }
 
 func sanitizeMonitorError(err error) string {
