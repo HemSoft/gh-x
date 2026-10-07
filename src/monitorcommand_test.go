@@ -219,6 +219,7 @@ func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T)
 func isolateMonitorHome(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)            // macOS user config dir
 	t.Setenv("AppData", dir)         // Windows user config dir
 	t.Setenv("XDG_CONFIG_HOME", dir) // Unix user config dir
 }
