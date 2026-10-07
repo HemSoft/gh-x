@@ -145,7 +145,11 @@ func TestTerminalOutputRejectsCapturedWriters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close fixture output: %v", err)
+		}
+	})
 	if terminalOutputFunc(file) {
 		t.Fatal("regular file must not be classified as a terminal")
 	}
