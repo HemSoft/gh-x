@@ -248,8 +248,8 @@ func monitorSectionLayoutsEqual(a, b monitorSectionLayout) bool {
 	return a.DefaultLimit == b.DefaultLimit && slices.Equal(a.PRSections, b.PRSections) && slices.Equal(a.IssueSections, b.IssueSections)
 }
 
-func (m *monitorModel) invalidateMonitorSectionSnapshot() {
-	if m.data == nil || monitorSectionLayoutsEqual(m.data.SectionLayout, newMonitorSectionLayout(m.cfg)) {
+func (m *monitorModel) invalidateMonitorConfigSnapshot() {
+	if m.data == nil || monitorResultMatchesConfig(m.data, m.cfg) {
 		return
 	}
 	m.data = nil
@@ -257,6 +257,10 @@ func (m *monitorModel) invalidateMonitorSectionSnapshot() {
 	m.lastChanges = nil
 	m.changedKeys = nil
 	m.addedKeys = nil
+}
+
+func monitorResultMatchesConfig(result *monitorFetchResult, cfg *monitorConfig) bool {
+	return monitorSectionLayoutsEqual(result.SectionLayout, newMonitorSectionLayout(cfg)) && slices.Equal(result.RepositoryConfig, cfg.Repos)
 }
 
 func retainMonitorScopeSnapshot(current, previous *monitorFetchResult) {

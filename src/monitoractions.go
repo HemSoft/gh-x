@@ -85,7 +85,7 @@ func (m monitorModel) handleEditorDone(msg monitorEditorDoneMsg) (tea.Model, tea
 	}
 	previous := m.selectedRowKey()
 	*m.cfg = *cfg
-	m.invalidateMonitorSectionSnapshot()
+	m.invalidateMonitorConfigSnapshot()
 	m.interval = parseMonitorIntervalOrDefault(cfg.Defaults.Interval, defaultMonitorInterval)
 	m.clampSelections()
 	m.resetDetailIfSelectionChanged(previous)

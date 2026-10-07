@@ -127,8 +127,8 @@ func (m monitorModel) initialMonitorCmd() tea.Cmd {
 func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) {
 	m.refreshing = false
 	m.refreshState = nil
-	m.invalidateMonitorSectionSnapshot()
-	if msg.result != nil && !monitorSectionLayoutsEqual(msg.result.SectionLayout, newMonitorSectionLayout(m.cfg)) {
+	m.invalidateMonitorConfigSnapshot()
+	if msg.result != nil && !monitorResultMatchesConfig(msg.result, m.cfg) {
 		return m.startRefresh()
 	}
 	if msg.err != nil {

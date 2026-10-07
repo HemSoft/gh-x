@@ -45,7 +45,7 @@ func (m monitorModel) applySettingsForm() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	*m.cfg = next
-	m.invalidateMonitorSectionSnapshot()
+	m.invalidateMonitorConfigSnapshot()
 	m.interval = parseMonitorIntervalOrDefault(m.cfg.Defaults.Interval, defaultMonitorInterval)
 	m.clampSelections()
 	m.resetDetailIfSelectionChanged(previous)

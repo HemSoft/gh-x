@@ -376,7 +376,7 @@ func TestMonitorSnapshotsDoNotCrossChangedSectionLayouts(t *testing.T) {
 			m := newMonitorModel(cfg, "", "", monitorSessionState{})
 			defer m.cancelRefresh()
 			m.data = previous
-			m.invalidateMonitorSectionSnapshot()
+			m.invalidateMonitorConfigSnapshot()
 			if m.data != nil {
 				t.Fatal("old layout remained visible after configuration changed")
 			}
@@ -394,6 +394,33 @@ func TestMonitorInFlightOldLayoutTriggersFreshFetch(t *testing.T) {
 	updated := model.(monitorModel)
 	if cmd == nil || !updated.refreshing || updated.data != nil {
 		t.Fatal("in-flight result for an old layout was accepted instead of scheduling the current layout")
+	}
+}
+
+func TestMonitorInFlightRepositoryEditsTriggerFreshFetch(t *testing.T) {
+	changes := map[string]func(*monitorConfig){
+		"add":    func(cfg *monitorConfig) { cfg.Repos = append(cfg.Repos, "team/new") },
+		"remove": func(cfg *monitorConfig) { cfg.Repos = nil },
+		"host":   func(cfg *monitorConfig) { cfg.Repos[0] = "ghe.example.com/owner/pinned" },
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			cfg := defaultMonitorConfig("owner/pinned")
+			m := newMonitorModel(cfg, "", "", monitorSessionState{})
+			defer m.cancelRefresh()
+			old := newMonitorFetchResult(cfg, time.Now())
+			m.data = old
+			m.refreshing = true
+			change(cfg)
+			model, cmd := m.handleFetched(monitorFetchedMsg{result: old})
+			updated := model.(monitorModel)
+			if cmd == nil || !updated.refreshing || updated.data != nil {
+				t.Fatal("repository/host edit accepted an old result instead of immediately fetching the new configuration")
+			}
+			if old.RepositoryConfig[0] != "owner/pinned" {
+				t.Fatal("query generation retained a mutable configuration slice")
+			}
+		})
 	}
 }
 

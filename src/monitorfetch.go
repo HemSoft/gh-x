@@ -22,7 +22,8 @@ type monitorSectionData struct {
 
 // monitorFetchResult is the complete payload for one refresh cycle.
 type monitorFetchResult struct {
-	SectionLayout monitorSectionLayout
+	SectionLayout    monitorSectionLayout
+	RepositoryConfig []string
 	// Pinned retains per-repository results independently of the global cap.
 	Error         string
 	Incomplete    bool
@@ -373,11 +374,12 @@ func unsupportedHierarchyMessage(message string) bool {
 
 func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResult {
 	result := &monitorFetchResult{
-		FetchedAt:     now,
-		Accessible:    map[string]bool{},
-		SectionLayout: newMonitorSectionLayout(cfg),
-		PRSections:    make([]monitorSectionData, len(cfg.PRSections)),
-		IssueSections: make([]monitorSectionData, len(cfg.IssueSections)),
+		FetchedAt:        now,
+		Accessible:       map[string]bool{},
+		SectionLayout:    newMonitorSectionLayout(cfg),
+		RepositoryConfig: append([]string(nil), cfg.Repos...),
+		PRSections:       make([]monitorSectionData, len(cfg.PRSections)),
+		IssueSections:    make([]monitorSectionData, len(cfg.IssueSections)),
 	}
 	for i := range result.PRSections {
 		result.PRSections[i].Kind = monitorKindPR
