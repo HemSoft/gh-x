@@ -23,6 +23,8 @@ type monitorSectionData struct {
 // monitorFetchResult is the complete payload for one refresh cycle.
 type monitorFetchResult struct {
 	monitorQueryConfig
+	HostIdentities map[string]monitorHostIdentity
+	ViewerLogin    string
 	// Pinned retains per-repository results independently of the global cap.
 	Error         string
 	Incomplete    bool
@@ -90,6 +92,7 @@ type monitorRepositoryGroup struct {
 
 type monitorHostQuery struct {
 	Host          string
+	OwnerScope    []string
 	Repositories  []monitorRepository
 	Query         string
 	FallbackQuery string
@@ -190,6 +193,7 @@ func buildMonitorGraphQLQuery(cfg *monitorConfig, repositories []monitorReposito
 func buildMonitorGraphQLQueryWithScope(cfg *monitorConfig, repositories []monitorRepository, includeHierarchy bool, repoQualifiers string) string {
 	var sb strings.Builder
 	sb.WriteString("{\n")
+	sb.WriteString("  viewer { login }\n")
 	sb.WriteString("  rateLimit { remaining resetAt }\n")
 	writeMonitorAccessProbes(&sb, repositories)
 	for i, section := range cfg.PRSections {
@@ -276,6 +280,7 @@ func executeMonitorQueries(ctx context.Context, cfg *monitorConfig, queries []mo
 	successfulHosts := 0
 	for index, request := range queries {
 		outcome := outcomes[index]
+		mergeMonitorIdentities(combined, outcome.Result)
 		if outcome.Err != nil {
 			failedHosts = append(failedHosts, fmt.Sprintf("%s: %v", request.Host, outcome.Err))
 			continue
@@ -285,9 +290,9 @@ func executeMonitorQueries(ctx context.Context, cfg *monitorConfig, queries []mo
 	}
 	if successfulHosts == 0 {
 		if contextErr := githubContextError(ctx.Err()); contextErr != nil {
-			return nil, contextErr
+			return combined, contextErr
 		}
-		return nil, fmt.Errorf("monitor refresh failed for all configured hosts: %s", strings.Join(failedHosts, "; "))
+		return combined, fmt.Errorf("monitor refresh failed for all configured hosts: %s", strings.Join(failedHosts, "; "))
 	}
 	combined.Incomplete = combined.Incomplete || len(failedHosts) > 0
 	combined.Warnings = uniqueMonitorWarnings(append(combined.Warnings, failedHosts...))
@@ -318,7 +323,7 @@ func fetchMonitorHost(ctx context.Context, request monitorHostQuery, cfg *monito
 	if err != nil {
 		return nil, fmt.Errorf("parse GraphQL response: %w", err)
 	}
-	return result, nil
+	return bindMonitorHostIdentity(result, request)
 }
 
 func executeMonitorHostQuery(ctx context.Context, host, query string) (bytes.Buffer, bytes.Buffer, error) {
@@ -349,7 +354,7 @@ func fetchMonitorHostWithoutHierarchy(ctx context.Context, request monitorHostQu
 		return nil, fmt.Errorf("parse fallback GraphQL response: %w", err)
 	}
 	result.Warnings = append(result.Warnings, "Issue hierarchy is unavailable on "+request.Host)
-	return result, nil
+	return bindMonitorHostIdentity(result, request)
 }
 
 func issueHierarchyUnsupported(stdout []byte, stderr string) bool {
@@ -392,6 +397,7 @@ func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResul
 }
 
 func mergeMonitorFetchResult(dst, src *monitorFetchResult, qualifyWarnings bool, host string) {
+	mergeMonitorIdentities(dst, src)
 	dst.Incomplete = dst.Incomplete || src.Incomplete
 	if !src.RateResetAt.IsZero() && (dst.RateResetAt.IsZero() || src.RateRemaining < dst.RateRemaining) {
 		dst.RateRemaining = src.RateRemaining
@@ -462,6 +468,11 @@ func parseMonitorHostResponse(data []byte, cfg *monitorConfig, repositories []mo
 	}
 
 	result := newMonitorFetchResult(cfg, now)
+	var viewer struct {
+		Login string `json:"login"`
+	}
+	_ = json.Unmarshal(dataMap["viewer"], &viewer)
+	result.ViewerLogin = viewer.Login
 	result.Warnings = monitorWarnings(envelope.Errors)
 	result.Incomplete = monitorConfiguredSearchIncomplete(dataMap, cfg) || monitorSearchAliasesIncomplete(dataMap, envelope.Errors)
 	result.Accessible = decodeAccessProbes(dataMap, repositories)

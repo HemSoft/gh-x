@@ -137,6 +137,7 @@ func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) 
 	if monitorFetchedConfigStale(msg, m.cfg) {
 		return m.startRefresh()
 	}
+	m.invalidateMonitorOwnerSnapshot(msg.result)
 	if msg.err != nil {
 		m.refreshErr = sanitizeMonitorError(msg.err)
 		m.refreshWarn = ""

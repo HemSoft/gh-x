@@ -150,6 +150,7 @@ func TestApplyFetchResultTracksChangesAndBackoff(t *testing.T) {
 		}}},
 		IssueSections: make([]monitorSectionData, len(newTestMonitorModel().cfg.IssueSections)),
 	}
+	first.HostIdentities = newMonitorTestFetchResult(m.cfg, now).HostIdentities
 	m.applyFetchResult(first)
 	if m.refreshErr != "" || m.lastRefresh != now {
 		t.Fatalf("first fetch should succeed cleanly: err=%q at=%v", m.refreshErr, m.lastRefresh)
@@ -166,6 +167,7 @@ func TestApplyFetchResultTracksChangesAndBackoff(t *testing.T) {
 		}}},
 		IssueSections: first.IssueSections,
 	}
+	second.HostIdentities = first.HostIdentities
 	m.applyFetchResult(second)
 	key := "owner/one#pr#1"
 	if !m.changedKeys[key] {
@@ -198,7 +200,7 @@ func TestHandleFetchedErrorBacksOff(t *testing.T) {
 func TestApplyFetchResultSurfacesPartialHostWarning(t *testing.T) {
 	m := newTestMonitorModel()
 	m.layout = computeMonitorLayout(100, 24)
-	result := newMonitorFetchResult(m.cfg, time.Now())
+	result := newMonitorTestFetchResult(m.cfg, time.Now())
 	result.Warnings = []string{"ghe.example.com: connection refused\nretry later"}
 
 	m.applyFetchResult(result)
@@ -294,7 +296,7 @@ func TestMonitorFetchCommandUsesConfiguredTotalDeadline(t *testing.T) {
 
 func TestMonitorTimeoutClearsRefreshAndKeepsLastData(t *testing.T) {
 	model := newTestMonitorModel()
-	previous := newMonitorFetchResult(model.cfg, time.Now())
+	previous := newMonitorTestFetchResult(model.cfg, time.Now())
 	model.data = previous
 	model.refreshing = true
 

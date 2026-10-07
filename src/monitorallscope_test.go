@@ -18,7 +18,7 @@ func TestMonitorAllReposFetchIncludesUnconfiguredOrganizationRepository(t *testi
 	t.Cleanup(func() { monitorGHExecFunc = saved })
 	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
 		query := strings.Join(args, " ")
-		if strings.Contains(query, "viewer {") {
+		if strings.Contains(query, "organizations(first:") {
 			return *bytes.NewBufferString(`{"data":{"viewer":{"login":"owner","organizations":{"nodes":[{"login":"team"}],"pageInfo":{"hasNextPage":false}}}}}`), bytes.Buffer{}, nil
 		}
 		repo := "owner/pinned"
@@ -101,9 +101,9 @@ func TestDiscoverMonitorOwnerScopePaginationAndFailures(t *testing.T) {
 
 func TestMonitorPinnedResultsRemainAvailableOutsideGlobalRowLimit(t *testing.T) {
 	cfg := defaultMonitorConfig("owner/pinned")
-	all := newMonitorFetchResult(cfg, time.Time{})
+	all := newMonitorTestFetchResult(cfg, time.Time{})
 	all.PRSections[2] = monitorSectionData{Total: 80, Rows: []monitorRow{{Number: 7, Repo: "team/unconfigured", Title: "global", Kind: monitorKindPR}}}
-	all.Pinned = map[string]*monitorFetchResult{"owner/pinned": newMonitorFetchResult(cfg, time.Time{})}
+	all.Pinned = map[string]*monitorFetchResult{"owner/pinned": newMonitorTestFetchResult(cfg, time.Time{})}
 	all.Pinned["owner/pinned"].PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Number: 2, Repo: "owner/pinned", Title: "pinned", Kind: monitorKindPR}}}
 	for _, tc := range []struct {
 		name  string
@@ -134,7 +134,7 @@ func TestMonitorAllScopeDiscoveryFailureKeepsPinsAndReportsGlobalUnavailable(t *
 	saved := monitorGHExecFunc
 	t.Cleanup(func() { monitorGHExecFunc = saved })
 	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
-		if strings.Contains(strings.Join(args, " "), "viewer {") {
+		if strings.Contains(strings.Join(args, " "), "organizations(first:") {
 			return bytes.Buffer{}, bytes.Buffer{}, errBoom()
 		}
 		return *bytes.NewBufferString(`{"data":{"pr2":{"issueCount":1,"nodes":[{"number":1,"repository":{"nameWithOwner":"owner/pinned"}}]}}}`), bytes.Buffer{}, nil
@@ -154,7 +154,7 @@ func TestMonitorAllReposWorksWithoutConfiguredShortcuts(t *testing.T) {
 		if !strings.Contains(query, "--hostname ghe.example.com") {
 			t.Fatalf("empty config host: %v", args)
 		}
-		if strings.Contains(query, "viewer {") {
+		if strings.Contains(query, "organizations(first:") {
 			return *bytes.NewBufferString(`{"data":{"viewer":{"login":"owner","organizations":{"nodes":[],"pageInfo":{}}}}}`), bytes.Buffer{}, nil
 		}
 		if !strings.Contains(query, "user:owner") {
@@ -185,7 +185,7 @@ func TestMonitorAllRepoFetchKeepsHostScopesSeparateAndReportsPartialFailures(t *
 				if host != "github.com" {
 					login = "enterprise"
 				}
-				if strings.Contains(query, "viewer {") {
+				if strings.Contains(query, "organizations(first:") {
 					if mode == "enterprise scope unavailable" && host != "github.com" {
 						return bytes.Buffer{}, bytes.Buffer{}, errBoom()
 					}
@@ -266,7 +266,7 @@ func TestMonitorQuietShortcutIsNotCrowdedOutByBusyRepository(t *testing.T) {
 	t.Cleanup(func() { monitorGHExecFunc = saved })
 	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
 		query := strings.Join(args, " ")
-		if strings.Contains(query, "viewer {") {
+		if strings.Contains(query, "organizations(first:") {
 			return *bytes.NewBufferString(`{"data":{"viewer":{"login":"owner","organizations":{"nodes":[],"pageInfo":{}}}}}`), bytes.Buffer{}, nil
 		}
 		repo := "team/unconfigured"
@@ -305,9 +305,9 @@ func TestMonitorFailedScopesRetainIndependentSnapshotsAndErrors(t *testing.T) {
 	cfg := defaultMonitorConfig("owner/pinned")
 	model := newMonitorModel(cfg, "", "", monitorSessionState{SubTab: 2})
 	defer model.cancelRefresh()
-	before := newMonitorFetchResult(cfg, time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC))
+	before := newMonitorTestFetchResult(cfg, time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC))
 	before.PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Repo: "team/outside", Number: 1, Title: "before", Kind: monitorKindPR}}}
-	pin := newMonitorFetchResult(cfg, before.FetchedAt)
+	pin := newMonitorTestFetchResult(cfg, before.FetchedAt)
 	pin.PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Repo: "owner/pinned", Number: 2, Title: "pin before", Kind: monitorKindPR}}}
 	before.Pinned = map[string]*monitorFetchResult{"owner/pinned": pin}
 	model.applyFetchResult(before)
@@ -337,7 +337,7 @@ func TestMonitorRetainedEmptySectionSuggestsCachedRowsAndKeepsFailureNotice(t *t
 	cfg := defaultMonitorConfig("owner/pinned")
 	m := newMonitorModel(cfg, "", "", monitorSessionState{})
 	defer m.cancelRefresh()
-	previous := newMonitorFetchResult(cfg, time.Now())
+	previous := newMonitorTestFetchResult(cfg, time.Now())
 	previous.PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Repo: "owner/pinned", Number: 1, Kind: monitorKindPR}}}
 	m.applyFetchResult(previous)
 	m.applyFetchResult(unavailableMonitorScope(cfg, errBoom()))
@@ -363,7 +363,7 @@ func TestMonitorSnapshotsDoNotCrossChangedSectionLayouts(t *testing.T) {
 	for name, change := range changes {
 		t.Run(name, func(t *testing.T) {
 			cfg := defaultMonitorConfig("owner/pinned")
-			previous := newMonitorFetchResult(cfg, time.Now())
+			previous := newMonitorTestFetchResult(cfg, time.Now())
 			previous.PRSections[0].Rows = []monitorRow{{Repo: "owner/pinned", Number: 1, Kind: monitorKindPR}}
 			change(cfg)
 			current := unavailableMonitorScope(cfg, errBoom())
@@ -371,7 +371,7 @@ func TestMonitorSnapshotsDoNotCrossChangedSectionLayouts(t *testing.T) {
 			if !current.FetchedAt.IsZero() || len(current.PRSections[0].Rows) != 0 {
 				t.Fatal("incompatible section rows were retained")
 			}
-			if changes := diffMonitorScope(previous, newMonitorFetchResult(cfg, time.Now())); len(changes) != 0 {
+			if changes := diffMonitorScope(previous, newMonitorTestFetchResult(cfg, time.Now())); len(changes) != 0 {
 				t.Fatal("configuration change invented a removal event")
 			}
 			m := newMonitorModel(cfg, "", "", monitorSessionState{})
@@ -389,7 +389,7 @@ func TestMonitorInFlightOldLayoutTriggersFreshFetch(t *testing.T) {
 	cfg := defaultMonitorConfig("owner/pinned")
 	m := newMonitorModel(cfg, "", "", monitorSessionState{})
 	defer m.cancelRefresh()
-	old := newMonitorFetchResult(cfg, time.Now())
+	old := newMonitorTestFetchResult(cfg, time.Now())
 	cfg.PRSections[0].Filters = "is:open label:bug"
 	model, cmd := m.handleFetched(monitorFetchedMsg{result: old})
 	updated := model.(monitorModel)
@@ -409,7 +409,7 @@ func TestMonitorInFlightRepositoryEditsTriggerFreshFetch(t *testing.T) {
 			cfg := defaultMonitorConfig("owner/pinned")
 			m := newMonitorModel(cfg, "", "", monitorSessionState{})
 			defer m.cancelRefresh()
-			old := newMonitorFetchResult(cfg, time.Now())
+			old := newMonitorTestFetchResult(cfg, time.Now())
 			m.data = old
 			m.refreshing = true
 			change(cfg)
@@ -480,7 +480,7 @@ func TestMonitorNewPinIsLoadingUntilItsFirstFetch(t *testing.T) {
 	model := newMonitorModel(cfg, "", "", monitorSessionState{SubTab: 2, RepoIndex: 1})
 	defer model.cancelRefresh()
 	model.layout = computeMonitorLayout(120, 40)
-	model.data = newMonitorFetchResult(cfg, time.Now())
+	model.data = newMonitorTestFetchResult(cfg, time.Now())
 	model.data.Pinned = map[string]*monitorFetchResult{}
 	if !strings.Contains(model.listLines(), "Loading GitHub data") || model.tabTotal(monitorTabPRs) != -1 {
 		t.Fatal("new shortcut looked successfully empty before its fetch")
@@ -491,8 +491,8 @@ func TestMonitorShortcutNamesAreCaseInsensitive(t *testing.T) {
 	cfg := defaultMonitorConfig("hemsoft/gh-x")
 	model := newMonitorModel(cfg, "", "", monitorSessionState{SubTab: 2, RepoIndex: 1})
 	defer model.cancelRefresh()
-	result := newMonitorFetchResult(cfg, time.Now())
-	pin := newMonitorFetchResult(cfg, time.Now())
+	result := newMonitorTestFetchResult(cfg, time.Now())
+	pin := newMonitorTestFetchResult(cfg, time.Now())
 	pin.PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Repo: "HemSoft/gh-x", Kind: monitorKindPR, Number: 1}}}
 	result.Pinned = map[string]*monitorFetchResult{"hemsoft/gh-x": pin}
 	model.data = result
@@ -503,23 +503,23 @@ func TestMonitorShortcutNamesAreCaseInsensitive(t *testing.T) {
 
 func TestMonitorScopeRecoveryDoesNotInventChanges(t *testing.T) {
 	cfg := defaultMonitorConfig("owner/pinned")
-	complete := newMonitorFetchResult(cfg, time.Now())
+	complete := newMonitorTestFetchResult(cfg, time.Now())
 	complete.PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Repo: "owner/pinned", Kind: monitorKindPR, Number: 1}}}
 	unavailable := unavailableMonitorScope(cfg, errBoom())
 	if changes := diffMonitorScope(unavailable, complete); len(changes) != 0 {
 		t.Fatalf("initial recovery invented additions: %+v", changes)
 	}
 	complete.Incomplete = true
-	if changes := diffMonitorScope(complete, newMonitorFetchResult(cfg, time.Now())); len(changes) != 0 {
+	if changes := diffMonitorScope(complete, newMonitorTestFetchResult(cfg, time.Now())); len(changes) != 0 {
 		t.Fatalf("partial snapshot recovery invented removals: %+v", changes)
 	}
 	complete.Incomplete = false
-	if changes := diffMonitorScope(complete, newMonitorFetchResult(cfg, time.Now())); len(changes) != 1 {
+	if changes := diffMonitorScope(complete, newMonitorTestFetchResult(cfg, time.Now())); len(changes) != 1 {
 		t.Fatalf("complete successful snapshots lost real removals: %+v", changes)
 	}
-	previous := newMonitorFetchResult(cfg, time.Now())
+	previous := newMonitorTestFetchResult(cfg, time.Now())
 	previous.Pinned = map[string]*monitorFetchResult{"owner/pinned": unavailable}
-	current := newMonitorFetchResult(cfg, time.Now())
+	current := newMonitorTestFetchResult(cfg, time.Now())
 	current.Pinned = map[string]*monitorFetchResult{"owner/pinned": complete}
 	if changes := diffMonitorFetchScopes(previous, current); len(changes) != 0 {
 		t.Fatalf("initial pin recovery invented additions: %+v", changes)
@@ -574,7 +574,7 @@ func TestMonitorAllScopesShareFourAPICalls(t *testing.T) {
 		case <-ctx.Done():
 			return bytes.Buffer{}, bytes.Buffer{}, ctx.Err()
 		}
-		if strings.Contains(strings.Join(args, " "), "viewer {") {
+		if strings.Contains(strings.Join(args, " "), "organizations(first:") {
 			orgs := []string{}
 			for i := range 33 {
 				orgs = append(orgs, fmt.Sprintf(`{"login":"team%d"}`, i))
@@ -640,7 +640,7 @@ func TestMonitorFailureWithoutSnapshotReportsUnavailableInsteadOfLoading(t *test
 			m := newMonitorModel(cfg, "", "", monitorSessionState{})
 			defer m.cancelRefresh()
 			if edited {
-				m.applyFetchResult(newMonitorFetchResult(cfg, time.Now()))
+				m.applyFetchResult(newMonitorTestFetchResult(cfg, time.Now()))
 				cfg.Defaults.Limit = 1
 			}
 			model, _ := m.handleFetched(monitorFetchedMsg{err: errBoom()})
@@ -746,8 +746,8 @@ func TestMonitorShortcutEditsPreserveCompatibleSnapshots(t *testing.T) {
 	cfg.Repos = append(cfg.Repos, "owner/removed")
 	m := newMonitorModel(cfg, "", "", monitorSessionState{})
 	defer m.cancelRefresh()
-	old := newMonitorFetchResult(cfg, time.Now())
-	pin := newMonitorFetchResult(cfg, time.Now())
+	old := newMonitorTestFetchResult(cfg, time.Now())
+	pin := newMonitorTestFetchResult(cfg, time.Now())
 	old.Pinned = map[string]*monitorFetchResult{"owner/pinned": pin, "owner/removed": pin}
 	m.data = old
 	cfg.Repos = []string{"OWNER/PINNED", "owner/new"}
@@ -837,10 +837,10 @@ func TestMonitorSectionScopeValidationRespectsQuotedSearchValues(t *testing.T) {
 
 func TestMonitorRetainedPartialSnapshotsDoNotInventRecoveryChanges(t *testing.T) {
 	cfg := defaultMonitorConfig("owner/pinned")
-	partial := newMonitorFetchResult(cfg, time.Now())
+	partial := newMonitorTestFetchResult(cfg, time.Now())
 	partial.Incomplete = true
 	partial.PRSections[2] = monitorSectionData{Total: 2, Rows: []monitorRow{{Repo: "owner/pinned", Kind: monitorKindPR, Number: 1}}}
-	partial.Pinned = map[string]*monitorFetchResult{"owner/pinned": newMonitorFetchResult(cfg, time.Now())}
+	partial.Pinned = map[string]*monitorFetchResult{"owner/pinned": newMonitorTestFetchResult(cfg, time.Now())}
 	partial.Pinned["owner/pinned"].Incomplete = true
 	partial.Pinned["owner/pinned"].PRSections[2] = partial.PRSections[2]
 	failed := unavailableMonitorScope(cfg, errBoom())
@@ -849,9 +849,9 @@ func TestMonitorRetainedPartialSnapshotsDoNotInventRecoveryChanges(t *testing.T)
 	if !failed.Incomplete || !failed.Pinned["owner/pinned"].Incomplete {
 		t.Fatal("retention lost partial-data metadata for global or shortcut snapshots")
 	}
-	recovered := newMonitorFetchResult(cfg, time.Now())
+	recovered := newMonitorTestFetchResult(cfg, time.Now())
 	recovered.PRSections[2] = monitorSectionData{Total: 2, Rows: []monitorRow{{Repo: "owner/pinned", Kind: monitorKindPR, Number: 1}, {Repo: "owner/pinned", Kind: monitorKindPR, Number: 2}}}
-	recovered.Pinned = map[string]*monitorFetchResult{"owner/pinned": newMonitorFetchResult(cfg, time.Now())}
+	recovered.Pinned = map[string]*monitorFetchResult{"owner/pinned": newMonitorTestFetchResult(cfg, time.Now())}
 	recovered.Pinned["owner/pinned"].PRSections[2] = recovered.PRSections[2]
 	if changes := diffMonitorFetchScopes(failed, recovered); len(changes) != 0 {
 		t.Fatalf("recovery from retained partial data invented changes: %+v", changes)
@@ -871,7 +871,7 @@ func TestMonitorNullSearchNodesDoNotBecomeRowsOrInventChanges(t *testing.T) {
 	if !partial.Incomplete || len(partial.PRSections[0].Rows) != 1 || len(partial.IssueSections[0].Rows) != 1 {
 		t.Fatalf("nullable nodes must be skipped and mark the response incomplete: partial=%v, prs=%v, issues=%v", partial.Incomplete, partial.PRSections[0].Rows, partial.IssueSections[0].Rows)
 	}
-	complete := newMonitorFetchResult(cfg, time.Now())
+	complete := newMonitorTestFetchResult(cfg, time.Now())
 	complete.PRSections[0].Rows = []monitorRow{{Repo: "owner/pinned", Number: 1, Kind: monitorKindPR}, {Repo: "owner/pinned", Number: 2, Kind: monitorKindPR}}
 	if changes := diffMonitorScope(partial, complete); len(changes) != 0 {
 		t.Fatalf("null-node recovery invented change notifications: %v", changes)
@@ -922,7 +922,7 @@ func TestMonitorStructuralAndFieldFailuresSuppressFabricatedEvents(t *testing.T)
 				t.Fatalf("incomplete=%v, want %v", current.Incomplete, tc.wantIncomplete)
 			}
 			if tc.wantIncomplete {
-				previous := newMonitorFetchResult(cfg, time.Now())
+				previous := newMonitorTestFetchResult(cfg, time.Now())
 				previous.PRSections[0].Rows = []monitorRow{{Repo: "owner/pinned", Number: 1, Kind: monitorKindPR, Review: "approved"}}
 				if changes := diffMonitorScope(previous, current); len(changes) != 0 {
 					t.Fatalf("failed API fields invented changes: %+v", changes)
@@ -958,4 +958,13 @@ func TestMonitorUnknownHierarchyDoesNotHideOtherChanges(t *testing.T) {
 	if change := diffMonitorRow(after, before); change != nil {
 		t.Fatalf("hierarchy recovery invented changes: %v", change)
 	}
+}
+
+func newMonitorTestFetchResult(cfg *monitorConfig, at time.Time) *monitorFetchResult {
+	result := newMonitorFetchResult(cfg, at)
+	result.HostIdentities = make(map[string]monitorHostIdentity)
+	for _, host := range result.HostScope {
+		result.HostIdentities[host] = monitorHostIdentity{Viewer: "owner", Owners: []string{"user:owner"}}
+	}
+	return result
 }

@@ -118,6 +118,7 @@ func resolveMonitorAllHostQueries(ctx context.Context, request monitorHostQuery,
 	for first := 0; first < len(owners); first += monitorOwnerBatchSize {
 		batch := request
 		batch.Repositories = nil
+		batch.OwnerScope = owners
 		qualifiers := strings.Join(owners[first:minInt(first+monitorOwnerBatchSize, len(owners))], " ")
 		batch.Query = buildMonitorGraphQLQueryWithScope(cfg, nil, true, qualifiers)
 		batch.FallbackQuery = buildMonitorGraphQLQueryWithScope(cfg, nil, false, qualifiers)
@@ -132,6 +133,9 @@ func fetchMonitorAllHost(ctx context.Context, request monitorHostQuery, cfg *mon
 		return nil, err
 	}
 	result, err := executeMonitorQueries(ctx, cfg, requests, now, fetchMonitorHost)
+	if result != nil && err != nil {
+		setMonitorDiscoveredIdentity(result, request.Host, requests[0].OwnerScope)
+	}
 	if err == nil {
 		qualifyMonitorResultRows(result, request.Host)
 	}
@@ -187,17 +191,18 @@ func launchMonitorPinnedFetches(ctx context.Context, cfg *monitorConfig, now tim
 func combineMonitorScopes(cfg *monitorConfig, global monitorHostFetchOutcome, pins []monitorHostFetchOutcome) (*monitorFetchResult, error) {
 	result := global.Result
 	if global.Err != nil {
-		if !monitorAnyScopeSucceeded(pins) {
-			return nil, global.Err
-		}
 		result = unavailableMonitorScope(cfg, global.Err)
+		mergeMonitorIdentities(result, global.Result)
 		result.Warnings = append(result.Warnings, "All repos: "+global.Err.Error())
 	}
 	result.Pinned = make(map[string]*monitorFetchResult, len(cfg.Repos))
 	for index, pin := range pins {
 		repo := cfg.Repos[index]
 		if pin.Err != nil {
-			result.Pinned[repo] = unavailableMonitorScope(cfg, pin.Err)
+			pinCfg := *cfg
+			pinCfg.Repos = []string{repo}
+			result.Pinned[repo] = unavailableMonitorScope(&pinCfg, pin.Err)
+			mergeMonitorIdentities(result.Pinned[repo], pin.Result)
 			result.Warnings = append(result.Warnings, repo+": "+pin.Err.Error())
 			continue
 		}
@@ -205,6 +210,9 @@ func combineMonitorScopes(cfg *monitorConfig, global monitorHostFetchOutcome, pi
 		mergeMonitorScopeMetadata(result, pin.Result)
 	}
 	result.Warnings = uniqueMonitorWarnings(result.Warnings)
+	if global.Err != nil && !monitorAnyScopeSucceeded(pins) {
+		return result, global.Err
+	}
 	return result, nil
 }
 
@@ -354,20 +362,21 @@ func retainMonitorScopeSnapshot(current, previous *monitorFetchResult) {
 	if current == nil || previous == nil || current.Error == "" {
 		return
 	}
-	if !monitorSectionLayoutsEqual(current.SectionLayout, previous.SectionLayout) {
+	if !monitorSectionLayoutsEqual(current.SectionLayout, previous.SectionLayout) || monitorIdentitiesChanged(previous, current, false) {
 		return
 	}
 	current.Incomplete = current.Incomplete || previous.Incomplete
 	current.PRSections = previous.PRSections
 	current.IssueSections = previous.IssueSections
 	current.FetchedAt = previous.FetchedAt
+	current.HostIdentities = previous.HostIdentities
 }
 
 func retainMonitorScopeSnapshots(current, previous *monitorFetchResult) {
 	if previous == nil {
 		return
 	}
-	if slices.Equal(current.HostScope, previous.HostScope) {
+	if slices.Equal(current.HostScope, previous.HostScope) && !monitorIdentitiesChanged(previous, current, true) {
 		retainMonitorScopeSnapshot(current, previous)
 	}
 	for repo, pin := range current.Pinned {
@@ -377,7 +386,7 @@ func retainMonitorScopeSnapshots(current, previous *monitorFetchResult) {
 
 func diffMonitorFetchScopes(previous, current *monitorFetchResult) []monitorChange {
 	var changes []monitorChange
-	if slices.Equal(previous.HostScope, current.HostScope) {
+	if slices.Equal(previous.HostScope, current.HostScope) && monitorIdentitiesEqual(previous, current, true) {
 		changes = diffMonitorScope(previous, current)
 	}
 	for repo, pin := range current.Pinned {
@@ -387,7 +396,7 @@ func diffMonitorFetchScopes(previous, current *monitorFetchResult) []monitorChan
 }
 
 func diffMonitorScope(previous, current *monitorFetchResult) []monitorChange {
-	if previous == nil || current == nil || previous.Incomplete || current.Incomplete {
+	if previous == nil || current == nil || previous.Incomplete || current.Incomplete || !monitorIdentitiesEqual(previous, current, false) {
 		return nil
 	}
 	if previous.Error != "" && previous.FetchedAt.IsZero() {

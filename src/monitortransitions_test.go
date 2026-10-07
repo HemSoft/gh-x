@@ -11,7 +11,7 @@ import (
 
 func TestMonitorUpdateTransitions(t *testing.T) {
 	now := time.Date(2026, 8, 24, 9, 30, 0, 0, time.UTC)
-	success := newMonitorFetchResult(monitorTestConfig(), now)
+	success := newMonitorTestFetchResult(monitorTestConfig(), now)
 
 	tests := []struct {
 		name  string
