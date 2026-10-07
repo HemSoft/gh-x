@@ -326,6 +326,9 @@ func monitorRepositoryHosts(repos []string) []string {
 }
 
 func monitorPinnedScope(pins map[string]*monitorFetchResult, repo string) *monitorFetchResult {
+	if pin, ok := pins[repo]; ok {
+		return pin
+	}
 	for name, pin := range pins {
 		if strings.EqualFold(name, repo) {
 			return pin

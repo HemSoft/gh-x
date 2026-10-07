@@ -791,3 +791,17 @@ func TestMonitorAlreadyCanceledAPICallDoesNotDispatch(t *testing.T) {
 		}
 	}
 }
+
+func TestMonitorDuplicateCaseVariantPinsSelectTheirExactSnapshot(t *testing.T) {
+	lower := &monitorFetchResult{Error: "lowercase pin failed"}
+	upper := &monitorFetchResult{Error: "uppercase pin failed"}
+	pins := map[string]*monitorFetchResult{"owner/repo": lower, "OWNER/REPO": upper}
+	for range 20 {
+		if monitorPinnedScope(pins, "owner/repo") != lower || monitorPinnedScope(pins, "OWNER/REPO") != upper {
+			t.Fatal("case-variant duplicate selected another shortcut's independent result")
+		}
+	}
+	if monitorPinnedScope(map[string]*monitorFetchResult{"OWNER/REPO": upper}, "owner/repo") != upper {
+		t.Fatal("case-insensitive fallback lost a compatible snapshot")
+	}
+}
