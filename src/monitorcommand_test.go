@@ -410,3 +410,43 @@ func TestInitSchedulesInitialFetch(t *testing.T) {
 		t.Fatal("Init must fetch")
 	}
 }
+
+func TestBootstrapMonitorDistinguishesFirstLaunchAndSavedSelection(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		saved bool
+		want  int
+	}{
+		{"first launch", false, 0}, {"saved custom section", true, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			isolateMonitorHome(t)
+			cfg := monitorTestConfig()
+			cfg.PRSections = []monitorSection{{Title: "All open", Filters: "is:open"}, {Title: "Needs review", Filters: "is:open review:required"}}
+			configPath, err := monitorConfigPath()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = saveMonitorConfig(configPath, cfg); err != nil {
+				t.Fatal(err)
+			}
+			if test.saved {
+				statePath, stateErr := monitorStatePath()
+				if stateErr != nil {
+					t.Fatal(stateErr)
+				}
+				if err = saveMonitorState(statePath, monitorSessionState{SubTab: 1}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			model, err := bootstrapMonitorModel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer model.cancelRefresh()
+			if model.subTab != test.want {
+				t.Fatalf("section=%d want %d", model.subTab, test.want)
+			}
+		})
+	}
+}
