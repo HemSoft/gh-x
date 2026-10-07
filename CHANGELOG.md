@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-07
+
+- ci: add read-only migration credential checks (#202)
+- docs: record v0.18.0 release (#200)
+
 ## [0.18.0] - 2026-10-07
 
 - feat: rewrite monitor with a responsive color dashboard (#198) (#199)
@@ -311,7 +316,8 @@ the published releases above.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/HemSoft/gh-x/releases/tag/v0.18.1
 [0.18.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.18.0
 [0.17.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.17.0
 [0.16.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.16.0
