@@ -234,3 +234,54 @@ func TestMonitorActionErrorOverridesRetainedRefreshError(t *testing.T) {
 		t.Fatal("successful refresh did not clear error provenance")
 	}
 }
+
+func TestMonitorPinAccountObservationInvalidatesFailedSiblingAndGlobalCaches(t *testing.T) {
+	for _, viewer := range []string{"bob", "alice", ""} {
+		t.Run("pin-viewer-"+viewer, func(t *testing.T) {
+			cfg := defaultMonitorConfig("owner/pinned")
+			cfg.Repos = append(cfg.Repos, "owner/sibling", "ghe.example.com/corp/repo")
+			old := identitySnapshot(cfg, "alice", "user:alice")
+			old.Pinned = make(map[string]*monitorFetchResult)
+			for _, repo := range cfg.Repos {
+				pinCfg := defaultMonitorConfig(repo)
+				pin := newMonitorTestFetchResult(pinCfg, time.Now())
+				for host := range pin.HostIdentities {
+					pin.HostIdentities[host] = monitorHostIdentity{Viewer: "alice"}
+				}
+				pin.PRSections[2].Rows = []monitorRow{monitorRowForTest(repo, 1, "cached")}
+				old.Pinned[repo] = pin
+			}
+			current := unavailableMonitorScope(cfg, errors.New("discovery unavailable"))
+			current.Pinned = make(map[string]*monitorFetchResult)
+			for _, repo := range cfg.Repos {
+				current.Pinned[repo] = unavailableMonitorScope(defaultMonitorConfig(repo), errors.New("pin unavailable"))
+			}
+			if viewer != "" {
+				current.Pinned[cfg.Repos[0]] = identitySnapshot(defaultMonitorConfig(cfg.Repos[0]), viewer)
+				current.Pinned[cfg.Repos[0]].PRSections = old.Pinned[cfg.Repos[0]].PRSections
+			}
+			m := newMonitorModel(cfg, "", "", monitorSessionState{})
+			m.data = old
+			updated, _ := m.handleFetched(monitorFetchedMsg{result: current})
+			actual := updated.(monitorModel)
+			rootRows := len(actual.data.PRSections[2].Rows)
+			siblingRows := len(actual.data.Pinned[cfg.Repos[1]].PRSections[2].Rows)
+			wantCached := 1
+			if viewer == "bob" {
+				wantCached = 0
+			}
+			if rootRows != wantCached || siblingRows != wantCached || len(actual.data.Pinned[cfg.Repos[2]].PRSections[2].Rows) != 1 {
+				t.Fatalf("wrong cache invalidation: global=%d sibling=%d other=%d", rootRows, siblingRows, len(actual.data.Pinned[cfg.Repos[2]].PRSections[2].Rows))
+			}
+			if len(actual.lastChanges) != 0 {
+				t.Fatalf("account observation invented events: %+v", actual.lastChanges)
+			}
+			if viewer == "bob" && actual.data.HostIdentities[defaultGitHubHost].Viewer == "bob" {
+				t.Fatal("pin observation relabeled global rows")
+			}
+			if viewer != "" && actual.data.Pinned[cfg.Repos[0]].HostIdentities[defaultGitHubHost].Viewer != viewer {
+				t.Fatal("pin lost its own row actor")
+			}
+		})
+	}
+}

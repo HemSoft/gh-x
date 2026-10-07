@@ -119,36 +119,29 @@ func (m *monitorModel) invalidateMonitorOwnerSnapshot(current *monitorFetchResul
 	if m.data == nil || current == nil {
 		return
 	}
+	observed := monitorAccountObservations(current)
 	pins := m.data.Pinned
 	for repo, pin := range pins {
-		latest := monitorPinnedScope(current.Pinned, repo)
-		latest = monitorPinRefreshIdentity(latest, current)
-		if monitorIdentitiesChanged(pin, latest, false) {
+		if monitorIdentitiesChanged(pin, observed, false) {
 			delete(pins, repo)
 		}
 	}
-	if monitorIdentitiesChanged(m.data, current, true) {
+	if monitorIdentitiesChanged(m.data, current, true) || monitorIdentitiesChanged(m.data, observed, false) {
 		m.data = unavailableMonitorScope(m.cfg, errors.New("account or organization scope changed; refresh pending"))
 		m.clearMonitorSnapshotChanges()
 	}
 	m.data.Pinned = pins
 }
 
-func monitorPinRefreshIdentity(pin, global *monitorFetchResult) *monitorFetchResult {
-	if pin == nil {
-		return global
+// Combine account observations only for cache invalidation. Each scope keeps
+// the identity of its own rows; a pin never supplies a global row identity.
+func monitorAccountObservations(current *monitorFetchResult) *monitorFetchResult {
+	observed := &monitorFetchResult{HostIdentities: make(map[string]monitorHostIdentity)}
+	mergeMonitorIdentities(observed, current)
+	for _, pin := range current.Pinned {
+		mergeMonitorIdentities(observed, pin)
 	}
-	if pin.Error == "" {
-		return pin
-	}
-	identity := &monitorFetchResult{HostIdentities: make(map[string]monitorHostIdentity)}
-	mergeMonitorIdentities(identity, global)
-	for host, actor := range pin.HostIdentities {
-		if actor.Viewer != "" {
-			identity.HostIdentities[host] = actor
-		}
-	}
-	return identity
+	return observed
 }
 
 func monitorHostIdentitiesEqual(old, current monitorHostIdentity, owners bool) bool {
