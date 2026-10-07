@@ -76,7 +76,7 @@ func monitorPlainCell(text string) string {
 
 func monitorSafeText(text string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) && !unicode.IsSpace(r) {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
 			return -1
 		}
 		return r

@@ -412,9 +412,9 @@ func TestMonitorHelpAndLongErrorKeepEssentialActions(t *testing.T) {
 }
 
 func TestMonitorFetchedTextCannotMoveCursorOrRingBell(t *testing.T) {
-	row := monitorRow{Number: 1, Title: "Safe\aTitle", Body: "first\r\nsecond\rthird\tcolumn\a\x1b[2J"}
+	row := monitorRow{Number: 1, Title: "Safe\aTitle", Body: "first\r\nsecond\rthird\tcolumn\a\v\f\u0085\x1b[2J"}
 	text := renderMonitorDetail(row, 80, 12, false, 0, newMonitorTheme(true, true))
-	if strings.ContainsAny(text, "\r\t\a") {
+	if strings.ContainsAny(text, "\r\t\a\v\f\u0085") {
 		t.Fatalf("terminal control survived: %q", text)
 	}
 	for _, word := range []string{"SafeTitle", "first", "second", "third    column"} {
