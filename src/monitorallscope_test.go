@@ -540,8 +540,8 @@ func TestMonitorSearchFailuresAreIncompleteWithoutSuppressingHierarchyChanges(t 
 		{"search connection malformed", []any{"pr0", "nodes"}, map[string]json.RawMessage{"pr0": json.RawMessage(`{`)}, true},
 		{"hierarchy cell unavailable", []any{"is0", "nodes", float64(0), "parent"}, map[string]json.RawMessage{"is0": json.RawMessage(`{"nodes":[]}`)}, false},
 		{"access probe", []any{"acc0"}, nil, false},
-		{"no path", nil, nil, false},
-		{"nonstring path", []any{1}, nil, false},
+		{"no path", nil, nil, true},
+		{"nonstring path", []any{1}, nil, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -875,5 +875,87 @@ func TestMonitorNullSearchNodesDoNotBecomeRowsOrInventChanges(t *testing.T) {
 	complete.PRSections[0].Rows = []monitorRow{{Repo: "owner/pinned", Number: 1, Kind: monitorKindPR}, {Repo: "owner/pinned", Number: 2, Kind: monitorKindPR}}
 	if changes := diffMonitorScope(partial, complete); len(changes) != 0 {
 		t.Fatalf("null-node recovery invented change notifications: %v", changes)
+	}
+}
+
+func TestMonitorStructuralAndFieldFailuresSuppressFabricatedEvents(t *testing.T) {
+	cases := []struct {
+		name           string
+		connection     any
+		path           []any
+		wantIncomplete bool
+	}{
+		{"pathless null connection", nil, nil, true},
+		{"error-free null node", map[string]any{"nodes": []any{nil}}, nil, true},
+		{"review field error", map[string]any{"nodes": []any{map[string]any{"number": 1, "repository": map[string]string{"nameWithOwner": "owner/pinned"}}}}, []any{"pr0", "nodes", 0, "reviewDecision"}, true},
+		{"issue title error", map[string]any{"nodes": []any{map[string]any{"number": 1, "repository": map[string]string{"nameWithOwner": "owner/pinned"}}}}, []any{"is0", "nodes", 0, "title"}, true},
+		{"optional hierarchy error", map[string]any{"nodes": []any{map[string]any{"number": 1, "repository": map[string]string{"nameWithOwner": "owner/pinned"}}}}, []any{"is0", "nodes", 0, "parent"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultMonitorConfig("owner/pinned")
+			data := map[string]any{}
+			for i := range cfg.PRSections {
+				data[fmt.Sprintf("pr%d", i)] = map[string]any{"nodes": []any{}}
+			}
+			for i := range cfg.IssueSections {
+				data[fmt.Sprintf("is%d", i)] = map[string]any{"nodes": []any{}}
+			}
+			alias := "pr0"
+			if len(tc.path) > 0 {
+				alias = tc.path[0].(string)
+			}
+			data[alias] = tc.connection
+			response := map[string]any{"data": data}
+			if tc.name != "error-free null node" {
+				response["errors"] = []any{map[string]any{"message": "Synthetic unavailable field", "path": tc.path}}
+			}
+			encoded, err := json.Marshal(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := parseMonitorHostResponse(encoded, cfg, nil, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if current.Incomplete != tc.wantIncomplete {
+				t.Fatalf("incomplete=%v, want %v", current.Incomplete, tc.wantIncomplete)
+			}
+			if tc.wantIncomplete {
+				previous := newMonitorFetchResult(cfg, time.Now())
+				previous.PRSections[0].Rows = []monitorRow{{Repo: "owner/pinned", Number: 1, Kind: monitorKindPR, Review: "approved"}}
+				if changes := diffMonitorScope(previous, current); len(changes) != 0 {
+					t.Fatalf("failed API fields invented changes: %+v", changes)
+				}
+				if changes := diffMonitorScope(current, previous); len(changes) != 0 {
+					t.Fatalf("API recovery invented changes: %+v", changes)
+				}
+			}
+		})
+	}
+}
+
+func TestMonitorMissingRequestedAliasSuppressesChangesWithoutErrors(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	current, err := parseMonitorHostResponse([]byte(`{"data":{"rateLimit":{"remaining":4999}}}`), cfg, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current.Incomplete {
+		t.Fatal("missing requested search aliases were treated as complete")
+	}
+}
+
+func TestMonitorUnknownHierarchyDoesNotHideOtherChanges(t *testing.T) {
+	before := monitorRow{Kind: monitorKindIssue, Repo: "owner/pinned", Number: 1, State: "open", Parent: "#3", SubIssues: "1/2"}
+	after := before
+	after.State, after.Parent, after.SubIssues = "closed", "?", "?"
+	fields := monitorFieldChanges(before, after)
+	if len(fields) != 1 || fields[0] != "State open -> closed" {
+		t.Fatalf("unknown hierarchy produced fake changes or hid a real one: %v", fields)
+	}
+	after.State = before.State
+	if change := diffMonitorRow(after, before); change != nil {
+		t.Fatalf("hierarchy recovery invented changes: %v", change)
 	}
 }

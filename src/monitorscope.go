@@ -410,16 +410,37 @@ func uniqueMonitorWarnings(warnings []string) []string {
 	return unique
 }
 
+func monitorConfiguredSearchIncomplete(data map[string]json.RawMessage, cfg *monitorConfig) bool {
+	for index := range cfg.PRSections {
+		if monitorSearchConnectionUnavailable(data[fmt.Sprintf("pr%d", index)]) {
+			return true
+		}
+	}
+	for index := range cfg.IssueSections {
+		if monitorSearchConnectionUnavailable(data[fmt.Sprintf("is%d", index)]) {
+			return true
+		}
+	}
+	return false
+}
+
 func monitorSearchAliasesIncomplete(data map[string]json.RawMessage, errors []monitorGraphQLError) bool {
 	for _, entry := range errors {
 		if len(entry.Path) == 0 {
-			continue
+			return true
 		}
 		alias, ok := entry.Path[0].(string)
-		if !ok || (!strings.HasPrefix(alias, "pr") && !strings.HasPrefix(alias, "is")) {
+		if !ok {
+			return true
+		}
+		if !strings.HasPrefix(alias, "pr") && !strings.HasPrefix(alias, "is") {
 			continue
 		}
 		if monitorSearchConnectionUnavailable(data[alias]) {
+			return true
+		}
+		_, _, field, hierarchy := parseMonitorHierarchyErrorPath(entry.Path)
+		if !hierarchy || (field != "parent" && field != "subIssuesSummary") {
 			return true
 		}
 	}

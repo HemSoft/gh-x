@@ -463,7 +463,7 @@ func parseMonitorHostResponse(data []byte, cfg *monitorConfig, repositories []mo
 
 	result := newMonitorFetchResult(cfg, now)
 	result.Warnings = monitorWarnings(envelope.Errors)
-	result.Incomplete = monitorSearchAliasesIncomplete(dataMap, envelope.Errors)
+	result.Incomplete = monitorConfiguredSearchIncomplete(dataMap, cfg) || monitorSearchAliasesIncomplete(dataMap, envelope.Errors)
 	result.Accessible = decodeAccessProbes(dataMap, repositories)
 	if payload := decodeRateLimit(dataMap["rateLimit"]); payload != nil {
 		result.RateRemaining = payload.Remaining
