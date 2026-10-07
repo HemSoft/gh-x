@@ -111,7 +111,7 @@ func (m monitorModel) tabTotal(tab int) int {
 		return -1
 	}
 	data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos)
-	if data != nil && data.Error != "" && data.FetchedAt.IsZero() {
+	if (data == nil && m.repoIdx > 0) || (data != nil && data.Error != "" && data.FetchedAt.IsZero()) {
 		return -1
 	}
 	return monitorSectionTotal(data, tab, index)
@@ -261,7 +261,7 @@ func (m monitorModel) renderSubTabRow() string {
 
 func (m monitorModel) listLines() string {
 	rows := m.visibleRows()
-	if m.data == nil {
+	if monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos) == nil {
 		return m.theme.Muted.Render(centeredDim("Loading GitHub data…", m.listWidth(), maxInt(m.layout.ListHeight, 1)))
 	}
 	if len(rows) == 0 {
@@ -339,7 +339,8 @@ func (m monitorModel) keyInScope(key string) bool {
 	if m.repoIdx-1 >= len(repos) {
 		return false
 	}
-	return strings.HasPrefix(key, repos[m.repoIdx-1]+"#")
+	repo, _, _ := strings.Cut(key, "#")
+	return strings.EqualFold(repo, repos[m.repoIdx-1])
 }
 
 // detailLines renders the detail region: a separator rule spanning the full

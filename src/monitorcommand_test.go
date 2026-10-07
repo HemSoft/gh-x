@@ -360,7 +360,7 @@ func TestRenderSettingsScreenContent(t *testing.T) {
 	m := sizedModel()
 	m.settings.open(m.cfg)
 	screen := m.renderSettingsScreen()
-	for _, want := range []string{"Settings", "Repos", "interval"} {
+	for _, want := range []string{"Settings", "Sidebar repos", "interval"} {
 		if !strings.Contains(screen, want) {
 			t.Fatalf("settings screen missing %q: %s", want, screen)
 		}

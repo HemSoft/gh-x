@@ -101,9 +101,10 @@ func resolveMonitorAllHostQueries(ctx context.Context, request monitorHostQuery,
 	requests := make([]monitorHostQuery, 0)
 	for first := 0; first < len(owners); first += monitorOwnerBatchSize {
 		batch := request
+		batch.Repositories = nil
 		qualifiers := strings.Join(owners[first:minInt(first+monitorOwnerBatchSize, len(owners))], " ")
-		batch.Query = buildMonitorGraphQLQueryWithScope(cfg, request.Repositories, true, qualifiers)
-		batch.FallbackQuery = buildMonitorGraphQLQueryWithScope(cfg, request.Repositories, false, qualifiers)
+		batch.Query = buildMonitorGraphQLQueryWithScope(cfg, nil, true, qualifiers)
+		batch.FallbackQuery = buildMonitorGraphQLQueryWithScope(cfg, nil, false, qualifiers)
 		requests = append(requests, batch)
 	}
 	return requests, nil
@@ -115,7 +116,7 @@ func fetchMonitorAllHost(ctx context.Context, request monitorHostQuery, cfg *mon
 		return nil, err
 	}
 	result, err := executeMonitorQueries(ctx, cfg, requests, now, fetchMonitorHost)
-	if err == nil && len(request.Repositories) == 0 {
+	if err == nil {
 		qualifyMonitorResultRows(result, request.Host)
 	}
 	return result, err
@@ -189,6 +190,7 @@ func combineMonitorScopes(cfg *monitorConfig, global monitorHostFetchOutcome, pi
 		result.Pinned[repo] = pin.Result
 		mergeMonitorScopeMetadata(result, pin.Result)
 	}
+	result.Warnings = uniqueMonitorWarnings(result.Warnings)
 	return result, nil
 }
 
@@ -238,17 +240,48 @@ func retainMonitorScopeSnapshots(current, previous *monitorFetchResult) {
 }
 
 func diffMonitorFetchScopes(previous, current *monitorFetchResult) []monitorChange {
-	changes := diffMonitorSections(previous.PRSections, current.PRSections)
-	changes = append(changes, diffMonitorSections(previous.IssueSections, current.IssueSections)...)
+	changes := diffMonitorScope(previous, current)
 	for repo, pin := range current.Pinned {
-		before := previous.Pinned[repo]
-		if before == nil {
-			continue
-		}
-		changes = append(changes, diffMonitorSections(before.PRSections, pin.PRSections)...)
-		changes = append(changes, diffMonitorSections(before.IssueSections, pin.IssueSections)...)
+		changes = append(changes, diffMonitorScope(previous.Pinned[repo], pin)...)
 	}
 	return uniqueMonitorScopeChanges(changes)
+}
+
+func diffMonitorScope(previous, current *monitorFetchResult) []monitorChange {
+	if previous == nil || current == nil || previous.Incomplete || current.Incomplete {
+		return nil
+	}
+	if previous.Error != "" && previous.FetchedAt.IsZero() {
+		return nil
+	}
+	changes := diffMonitorSections(previous.PRSections, current.PRSections)
+	return append(changes, diffMonitorSections(previous.IssueSections, current.IssueSections)...)
+}
+
+func uniqueMonitorWarnings(warnings []string) []string {
+	unique := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		if !slices.Contains(unique, warning) {
+			unique = append(unique, warning)
+		}
+	}
+	return unique
+}
+
+func monitorSearchAliasesIncomplete(data map[string]json.RawMessage, errors []monitorGraphQLError) bool {
+	for _, entry := range errors {
+		if len(entry.Path) == 0 {
+			continue
+		}
+		alias, ok := entry.Path[0].(string)
+		if !ok || (!strings.HasPrefix(alias, "pr") && !strings.HasPrefix(alias, "is")) {
+			continue
+		}
+		if raw := data[alias]; len(raw) == 0 || string(raw) == "null" {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueMonitorScopeChanges(changes []monitorChange) []monitorChange {

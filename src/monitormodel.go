@@ -176,7 +176,7 @@ func monitorDataForScope(data *monitorFetchResult, repoIdx int, repos []string) 
 func filterMonitorRowsByRepo(rows []monitorRow, nameWithOwner string) []monitorRow {
 	filtered := make([]monitorRow, 0, len(rows))
 	for _, row := range rows {
-		if row.Repo == nameWithOwner {
+		if strings.EqualFold(row.Repo, nameWithOwner) {
 			filtered = append(filtered, row)
 		}
 	}

@@ -373,3 +373,94 @@ func TestMonitorAllOwnerSearchBatchesLargeOrganizationMembership(t *testing.T) {
 		t.Fatalf("lost account/organization scopes: %v", scopes)
 	}
 }
+
+func TestMonitorNewPinIsLoadingUntilItsFirstFetch(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	model := newMonitorModel(cfg, "", "", monitorSessionState{SubTab: 2, RepoIndex: 1})
+	defer model.cancelRefresh()
+	model.layout = computeMonitorLayout(120, 40)
+	model.data = newMonitorFetchResult(cfg, time.Now())
+	model.data.Pinned = map[string]*monitorFetchResult{}
+	if !strings.Contains(model.listLines(), "Loading GitHub data") || model.tabTotal(monitorTabPRs) != -1 {
+		t.Fatal("new shortcut looked successfully empty before its fetch")
+	}
+}
+
+func TestMonitorShortcutNamesAreCaseInsensitive(t *testing.T) {
+	cfg := defaultMonitorConfig("hemsoft/gh-x")
+	model := newMonitorModel(cfg, "", "", monitorSessionState{SubTab: 2, RepoIndex: 1})
+	defer model.cancelRefresh()
+	result := newMonitorFetchResult(cfg, time.Now())
+	pin := newMonitorFetchResult(cfg, time.Now())
+	pin.PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Repo: "HemSoft/gh-x", Kind: monitorKindPR, Number: 1}}}
+	result.Pinned = map[string]*monitorFetchResult{"hemsoft/gh-x": pin}
+	model.data = result
+	if len(model.visibleRows()) != 1 || !model.keyInScope("HemSoft/gh-x#pr#1") || countMonitorRowsByRepo(result, cfg.Repos)["hemsoft/gh-x"].PRs != 1 {
+		t.Fatal("canonical API case hid a configured shortcut row")
+	}
+}
+
+func TestMonitorScopeRecoveryDoesNotInventChanges(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	complete := newMonitorFetchResult(cfg, time.Now())
+	complete.PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Repo: "owner/pinned", Kind: monitorKindPR, Number: 1}}}
+	unavailable := unavailableMonitorScope(cfg, errBoom())
+	if changes := diffMonitorScope(unavailable, complete); len(changes) != 0 {
+		t.Fatalf("initial recovery invented additions: %+v", changes)
+	}
+	complete.Incomplete = true
+	if changes := diffMonitorScope(complete, newMonitorFetchResult(cfg, time.Now())); len(changes) != 0 {
+		t.Fatalf("partial snapshot recovery invented removals: %+v", changes)
+	}
+	complete.Incomplete = false
+	if changes := diffMonitorScope(complete, newMonitorFetchResult(cfg, time.Now())); len(changes) != 1 {
+		t.Fatalf("complete successful snapshots lost real removals: %+v", changes)
+	}
+	previous := newMonitorFetchResult(cfg, time.Now())
+	previous.Pinned = map[string]*monitorFetchResult{"owner/pinned": unavailable}
+	current := newMonitorFetchResult(cfg, time.Now())
+	current.Pinned = map[string]*monitorFetchResult{"owner/pinned": complete}
+	if changes := diffMonitorFetchScopes(previous, current); len(changes) != 0 {
+		t.Fatalf("initial pin recovery invented additions: %+v", changes)
+	}
+}
+
+func TestMonitorSearchFailuresAreIncompleteWithoutSuppressingHierarchyChanges(t *testing.T) {
+	tests := []struct {
+		name string
+		path []any
+		data map[string]json.RawMessage
+		want bool
+	}{
+		{"search alias missing", []any{"pr0"}, nil, true},
+		{"search alias null", []any{"is0"}, map[string]json.RawMessage{"is0": json.RawMessage("null")}, true},
+		{"hierarchy cell unavailable", []any{"is0", "nodes", float64(0), "parent"}, map[string]json.RawMessage{"is0": json.RawMessage(`{"nodes":[]}`)}, false},
+		{"access probe", []any{"acc0"}, nil, false},
+		{"no path", nil, nil, false},
+		{"nonstring path", []any{1}, nil, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := monitorSearchAliasesIncomplete(tc.data, []monitorGraphQLError{{Path: tc.path}}); got != tc.want {
+				t.Fatalf("incomplete=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMonitorScopeWarningsAndChangesAreDeduplicated(t *testing.T) {
+	warning := "ghe.example.com: scope unavailable"
+	if got := uniqueMonitorWarnings([]string{warning, warning}); len(got) != 1 {
+		t.Fatalf("duplicate warnings: %v", got)
+	}
+	change := monitorChange{Key: "owner/repo#pr#1", Kind: monitorChangeAdded}
+	if got := uniqueMonitorScopeChanges([]monitorChange{change, change}); len(got) != 1 {
+		t.Fatalf("duplicate scope changes: %v", got)
+	}
+	dst := &monitorFetchResult{Accessible: map[string]bool{}}
+	src := &monitorFetchResult{Warnings: []string{warning}, Incomplete: true}
+	mergeMonitorFetchResult(dst, src, true, "ghe.example.com")
+	if len(dst.Warnings) != 1 || dst.Warnings[0] != warning || !dst.Incomplete {
+		t.Fatalf("nested scope warning/partial marker: %+v", dst)
+	}
+}

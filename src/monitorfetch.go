@@ -24,6 +24,7 @@ type monitorSectionData struct {
 type monitorFetchResult struct {
 	// Pinned retains per-repository results independently of the global cap.
 	Error         string
+	Incomplete    bool
 	Pinned        map[string]*monitorFetchResult
 	FetchedAt     time.Time
 	RateRemaining int
@@ -261,14 +262,7 @@ func executeMonitorQueries(ctx context.Context, cfg *monitorConfig, queries []mo
 	slots := make(chan struct{}, monitorQueryConcurrency)
 	for index, request := range queries {
 		go func() {
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			case <-ctx.Done():
-				outcomeChannel <- monitorHostFetchOutcome{Index: index, Err: githubContextError(ctx.Err())}
-				return
-			}
-			partial, fetchErr := fetch(ctx, request, cfg, now)
+			partial, fetchErr := executeMonitorQueryWithSlot(ctx, slots, request, cfg, now, fetch)
 			outcomeChannel <- monitorHostFetchOutcome{Index: index, Result: partial, Err: fetchErr}
 		}()
 	}
@@ -296,10 +290,21 @@ func executeMonitorQueries(ctx context.Context, cfg *monitorConfig, queries []mo
 		}
 		return nil, fmt.Errorf("monitor refresh failed for all configured hosts: %s", strings.Join(failedHosts, "; "))
 	}
-	combined.Warnings = append(combined.Warnings, failedHosts...)
+	combined.Incomplete = combined.Incomplete || len(failedHosts) > 0
+	combined.Warnings = uniqueMonitorWarnings(append(combined.Warnings, failedHosts...))
 	sortAllMonitorSections(combined)
 	limitMonitorSectionRows(combined, cfg)
 	return combined, nil
+}
+
+func executeMonitorQueryWithSlot(ctx context.Context, slots chan struct{}, request monitorHostQuery, cfg *monitorConfig, now time.Time, fetch monitorHostFetcher) (*monitorFetchResult, error) {
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	case <-ctx.Done():
+		return nil, githubContextError(ctx.Err())
+	}
+	return fetch(ctx, request, cfg, now)
 }
 
 func fetchMonitorHost(ctx context.Context, request monitorHostQuery, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
@@ -374,6 +379,7 @@ func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResul
 }
 
 func mergeMonitorFetchResult(dst, src *monitorFetchResult, qualifyWarnings bool, host string) {
+	dst.Incomplete = dst.Incomplete || src.Incomplete
 	if !src.RateResetAt.IsZero() && (dst.RateResetAt.IsZero() || src.RateRemaining < dst.RateRemaining) {
 		dst.RateRemaining = src.RateRemaining
 		dst.RateResetAt = src.RateResetAt
@@ -390,11 +396,15 @@ func mergeMonitorFetchResult(dst, src *monitorFetchResult, qualifyWarnings bool,
 		dst.IssueSections[i].Rows = append(dst.IssueSections[i].Rows, src.IssueSections[i].Rows...)
 	}
 	for _, warning := range src.Warnings {
-		if qualifyWarnings {
-			warning = host + ": " + warning
-		}
-		dst.Warnings = append(dst.Warnings, warning)
+		dst.Warnings = append(dst.Warnings, qualifiedMonitorWarning(warning, host, qualifyWarnings))
 	}
+}
+
+func qualifiedMonitorWarning(warning, host string, qualify bool) string {
+	if qualify && !strings.HasPrefix(warning, host+": ") {
+		return host + ": " + warning
+	}
+	return warning
 }
 
 // hasUsableGraphQLData reports whether a response body carries a non-null
@@ -440,6 +450,7 @@ func parseMonitorHostResponse(data []byte, cfg *monitorConfig, repositories []mo
 
 	result := newMonitorFetchResult(cfg, now)
 	result.Warnings = monitorWarnings(envelope.Errors)
+	result.Incomplete = monitorSearchAliasesIncomplete(dataMap, envelope.Errors)
 	result.Accessible = decodeAccessProbes(dataMap, repositories)
 	if payload := decodeRateLimit(dataMap["rateLimit"]); payload != nil {
 		result.RateRemaining = payload.Remaining

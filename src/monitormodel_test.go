@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,12 +220,13 @@ func TestQuitCancelsInFlightRefresh(t *testing.T) {
 	canceled := make(chan struct{})
 	allowStop := make(chan struct{})
 	stopped := make(chan struct{})
+	var startedOnce, canceledOnce, stoppedOnce sync.Once
 	monitorGHExecFunc = func(ctx context.Context, _ ...string) (bytes.Buffer, bytes.Buffer, error) {
-		close(started)
+		startedOnce.Do(func() { close(started) })
 		<-ctx.Done()
-		close(canceled)
+		canceledOnce.Do(func() { close(canceled) })
 		<-allowStop
-		close(stopped)
+		stoppedOnce.Do(func() { close(stopped) })
 		return bytes.Buffer{}, bytes.Buffer{}, githubContextError(ctx.Err())
 	}
 	model := newTestMonitorModel()
