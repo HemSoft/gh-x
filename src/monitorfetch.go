@@ -22,6 +22,9 @@ type monitorSectionData struct {
 
 // monitorFetchResult is the complete payload for one refresh cycle.
 type monitorFetchResult struct {
+	// Pinned retains per-repository results independently of the global cap.
+	Error         string
+	Pinned        map[string]*monitorFetchResult
 	FetchedAt     time.Time
 	RateRemaining int
 	RateResetAt   time.Time
@@ -141,7 +144,7 @@ func buildMonitorHostQueries(cfg *monitorConfig) ([]monitorHostQuery, error) {
 		return nil, err
 	}
 	if len(repositories) == 0 {
-		return nil, fmt.Errorf("no repos configured")
+		return []monitorHostQuery{{Host: legacyMonitorHost()}}, nil
 	}
 
 	groups := groupMonitorRepositories(repositories)
@@ -179,8 +182,10 @@ func buildMonitorGraphQLQueryForRepos(cfg *monitorConfig, repositories []monitor
 }
 
 func buildMonitorGraphQLQuery(cfg *monitorConfig, repositories []monitorRepository, includeHierarchy bool) string {
-	repoQualifiers := buildMonitorRepoQualifiers(repositories)
+	return buildMonitorGraphQLQueryWithScope(cfg, repositories, includeHierarchy, buildMonitorRepoQualifiers(repositories))
+}
 
+func buildMonitorGraphQLQueryWithScope(cfg *monitorConfig, repositories []monitorRepository, includeHierarchy bool, repoQualifiers string) string {
 	var sb strings.Builder
 	sb.WriteString("{\n")
 	sb.WriteString("  rateLimit { remaining resetAt }\n")
@@ -242,14 +247,28 @@ func executeMonitorFetch(ctx context.Context, cfg *monitorConfig, now time.Time)
 	if err != nil {
 		return nil, err
 	}
+	return executeMonitorQueries(ctx, cfg, queries, now, fetchMonitorHost)
+}
+
+type monitorHostFetcher func(context.Context, monitorHostQuery, *monitorConfig, time.Time) (*monitorFetchResult, error)
+
+func executeMonitorQueries(ctx context.Context, cfg *monitorConfig, queries []monitorHostQuery, now time.Time, fetch monitorHostFetcher) (*monitorFetchResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	outcomeChannel := make(chan monitorHostFetchOutcome, len(queries))
+	slots := make(chan struct{}, monitorQueryConcurrency)
 	for index, request := range queries {
 		go func() {
-			partial, fetchErr := fetchMonitorHost(ctx, request, cfg, now)
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				outcomeChannel <- monitorHostFetchOutcome{Index: index, Err: githubContextError(ctx.Err())}
+				return
+			}
+			partial, fetchErr := fetch(ctx, request, cfg, now)
 			outcomeChannel <- monitorHostFetchOutcome{Index: index, Result: partial, Err: fetchErr}
 		}()
 	}

@@ -170,8 +170,8 @@ func defaultMonitorConfig(seedRepo string) *monitorConfig {
 func starterMonitorConfigYAML(cfg *monitorConfig) string {
 	var sb strings.Builder
 	sb.WriteString("# gh x monitor configuration.\n")
-	sb.WriteString("# Sections use GitHub search syntax; configured repos are added\n")
-	sb.WriteString("# automatically, so do not include repo: qualifiers in filters.\n\n")
+	sb.WriteString("# All repos discovers your account and organization repositories.\n")
+	sb.WriteString("# repos lists optional sidebar shortcuts. Sections use GitHub search syntax.\n\n")
 	fmt.Fprintf(&sb, "version: %d\n\n", monitorConfigVersion)
 	sb.WriteString("repos:\n")
 	for _, repo := range cfg.Repos {
@@ -397,9 +397,6 @@ func validateMonitorConfig(cfg *monitorConfig) error {
 }
 
 func validateMonitorRepos(repos []string) error {
-	if len(repos) == 0 {
-		return errors.New("config must list at least one repo under `repos:`")
-	}
 	for _, repo := range repos {
 		if err := validateMonitorRepo(repo); err != nil {
 			return err

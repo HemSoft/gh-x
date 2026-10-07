@@ -113,7 +113,7 @@ func newMonitorFetchCmd(parent context.Context, cfg monitorConfig, state *monito
 		}
 		ctx, cancel := context.WithTimeout(parent, timeout)
 		defer cancel()
-		result, err := executeMonitorFetch(ctx, &cfg, monitorNowFunc())
+		result, err := executeMonitorAllRepoFetch(ctx, &cfg, monitorNowFunc())
 		return monitorFetchedMsg{result: result, err: err, at: monitorNowFunc()}
 	}
 }
@@ -167,10 +167,10 @@ func scheduleMonitorTick(after time.Duration) tea.Cmd {
 // against previous rows per section for change tracking.
 func (m *monitorModel) applyFetchResult(result *monitorFetchResult) {
 	previous := m.selectedRowKey()
+	retainMonitorScopeSnapshots(result, m.data)
 	var changes []monitorChange
 	if m.data != nil {
-		changes = append(changes, diffMonitorSections(m.data.PRSections, result.PRSections)...)
-		changes = append(changes, diffMonitorSections(m.data.IssueSections, result.IssueSections)...)
+		changes = diffMonitorFetchScopes(m.data, result)
 	}
 	m.data = result
 	m.lastChanges = changes

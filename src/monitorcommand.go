@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -16,14 +17,14 @@ const monitorUsage = `Usage:
 Aliases:
   m
 
-Launch a full-terminal dashboard monitoring the repositories configured in
-your gh-x config. Left sidebar lists repos with open counts, top tabs switch
+Launch a full-terminal dashboard monitoring your account and organization
+repositories. Configured repos provide sidebar shortcuts. Top tabs switch
 PRs / Issues, section sub-tabs filter views, and the bottom pane shows details
 of the selected row. Data refreshes on an interval you can change with ` + "`s`" + `.
 
 Flags:
   -h, --help          Show this help
-      --print-query   Print the batched GraphQL query and exit
+      --print-query   Print the account-wide GraphQL query and exit
 
 Examples:
   gh x monitor
@@ -99,14 +100,24 @@ func printMonitorQuery(stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	for i, query := range queries {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultMonitorRefreshTimeout)
+	defer cancel()
+	allQueries := make([]monitorHostQuery, 0)
+	for _, query := range queries {
+		batches, err := resolveMonitorAllHostQueries(ctx, query, cfg)
+		if err != nil {
+			return fmt.Errorf("%s: %w", query.Host, err)
+		}
+		allQueries = append(allQueries, batches...)
+	}
+	for i, query := range allQueries {
 		printedQuery := query.Query
-		if len(queries) > 1 {
+		if len(allQueries) > 1 {
 			fmt.Fprintf(stdout, "# %s\n", query.Host)
 			printedQuery = fmt.Sprintf("query Monitor%d %s", i+1, query.Query)
 		}
 		fmt.Fprintln(stdout, printedQuery)
-		if i < len(queries)-1 {
+		if i < len(allQueries)-1 {
 			fmt.Fprintln(stdout)
 		}
 	}

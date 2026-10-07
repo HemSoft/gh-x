@@ -12,7 +12,7 @@ func (m monitorModel) renderSettingsScreen() string {
 	innerWidth := width - 6
 	lines := []string{
 		m.theme.Accent.Render("Settings"),
-		m.settingsLabel(monitorFieldRepos, "Repositories · one [host/]owner/repo per line"),
+		m.settingsLabel(monitorFieldRepos, "Sidebar repos · one [host/]owner/repo per line"),
 		m.settings.repos.View(),
 		"",
 		m.settingsLabel(monitorFieldLimit, "Rows per section (1-100): ") + m.settings.limit.View(),

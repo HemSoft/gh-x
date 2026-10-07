@@ -1,0 +1,375 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestMonitorAllReposFetchIncludesUnconfiguredOrganizationRepository(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		query := strings.Join(args, " ")
+		if strings.Contains(query, "viewer {") {
+			return *bytes.NewBufferString(`{"data":{"viewer":{"login":"owner","organizations":{"nodes":[{"login":"team"}],"pageInfo":{"hasNextPage":false}}}}}`), bytes.Buffer{}, nil
+		}
+		repo := "owner/pinned"
+		if strings.Contains(query, "user:owner org:team") {
+			repo = "team/unconfigured"
+		}
+		payload := `{"data":{"pr2":{"issueCount":1,"nodes":[{"number":7,"title":"outside configured repos","state":"OPEN","repository":{"nameWithOwner":"` + repo + `"}}]}}}`
+		return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
+	}
+	cfg := defaultMonitorConfig("owner/pinned")
+	model := newMonitorModel(cfg, "", "", monitorSessionState{SubTab: 2})
+	defer model.cancelRefresh()
+	msg := model.initialMonitorCmd()().(monitorFetchedMsg)
+	if msg.err != nil {
+		t.Fatalf("refresh: %v", msg.err)
+	}
+	model.applyFetchResult(msg.result)
+	rows := model.visibleRows()
+	if len(rows) != 1 || rows[0].Repo != "team/unconfigured" {
+		t.Fatalf("All repos excluded the unconfigured organization repository: %+v", rows)
+	}
+}
+
+func TestDiscoverMonitorOwnerScopePaginationAndFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		responses []string
+		execError bool
+		want      string
+		wantError string
+	}{
+		{name: "no organizations", responses: []string{`{"data":{"viewer":{"login":"owner","organizations":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}`}, want: "user:owner"},
+		{name: "all organization pages", responses: []string{
+			`{"data":{"viewer":{"login":"owner","organizations":{"nodes":[{"login":"team"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}`,
+			`{"data":{"viewer":{"login":"owner","organizations":{"nodes":[{"login":"other"}],"pageInfo":{"hasNextPage":false}}}}}`}, want: "user:owner org:team org:other"},
+		{name: "empty organization login", responses: []string{`{"data":{"viewer":{"login":"owner","organizations":{"nodes":[{"login":""}],"pageInfo":{}}}}}`}, want: "user:owner"},
+		{name: "partial scope failure", responses: []string{`{"data":{"viewer":{"login":"owner"}},"errors":[{"message":"organization access denied"}]}`}, wantError: "organization access denied"},
+		{name: "missing account", responses: []string{`{"data":{"viewer":null}}`}, wantError: "no active account"},
+		{name: "blank login", responses: []string{`{"data":{"viewer":{"login":" "}}}`}, wantError: "no active account"},
+		{name: "invalid JSON", responses: []string{`broken`}, wantError: "decode repository scope"},
+		{name: "missing cursor", responses: []string{`{"data":{"viewer":{"login":"owner","organizations":{"pageInfo":{"hasNextPage":true}}}}}`}, wantError: "pagination did not advance"},
+		{name: "repeated cursor", responses: []string{`{"data":{"viewer":{"login":"owner","organizations":{"pageInfo":{"hasNextPage":true,"endCursor":"same"}}}}}`}, wantError: "pagination did not advance"},
+		{name: "account changed", responses: []string{
+			`{"data":{"viewer":{"login":"owner","organizations":{"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}`,
+			`{"data":{"viewer":{"login":"different","organizations":{"pageInfo":{}}}}}`}, wantError: "active account changed"},
+		{name: "CLI failure", execError: true, wantError: "discover repository scope"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			saved := monitorGHExecFunc
+			t.Cleanup(func() { monitorGHExecFunc = saved })
+			calls := 0
+			monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+				if tc.execError {
+					return bytes.Buffer{}, bytes.Buffer{}, errBoom()
+				}
+				if len(args) < 3 || args[2] != "ghe.example.com" {
+					t.Fatalf("scope discovery routed to wrong host: %v", args)
+				}
+				index := minInt(calls, len(tc.responses)-1)
+				calls++
+				if tc.name == "all organization pages" && calls == 2 && !strings.Contains(strings.Join(args, " "), `after: "next"`) {
+					t.Fatalf("next page cursor missing: %v", args)
+				}
+				return *bytes.NewBufferString(tc.responses[index]), bytes.Buffer{}, nil
+			}
+			got, err := discoverMonitorOwnerScope(context.Background(), "ghe.example.com")
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("scope %q, error %v; want %q", got, err, tc.wantError)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("scope %q, error %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestMonitorPinnedResultsRemainAvailableOutsideGlobalRowLimit(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	all := newMonitorFetchResult(cfg, time.Time{})
+	all.PRSections[2] = monitorSectionData{Total: 80, Rows: []monitorRow{{Number: 7, Repo: "team/unconfigured", Title: "global", Kind: monitorKindPR}}}
+	all.Pinned = map[string]*monitorFetchResult{"owner/pinned": newMonitorFetchResult(cfg, time.Time{})}
+	all.Pinned["owner/pinned"].PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Number: 2, Repo: "owner/pinned", Title: "pinned", Kind: monitorKindPR}}}
+	for _, tc := range []struct {
+		name  string
+		index int
+		want  string
+		total int
+	}{{"all repositories", 0, "team/unconfigured", 80}, {"pinned repository", 1, "owner/pinned", 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := computeVisibleRows(all, monitorTabPRs, 2, tc.index, cfg.Repos, "")
+			if len(rows) != 1 || rows[0].Repo != tc.want {
+				t.Fatalf("scope rows: %+v", rows)
+			}
+			model := newMonitorModel(cfg, "", "", monitorSessionState{SubTab: 2, RepoIndex: tc.index})
+			defer model.cancelRefresh()
+			model.data = all
+			if total := model.tabTotal(monitorTabPRs); total != tc.total {
+				t.Fatalf("scope total %d, want %d", total, tc.total)
+			}
+		})
+	}
+	counts := countMonitorRowsByRepo(all, cfg.Repos)
+	if counts["owner/pinned"].PRs != 1 {
+		t.Fatalf("pinned sidebar count lost: %+v", counts)
+	}
+}
+
+func TestMonitorAllScopeDiscoveryFailureKeepsPinsAndReportsGlobalUnavailable(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		if strings.Contains(strings.Join(args, " "), "viewer {") {
+			return bytes.Buffer{}, bytes.Buffer{}, errBoom()
+		}
+		return *bytes.NewBufferString(`{"data":{"pr2":{"issueCount":1,"nodes":[{"number":1,"repository":{"nameWithOwner":"owner/pinned"}}]}}}`), bytes.Buffer{}, nil
+	}
+	result, err := executeMonitorAllRepoFetch(context.Background(), defaultMonitorConfig("owner/pinned"), time.Time{})
+	if err != nil || result == nil || !strings.Contains(result.Error, "discover repository scope") || len(result.PRSections[2].Rows) != 0 || len(result.Pinned["owner/pinned"].PRSections[2].Rows) != 1 {
+		t.Fatalf("global discovery failure must preserve pins without pretending they are global: %+v, %v", result, err)
+	}
+}
+
+func TestMonitorAllReposWorksWithoutConfiguredShortcuts(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	t.Setenv("GH_HOST", "ghe.example.com")
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		query := strings.Join(args, " ")
+		if !strings.Contains(query, "--hostname ghe.example.com") {
+			t.Fatalf("empty config host: %v", args)
+		}
+		if strings.Contains(query, "viewer {") {
+			return *bytes.NewBufferString(`{"data":{"viewer":{"login":"owner","organizations":{"nodes":[],"pageInfo":{}}}}}`), bytes.Buffer{}, nil
+		}
+		if !strings.Contains(query, "user:owner") {
+			t.Fatalf("query missing discovered account: %v", args)
+		}
+		return *bytes.NewBufferString(`{"data":{"pr2":{"issueCount":1,"nodes":[{"number":1,"repository":{"nameWithOwner":"owner/new-repo"}}]}}}`), bytes.Buffer{}, nil
+	}
+	cfg := defaultMonitorConfig("")
+	result, err := executeMonitorAllRepoFetch(context.Background(), cfg, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := computeVisibleRows(result, monitorTabPRs, 2, 0, nil, "")
+	if len(rows) != 1 || rows[0].Repo != "ghe.example.com/owner/new-repo" {
+		t.Fatalf("global rows without shortcuts: %+v", rows)
+	}
+}
+
+func TestMonitorAllRepoFetchKeepsHostScopesSeparateAndReportsPartialFailures(t *testing.T) {
+	for _, mode := range []string{"both hosts", "enterprise scope unavailable", "pinned queries unavailable"} {
+		t.Run(mode, func(t *testing.T) {
+			saved := monitorGHExecFunc
+			t.Cleanup(func() { monitorGHExecFunc = saved })
+			monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+				host := args[2]
+				query := strings.Join(args, " ")
+				login := "owner"
+				if host != "github.com" {
+					login = "enterprise"
+				}
+				if strings.Contains(query, "viewer {") {
+					if mode == "enterprise scope unavailable" && host != "github.com" {
+						return bytes.Buffer{}, bytes.Buffer{}, errBoom()
+					}
+					return *bytes.NewBufferString(`{"data":{"viewer":{"login":"` + login + `","organizations":{"nodes":[{"login":"team"}],"pageInfo":{}}}}}`), bytes.Buffer{}, nil
+				}
+				global := strings.Contains(query, "user:"+login+" org:team")
+				if !global && mode == "pinned queries unavailable" {
+					return bytes.Buffer{}, bytes.Buffer{}, errBoom()
+				}
+				repo := login + "/pinned"
+				if global {
+					repo = "team/unconfigured"
+				}
+				payload := `{"data":{"rateLimit":{"remaining":42,"resetAt":"2026-10-07T20:00:00Z"},"pr2":{"issueCount":1,"nodes":[{"number":7,"state":"OPEN","repository":{"nameWithOwner":"` + repo + `"}}]}}}`
+				return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
+			}
+			cfg := defaultMonitorConfig("owner/pinned")
+			cfg.Repos = append(cfg.Repos, "ghe.example.com/enterprise/pinned")
+			result, err := executeMonitorAllRepoFetch(context.Background(), cfg, time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 2
+			if mode == "enterprise scope unavailable" {
+				want = 1
+			}
+			if len(result.PRSections[2].Rows) != want || result.PRSections[2].Total != want {
+				t.Fatalf("global host results: %+v", result.PRSections[2])
+			}
+			if result.PRSections[2].Rows[0].Repo != "team/unconfigured" {
+				t.Fatalf("public scope mixed identities: %+v", result.PRSections[2].Rows)
+			}
+			if want == 2 && result.PRSections[2].Rows[1].Repo != "ghe.example.com/team/unconfigured" {
+				t.Fatalf("enterprise scope lost host: %+v", result.PRSections[2].Rows)
+			}
+			if mode != "both hosts" && len(result.Warnings) == 0 {
+				t.Fatal("partial scope failure is silent")
+			}
+			if mode == "pinned queries unavailable" && result.Pinned["owner/pinned"].Error == "" {
+				t.Fatal("failed pins were presented as successful")
+			}
+			if mode == "both hosts" && (result.Pinned == nil || len(result.Pinned["owner/pinned"].PRSections[2].Rows) != 1 || len(result.Pinned["ghe.example.com/enterprise/pinned"].PRSections[2].Rows) != 1) {
+				t.Fatalf("pinned scopes lost: %+v", result.Pinned)
+			}
+		})
+	}
+}
+
+func TestApplyMonitorPinnedResultRetainsMostConservativeRateLimit(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name        string
+		global      int
+		globalReset time.Time
+		pin         int
+		pinReset    time.Time
+		want        int
+	}{
+		{"lower pin rate", 90, now, 42, now, 42},
+		{"lower global rate", 42, now, 90, now, 42},
+		{"missing global rate", 0, time.Time{}, 42, now, 42},
+		{"missing pin rate", 42, now, 0, time.Time{}, 42},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := &monitorFetchResult{RateRemaining: tc.global, RateResetAt: tc.globalReset}
+			pinned := &monitorFetchResult{RateRemaining: tc.pin, RateResetAt: tc.pinReset}
+			result.Pinned = map[string]*monitorFetchResult{"owner/pinned": pinned}
+			mergeMonitorScopeMetadata(result, pinned)
+			if result.RateRemaining != tc.want || result.Pinned["owner/pinned"] != pinned {
+				t.Fatalf("merged rate/pins: %+v", result)
+			}
+		})
+	}
+}
+
+func TestMonitorQuietShortcutIsNotCrowdedOutByBusyRepository(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		query := strings.Join(args, " ")
+		if strings.Contains(query, "viewer {") {
+			return *bytes.NewBufferString(`{"data":{"viewer":{"login":"owner","organizations":{"nodes":[],"pageInfo":{}}}}}`), bytes.Buffer{}, nil
+		}
+		repo := "team/unconfigured"
+		total := 50
+		if strings.Contains(query, "repo:owner/busy") {
+			repo = "owner/busy"
+			total = 10
+		}
+		if strings.Contains(query, "repo:owner/quiet") {
+			repo = "owner/quiet"
+			total = 1
+		}
+		if strings.Contains(query, "repo:owner/busy repo:owner/quiet") {
+			return bytes.Buffer{}, bytes.Buffer{}, fmt.Errorf("shortcuts still share one cap")
+		}
+		payload := fmt.Sprintf(`{"data":{"pr2":{"issueCount":%d,"nodes":[{"number":7,"repository":{"nameWithOwner":%q}}]}}}`, total, repo)
+		return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
+	}
+	cfg := defaultMonitorConfig("owner/busy")
+	cfg.Repos = append(cfg.Repos, "owner/quiet")
+	cfg.Defaults.Limit = 1
+	result, err := executeMonitorAllRepoFetch(context.Background(), cfg, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := computeVisibleRows(result, monitorTabPRs, 2, 2, cfg.Repos, "")
+	if len(rows) != 1 || rows[0].Repo != "owner/quiet" {
+		t.Fatalf("quiet repository disappeared: %+v", rows)
+	}
+	if result.Pinned["owner/quiet"].PRSections[2].Total != 1 || result.Pinned["owner/busy"].PRSections[2].Total != 10 {
+		t.Fatalf("per-repo totals mixed: %+v", result.Pinned)
+	}
+}
+
+func TestMonitorFailedScopesRetainIndependentSnapshotsAndErrors(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	model := newMonitorModel(cfg, "", "", monitorSessionState{SubTab: 2})
+	defer model.cancelRefresh()
+	before := newMonitorFetchResult(cfg, time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC))
+	before.PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Repo: "team/outside", Number: 1, Title: "before", Kind: monitorKindPR}}}
+	pin := newMonitorFetchResult(cfg, before.FetchedAt)
+	pin.PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Repo: "owner/pinned", Number: 2, Title: "pin before", Kind: monitorKindPR}}}
+	before.Pinned = map[string]*monitorFetchResult{"owner/pinned": pin}
+	model.applyFetchResult(before)
+	after := unavailableMonitorScope(cfg, errBoom())
+	after.Pinned = map[string]*monitorFetchResult{"owner/pinned": unavailableMonitorScope(cfg, errBoom())}
+	model.applyFetchResult(after)
+	if len(model.visibleRows()) != 1 || model.visibleRows()[0].Repo != "team/outside" || !model.lastRefresh.Equal(before.FetchedAt) {
+		t.Fatal("global snapshot was discarded")
+	}
+	model.repoIdx = 1
+	if len(model.visibleRows()) != 1 || model.visibleRows()[0].Repo != "owner/pinned" {
+		t.Fatal("pin snapshot was discarded")
+	}
+	model.layout = computeMonitorLayout(120, 40)
+	if !strings.Contains(model.footerLine(), "unavailable:") {
+		t.Fatal("failed scope is presented as fresh data")
+	}
+	first := unavailableMonitorScope(cfg, errBoom())
+	first.Pinned = map[string]*monitorFetchResult{"owner/pinned": unavailableMonitorScope(cfg, errBoom())}
+	model.data = first
+	if len(model.visibleRows()) != 0 || !strings.Contains(model.emptyListMessage(), "unavailable") || model.tabTotal(monitorTabPRs) != -1 {
+		t.Fatal("failed scope is presented as an empty successful search")
+	}
+}
+
+func TestMonitorAllOwnerSearchBatchesLargeOrganizationMembership(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		nodes := make([]map[string]string, 0)
+		for i := 0; i < 32; i++ {
+			nodes = append(nodes, map[string]string{"login": fmt.Sprintf("team%d", i)})
+		}
+		nodes = append(nodes, map[string]string{"login": "team0"})
+		payload, _ := json.Marshal(map[string]any{"data": map[string]any{"viewer": map[string]any{"login": "owner", "organizations": map[string]any{"nodes": nodes, "pageInfo": map[string]bool{"hasNextPage": false}}}}})
+		return *bytes.NewBuffer(payload), bytes.Buffer{}, nil
+	}
+	cfg := defaultMonitorConfig("owner/pinned")
+	requests, err := resolveMonitorAllHostQueries(context.Background(), monitorHostQuery{Host: "github.com"}, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("expected three bounded owner batches, got %d", len(requests))
+	}
+	scopes := map[string]bool{}
+	for _, request := range requests {
+		for _, line := range strings.Split(request.Query, "\n") {
+			if !strings.Contains(line, "pr2: search") {
+				continue
+			}
+			owners := regexp.MustCompile(`(?:user|org):[A-Za-z0-9-]+`).FindAllString(line, -1)
+			if len(owners) > 16 {
+				t.Fatalf("owner batch exceeds GitHub limit: %s", line)
+			}
+			for _, owner := range owners {
+				if scopes[owner] {
+					t.Fatalf("duplicate owner can inflate totals: %s", owner)
+				}
+				scopes[owner] = true
+			}
+		}
+	}
+	if len(scopes) != 33 {
+		t.Fatalf("lost account/organization scopes: %v", scopes)
+	}
+}

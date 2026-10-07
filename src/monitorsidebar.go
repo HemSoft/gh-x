@@ -23,6 +23,12 @@ func countMonitorRowsByRepo(result *monitorFetchResult, repos []string) map[stri
 	if result == nil {
 		return counts
 	}
+	if result.Pinned != nil {
+		for _, repo := range repos {
+			counts[repo] = countMonitorRowsByRepo(result.Pinned[repo], []string{repo})[repo]
+		}
+		return counts
+	}
 	for repo, accessible := range result.Accessible {
 		entry := counts[repo]
 		entry.Accessible = accessible

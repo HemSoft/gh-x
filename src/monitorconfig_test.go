@@ -239,11 +239,11 @@ func TestLoadLegacyMonitorConfigPinsPublicHost(t *testing.T) {
 
 func TestLoadLegacyMonitorConfigDoesNotPinHostBeforeValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yml")
-	if err := os.WriteFile(path, []byte("repos: []\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("repos: [malformed]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := loadOrCreateMonitorConfig(path, "", "ghe.example.com"); err == nil {
-		t.Fatal("expected invalid empty repository list")
+		t.Fatal("expected invalid repository name")
 	}
 	if _, err := os.Stat(path + monitorMigrationSuffix); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("invalid config persisted migration marker: %v", err)
@@ -299,8 +299,8 @@ func TestValidateMonitorConfigErrors(t *testing.T) {
 
 	noRepos := defaultMonitorConfig("")
 	noRepos.Repos = nil
-	if err := validateMonitorConfig(noRepos); err == nil {
-		t.Fatal("expected repo error")
+	if err := validateMonitorConfig(noRepos); err != nil {
+		t.Fatalf("All repos must work without sidebar shortcuts: %v", err)
 	}
 
 	badRepo := defaultMonitorConfig("justone")

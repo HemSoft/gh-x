@@ -183,6 +183,15 @@ func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T)
 		t.Fatalf("saveMonitorConfig: %v", err)
 	}
 
+	savedExec := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = savedExec })
+	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		login := "HemSoft"
+		if strings.Contains(strings.Join(args, " "), "ghe.example.com") {
+			login = "enterprise-user"
+		}
+		return *bytes.NewBufferString(`{"data":{"viewer":{"login":"` + login + `","organizations":{"nodes":[{"login":"Acme"}],"pageInfo":{"hasNextPage":false}}}}}`), bytes.Buffer{}, nil
+	}
 	savedResolve := monitorResolveRepoFunc
 	savedHost := monitorRepoHostFunc
 	defer func() {
@@ -204,8 +213,8 @@ func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T)
 		"# ghe.example.com\n",
 		"query Monitor1 {",
 		"query Monitor2 {",
-		"repo:HemSoft/gh-x",
-		"repo:Acme/Widgets",
+		"user:HemSoft org:Acme",
+		"user:enterprise-user org:Acme",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("printed queries missing %q:\n%s", want, output)

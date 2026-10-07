@@ -147,6 +147,7 @@ func (m monitorModel) visibleRows() []monitorRow {
 
 // computeVisibleRows is the pure core of visibleRows for testability.
 func computeVisibleRows(data *monitorFetchResult, tab, subTab, repoIdx int, repos []string, filterText string) []monitorRow {
+	data = monitorDataForScope(data, repoIdx, repos)
 	if data == nil {
 		return nil
 	}
@@ -162,6 +163,14 @@ func computeVisibleRows(data *monitorFetchResult, tab, subTab, repoIdx int, repo
 		rows = filterMonitorRowsByRepo(rows, repos[repoIdx-1])
 	}
 	return filterMonitorRowsByText(rows, filterText)
+}
+
+// monitorDataForScope chooses independent pinned results without limiting All repos.
+func monitorDataForScope(data *monitorFetchResult, repoIdx int, repos []string) *monitorFetchResult {
+	if data != nil && repoIdx > 0 && repoIdx <= len(repos) && data.Pinned != nil {
+		return data.Pinned[repos[repoIdx-1]]
+	}
+	return data
 }
 
 func filterMonitorRowsByRepo(rows []monitorRow, nameWithOwner string) []monitorRow {
