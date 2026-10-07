@@ -1,0 +1,435 @@
+[
+  {
+    "isPR": true,
+    "assignees": [],
+    "node": {
+      "number": 10,
+      "title": "Personal change",
+      "author": {
+        "login": "octocat"
+      },
+      "state": "OPEN",
+      "updatedAt": "2026-10-01T12:00:00Z",
+      "headRefName": "fixture",
+      "baseRefName": "main",
+      "url": "https://github.com/HemSoft/app/pull/10",
+      "repository": {
+        "nameWithOwner": "HemSoft/app"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "isPR": true,
+    "assignees": [
+      "octocat"
+    ],
+    "node": {
+      "number": 20,
+      "title": "Assigned change",
+      "author": {
+        "login": "colleague"
+      },
+      "state": "OPEN",
+      "updatedAt": "2026-10-02T12:00:00Z",
+      "headRefName": "fixture",
+      "baseRefName": "main",
+      "url": "https://github.com/HemSoft/app/pull/20",
+      "repository": {
+        "nameWithOwner": "HemSoft/app"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "isPR": true,
+    "assignees": [],
+    "node": {
+      "number": 30,
+      "title": "Older dependency update",
+      "author": {
+        "login": "dependabot[bot]"
+      },
+      "state": "OPEN",
+      "updatedAt": "2026-10-03T12:00:00Z",
+      "headRefName": "fixture",
+      "baseRefName": "main",
+      "url": "https://github.com/HemSoft/other/pull/30",
+      "repository": {
+        "nameWithOwner": "HemSoft/other"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "isPR": true,
+    "assignees": [
+      "octocat"
+    ],
+    "node": {
+      "number": 40,
+      "title": "Assigned dependency update",
+      "author": {
+        "login": "dependabot[bot]"
+      },
+      "state": "OPEN",
+      "updatedAt": "2026-10-04T12:00:00Z",
+      "headRefName": "fixture",
+      "baseRefName": "main",
+      "url": "https://github.com/HemSoft/app/pull/40",
+      "repository": {
+        "nameWithOwner": "HemSoft/app"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "isPR": true,
+    "assignees": [],
+    "node": {
+      "number": 30,
+      "title": "Unassigned dependency update",
+      "author": {
+        "login": "dependabot[bot]"
+      },
+      "state": "OPEN",
+      "updatedAt": "2026-10-05T12:00:00Z",
+      "headRefName": "fixture",
+      "baseRefName": "main",
+      "url": "https://github.com/HemSoft/app/pull/30",
+      "repository": {
+        "nameWithOwner": "HemSoft/app"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "isPR": true,
+    "assignees": [],
+    "node": {
+      "number": 50,
+      "title": "Closed dependency update",
+      "author": {
+        "login": "dependabot[bot]"
+      },
+      "state": "CLOSED",
+      "updatedAt": "2026-10-10T12:00:00Z",
+      "headRefName": "fixture",
+      "baseRefName": "main",
+      "url": "https://github.com/HemSoft/app/pull/50",
+      "repository": {
+        "nameWithOwner": "HemSoft/app"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "isPR": true,
+    "assignees": [],
+    "node": {
+      "number": 51,
+      "title": "Merged dependency update",
+      "author": {
+        "login": "dependabot[bot]"
+      },
+      "state": "MERGED",
+      "updatedAt": "2026-10-11T12:00:00Z",
+      "headRefName": "fixture",
+      "baseRefName": "main",
+      "url": "https://github.com/HemSoft/app/pull/51",
+      "repository": {
+        "nameWithOwner": "HemSoft/app"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "isPR": true,
+    "assignees": [],
+    "node": {
+      "number": 60,
+      "title": "Dependabot dependency update lookalike",
+      "author": {
+        "login": "colleague"
+      },
+      "state": "OPEN",
+      "updatedAt": "2026-10-12T12:00:00Z",
+      "headRefName": "dependabot/lookalike",
+      "baseRefName": "main",
+      "url": "https://github.com/HemSoft/app/pull/60",
+      "repository": {
+        "nameWithOwner": "HemSoft/app"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "isPR": true,
+    "assignees": [],
+    "node": {
+      "number": 61,
+      "title": "Other bot update",
+      "author": {
+        "login": "renovate[bot]"
+      },
+      "state": "OPEN",
+      "updatedAt": "2026-10-13T12:00:00Z",
+      "headRefName": "fixture",
+      "baseRefName": "main",
+      "url": "https://github.com/HemSoft/app/pull/61",
+      "repository": {
+        "nameWithOwner": "HemSoft/app"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "isPR": true,
+    "assignees": [],
+    "node": {
+      "number": 70,
+      "title": "Different owner update",
+      "author": {
+        "login": "dependabot[bot]"
+      },
+      "state": "OPEN",
+      "updatedAt": "2026-10-14T12:00:00Z",
+      "headRefName": "fixture",
+      "baseRefName": "main",
+      "url": "https://github.com/Elsewhere/app/pull/70",
+      "repository": {
+        "nameWithOwner": "Elsewhere/app"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "isPR": false,
+    "assignees": [],
+    "node": {
+      "number": 80,
+      "title": "Dependabot issue",
+      "author": {
+        "login": "dependabot[bot]"
+      },
+      "state": "OPEN",
+      "updatedAt": "2026-10-15T12:00:00Z",
+      "headRefName": "fixture",
+      "baseRefName": "main",
+      "url": "https://github.com/HemSoft/app/pull/80",
+      "repository": {
+        "nameWithOwner": "HemSoft/app"
+      },
+      "commits": {
+        "nodes": [
+          {
+            "commit": {
+              "statusCheckRollup": {
+                "contexts": {
+                  "nodes": [
+                    {
+                      "__typename": "CheckRun",
+                      "name": "Quality Gate",
+                      "status": "COMPLETED",
+                      "conclusion": "SUCCESS"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+]

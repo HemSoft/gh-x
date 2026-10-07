@@ -389,6 +389,9 @@ func runFakeGH() int {
 		fmt.Fprintf(os.Stderr, "record fake gh call: %v\n", err)
 		return 2
 	}
+	if strings.HasPrefix(os.Getenv(fakeGHScenarioEnv), "me-") {
+		return runFakeMeGH(args)
+	}
 	if os.Getenv(fakeGHScenarioEnv) == "issue-list-error" && hasCommandPrefix(args, "issue", "list") {
 		fmt.Fprintln(os.Stderr, "fixture issue list failed")
 		return 23

@@ -67,7 +67,8 @@ func parseMeOptions(args []string, stderr io.Writer) (meOptions, error) {
 const meUsage = `Usage:
   gh x pr me [flags]
 
-Show all your open pull requests (authored + assigned) across an organization.
+Show your open pull requests (authored + assigned) and open Dependabot pull requests
+across an organization or personal account.
 
 Flags:
   -o, --org string   Organization or user to search (default: inferred from current repo)
@@ -82,8 +83,9 @@ func buildMeQueries(owner, login string) []string {
 
 func buildMeQueriesWithQualifier(qualifier, login string) []string {
 	return []string{
-		fmt.Sprintf("is:pr is:open author:%s %s", login, qualifier),
-		fmt.Sprintf("is:pr is:open assignee:%s %s -author:%s", login, qualifier, login),
+		fmt.Sprintf("is:pr is:open author:%s %s sort:updated-desc", login, qualifier),
+		fmt.Sprintf("is:pr is:open assignee:%s %s -author:%s sort:updated-desc", login, qualifier, login),
+		fmt.Sprintf("is:pr is:open author:app/dependabot %s sort:updated-desc", qualifier),
 	}
 }
 
@@ -154,7 +156,7 @@ func renderMeResults(nodes []atmPullRequestNode, stdout io.Writer, org, login st
 
 func renderMeTable(stdout io.Writer, org, login string, pullRequests []displayPullRequest) error {
 	if len(pullRequests) == 0 {
-		fmt.Fprintf(stdout, "No open PRs authored by or assigned to %s in %s.\n", login, org)
+		fmt.Fprintf(stdout, "No open PRs authored by or assigned to %s, or opened by Dependabot, in %s.\n", login, org)
 		return nil
 	}
 

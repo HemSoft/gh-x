@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -100,8 +102,8 @@ func TestParseMeOptionsHelp(t *testing.T) {
 
 func TestBuildMeQueries(t *testing.T) {
 	queries := buildMeQueriesWithQualifier("org:AcmeCorp", "octocat")
-	if len(queries) != 2 {
-		t.Fatalf("expected 2 queries, got %d", len(queries))
+	if len(queries) != 3 {
+		t.Fatalf("expected 3 queries, got %d", len(queries))
 	}
 	if !strings.Contains(queries[0], "author:octocat") {
 		t.Fatalf("query 0 should contain author, got %q", queries[0])
@@ -124,13 +126,46 @@ func TestBuildMeQueriesForUser(t *testing.T) {
 	}
 }
 
+func TestBuildMeQueriesScopeAndSelection(t *testing.T) {
+	for _, qualifier := range []string{"org:AcmeCorp", "user:octocat"} {
+		t.Run(qualifier, func(t *testing.T) {
+			want := []string{
+				"is:pr is:open author:octocat " + qualifier + " sort:updated-desc",
+				"is:pr is:open assignee:octocat " + qualifier + " -author:octocat sort:updated-desc",
+				"is:pr is:open author:app/dependabot " + qualifier + " sort:updated-desc",
+			}
+			if got := buildMeQueriesWithQualifier(qualifier, "octocat"); !reflect.DeepEqual(got, want) {
+				t.Fatalf("queries = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestFetchMeNodesPreservesActiveAccount(t *testing.T) {
+	calls := 0
+	withFallbackStubs(t, func(inv ghInvocation) (bytes.Buffer, bytes.Buffer, error) {
+		calls++
+		if strings.Join(inv.Args, " ") == "api users/AcmeCorp --jq .type" {
+			return *bytes.NewBufferString("Organization"), bytes.Buffer{}, nil
+		}
+		if !strings.Contains(strings.Join(inv.Args, " "), "author:app/dependabot org:AcmeCorp") {
+			t.Fatalf("missing scoped Dependabot search: %v", inv.Args)
+		}
+		return bytes.Buffer{}, *bytes.NewBufferString("HTTP 403: Resource not accessible"), errors.New("access denied")
+	}, []ghAccount{{Login: "octocat", Active: true}, {Login: "other"}}, map[string]string{"other": "fixture-token"})
+	_, err := fetchMeNodes("AcmeCorp", "octocat", 30)
+	if err == nil || !strings.Contains(err.Error(), "access denied") || calls != 2 {
+		t.Fatalf("identity-scoped search should fail without account retry: calls=%d err=%v", calls, err)
+	}
+}
+
 func TestRenderMeTableEmpty(t *testing.T) {
 	var buf bytes.Buffer
 	err := renderMeTable(&buf, "AcmeCorp", "octocat", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "No open PRs authored by or assigned to octocat in AcmeCorp") {
+	if !strings.Contains(buf.String(), "No open PRs authored by or assigned to octocat, or opened by Dependabot, in AcmeCorp") {
 		t.Fatalf("unexpected empty message: %q", buf.String())
 	}
 }
@@ -161,6 +196,9 @@ func TestRunMeSubcommandRouting(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "gh x pr me") {
 		t.Fatalf("expected me usage in stderr, got: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Dependabot") || !strings.Contains(stderr.String(), "personal account") {
+		t.Fatalf("help should describe the expanded selection: %q", stderr.String())
 	}
 }
 
