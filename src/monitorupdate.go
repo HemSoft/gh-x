@@ -80,6 +80,7 @@ func (m monitorModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.ready = true
 	m.cursor = m.clampedCursor()
 	m.ensureCursorVisible()
+	m.scrollDetailBy(0)
 	m.applyMonitorTheme()
 	return m, nil
 }
@@ -208,6 +209,7 @@ func (m *monitorModel) clampSelections() {
 	m.repoIdx = clampInt(m.repoIdx, 0, len(m.cfg.Repos))
 	m.cursor = m.clampedCursor()
 	m.ensureCursorVisible()
+	m.scrollDetailBy(0)
 	m.applyMonitorTheme()
 	m.offset = clampInt(m.offset, 0, maxInt(len(m.visibleRows())-1, 0))
 }

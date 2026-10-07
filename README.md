@@ -319,7 +319,7 @@ alternate-screen, keyboard, and mouse behavior.
 | `/`, Enter, Escape | Type a local filter, apply it, then clear it. |
 | Page Up / Page Down | Scroll the selected item's details. |
 | `s`, `e`, `?`, `r` | Open settings, edit YAML, show help, or refresh. |
-| `o`, `y`, `Y` | Open the selected URL, copy it, or copy its Markdown link. |
+| `o`, `y`, `Y` | Open the selected URL, copy it, or copy its checkout/development command. |
 | `q`, Ctrl+C | Save selections, cancel any refresh, and restore the terminal. |
 
 Mouse clicks select tabs, sections, rows, and panes; the wheel moves within the

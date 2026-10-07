@@ -246,3 +246,43 @@ func TestMonitorMonochromeScreensKeepTextAndFocus(t *testing.T) {
 		t.Fatal("settings focus cue did not move")
 	}
 }
+
+func TestMonitorRetryShowsRefreshAlongsideRetainedFailure(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		apply func(*monitorModel)
+		cue   string
+	}{
+		{"error", func(m *monitorModel) { m.refreshErr = "offline" }, "error: offline"},
+		{"partial", func(m *monitorModel) { m.refreshWarn = "host unavailable" }, "warning: host unavailable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m := modelWithData()
+			m.refreshing = false
+			test.apply(&m)
+			model, _ := m.startRefresh()
+			updated := model.(monitorModel)
+			text := stripANSIForTest(updated.footerLine())
+			if !strings.Contains(text, "refreshing") || !strings.Contains(text, test.cue) {
+				t.Fatalf("retry hides progress or retained failure: %q", text)
+			}
+		})
+	}
+}
+
+func TestMonitorResizeKeepsDetailWheelResponsive(t *testing.T) {
+	m := modelWithData()
+	m.subTab = 0
+	m.focus = monitorFocusDetail
+	m.layout = computeMonitorLayout(80, 24)
+	m.data.PRSections[0].Rows[0].Body = strings.Repeat(strings.Repeat("x", 100)+"\n", 30)
+	m.jumpToPaneEdge(1)
+	model, _ := m.handleResize(tea.WindowSizeMsg{Width: 160, Height: 50})
+	updated := model.(monitorModel)
+	before := strings.Join(updated.detailLines(), "\n")
+	model, _ = updated.handleWheel(tea.Mouse{Button: tea.MouseWheelUp})
+	updated = model.(monitorModel)
+	if before == strings.Join(updated.detailLines(), "\n") {
+		t.Fatal("detail wheel did not move after resize")
+	}
+}

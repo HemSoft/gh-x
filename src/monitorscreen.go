@@ -110,17 +110,22 @@ func (m monitorModel) footerLine() string {
 	width := maxInt(m.layout.Width, 1)
 	left := fmt.Sprintf(" %s · %d/%d rows", monitorTabLabel(m.tab), len(m.visibleRows()), monitorSectionTotal(m.data, m.tab, m.subTab))
 	right := fmt.Sprintf("rate %d · last %s ", m.data.RateRemainingSafe(), formatMonitorClock(m.lastRefresh))
+	notice := ""
 	if m.refreshing {
 		right = "refreshing… "
+		notice = "refreshing… · "
 	}
 	if m.refreshErr != "" {
-		return m.theme.Error.Render(fitMonitorLine(" error: "+m.refreshErr+" · r retry · last data retained", width))
+		return m.theme.Error.Render(fitMonitorLine(" "+notice+"error: "+m.refreshErr+" · r retry · last data retained", width))
 	}
 	if m.refreshWarn != "" {
-		return m.theme.Warning.Render(fitMonitorLine(" warning: "+m.refreshWarn+" · partial data", width))
+		return m.theme.Warning.Render(fitMonitorLine(" "+notice+"warning: "+m.refreshWarn+" · partial data", width))
 	}
 	if hidden := hiddenReposSummary(m.cfg.Repos, m.data); hidden != "" {
 		left += " · " + hidden
+	}
+	if len(m.lastChanges) > 0 {
+		left += " · " + summarizeMonitorChanges(m.lastChanges, 1)
 	}
 	budget := maxInt(width-lipgloss.Width(right), 0)
 	return m.theme.Muted.Render(fitMonitorLine(left, budget) + fitMonitorLine(right, minInt(width, lipgloss.Width(right))))
