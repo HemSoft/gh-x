@@ -665,12 +665,26 @@ pwsh -NoProfile -File tests/installer/test-dashboard-hub.ps1
 These tests use a native command double and scheduler mocks. They never contact
 Tailscale services or register real tasks. Required CI checks run PowerShell 7
 on Ubuntu and Windows PowerShell 5.1 on Windows. On Windows, the same fixtures can
-also exercise the Windows PowerShell 5.1 launcher:
+also exercise the Windows PowerShell 5.1 installer launcher:
 
 ```powershell
 pwsh -NoProfile -File tests/installer/test-dashboard-hub.ps1 `
   -InstallerPowerShell "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe"
 ```
+
+The same required Windows job installs Node from `.node-version` and runs the
+standalone Codex dashboard launcher test under PowerShell 7:
+
+```powershell
+node --test src/codex-dashboard/launcher.test.mjs
+```
+
+Both launcher tests must pass with zero skips on Windows. The integration test
+uses a temporary Codex home and a synthetic browser command, starts and reuses
+its test-owned server, then stops it and removes the temporary files. It never
+opens a real browser or reads personal session data. Linux retains the Windows
+lifecycle skip; local audit success on Linux cannot qualify this hosted check.
+The existing Windows PowerShell 5.1 installer checks remain required.
 
 ## How it works
 

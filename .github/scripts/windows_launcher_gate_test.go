@@ -1,0 +1,309 @@
+package main
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+func TestWindowsLauncherGateReady(t *testing.T) {
+	cases := []struct {
+		name   string
+		want   bool
+		mutate func(*workflowJob, *workflowJob)
+	}{
+		{name: "actual workflow qualifies", want: true},
+		{name: "missing launcher step", mutate: func(job, _ *workflowJob) {
+			job.Steps = slices.DeleteFunc(job.Steps, func(step workflowStep) bool { return step.Name == "Test Windows standalone launcher" })
+		}},
+		{name: "wrong test command", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Run = "node --test src/dashboard-hub/*.test.mjs" })
+		}},
+		{name: "commented test command", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Run = "# " + step.Run })
+		}},
+		{name: "wrong shell", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Shell = "bash" })
+		}},
+		{name: "conditional launcher step", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.If = "false" })
+		}},
+		{name: "ignored launcher failure", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.ContinueOnError = true })
+		}},
+		{name: "missing Node setup", mutate: func(job, _ *workflowJob) {
+			job.Steps = slices.DeleteFunc(job.Steps, func(step workflowStep) bool {
+				return strings.HasPrefix(step.Uses, "actions/setup-node@")
+			})
+		}},
+		{name: "mutable Node action", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.Uses = "actions/setup-node@v6" })
+		}},
+		{name: "wrong Node version source", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.With["node-version-file"] = "go.mod" })
+		}},
+		{name: "later Node setup overrides version", mutate: func(job, _ *workflowJob) {
+			insertBeforeLauncher(job, workflowStep{Uses: "actions/setup-node@" + strings.Repeat("a", 40), With: map[string]string{"node-version": "18"}})
+		}},
+		{name: "later mutable Node setup", mutate: func(job, _ *workflowJob) {
+			insertBeforeLauncher(job, workflowStep{Uses: "actions/setup-node@v6", With: map[string]string{"node-version-file": ".node-version"}})
+		}},
+		{name: "step before checkout cannot qualify", mutate: func(job, _ *workflowJob) {
+			job.Steps = append([]workflowStep{{Name: "Unrelated preparation", Run: "echo ready"}}, job.Steps...)
+		}},
+		{name: "Node setup startup hook", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.Env = map[string]string{"NODE_OPTIONS": "--require ./bypass.cjs"} })
+		}},
+		{name: "checkout environment override", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.Env = map[string]string{"NODE_OPTIONS": "--require ./bypass.cjs"} })
+		}},
+		{name: "conditional Node setup", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.If = "false" })
+		}},
+		{name: "ignored Node setup failure", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.ContinueOnError = true })
+		}},
+		{name: "rewrite inputs between checkout and Node", mutate: func(job, _ *workflowJob) {
+			index := slices.IndexFunc(job.Steps, func(step workflowStep) bool { return strings.HasPrefix(step.Uses, "actions/setup-node@") })
+			job.Steps = slices.Insert(job.Steps, index, workflowStep{Name: "Rewrite inputs", Run: "Set-Content .node-version 18"})
+		}},
+		{name: "Windows job overrides execution context", mutate: func(job, _ *workflowJob) {
+			job.Additional = map[string]any{"defaults": map[string]any{"run": map[string]any{"working-directory": "other"}}}
+		}},
+		{name: "launcher overrides working directory", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Additional = map[string]any{"working-directory": "other"} })
+		}},
+		{name: "Node setup has unvalidated execution fields", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.Additional = map[string]any{"parallel": true} })
+		}},
+		{name: "Windows job allows failure", mutate: func(job, _ *workflowJob) { job.ContinueOnError = true }},
+		{name: "aggregate job allows failure", mutate: func(_, gate *workflowJob) { gate.ContinueOnError = true }},
+		{name: "background checkout", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.Background = true })
+		}},
+		{name: "background Node setup", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.Background = true })
+		}},
+		{name: "background launcher", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Background = true })
+		}},
+		{name: "background Windows installer", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows PowerShell installer", func(step *workflowStep) { step.Background = true })
+		}},
+		{name: "PATH override between Node and launcher", mutate: func(job, _ *workflowJob) {
+			insertBeforeLauncher(job, workflowStep{Name: "Replace Node path", Run: "'C:/unqualified-node' >> $env:GITHUB_PATH"})
+		}},
+		{name: "launcher test filtering via Node options", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Env = map[string]string{"NODE_OPTIONS": "--test-only"} })
+		}},
+		{name: "launcher environment overrides PATH", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) {
+				step.Env = map[string]string{"NODE_OPTIONS": "", "PATH": "C:/unqualified-node"}
+			})
+		}},
+		{name: "launcher inherits Node options", mutate: func(job, _ *workflowJob) {
+			mutateWorkflowStep(job, "Test Windows standalone launcher", func(step *workflowStep) { step.Env = nil })
+		}},
+		{name: "Node setup after launcher", mutate: func(job, _ *workflowJob) {
+			reorderLauncherSetup(job, "actions/setup-node", "Test Windows standalone launcher")
+		}},
+		{name: "checkout after Node setup", mutate: func(job, _ *workflowJob) {
+			reorderLauncherSetup(job, "actions/checkout", "actions/setup-node")
+		}},
+		{name: "missing checkout", mutate: func(job, _ *workflowJob) {
+			job.Steps = slices.DeleteFunc(job.Steps, func(step workflowStep) bool { return strings.HasPrefix(step.Uses, "actions/checkout@") })
+		}},
+		{name: "conditional checkout", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.If = "false" })
+		}},
+		{name: "ignored checkout failure", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.ContinueOnError = true })
+		}},
+		{name: "foreign checkout before Node cannot qualify a later repository checkout", mutate: func(job, _ *workflowJob) {
+			var original workflowStep
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { original = *step })
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.With = map[string]string{"repository": "example/unrelated"} })
+			job.Steps = append(job.Steps, original)
+		}},
+		{name: "later checkout replaces triggering revision", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) {
+				copy := *step
+				copy.With = map[string]string{"ref": "main"}
+				job.Steps = append(job.Steps, copy)
+			})
+		}},
+		{name: "checkout outside workspace root", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.With = map[string]string{"path": "dependency"} })
+		}},
+		{name: "checkout of an old ref", mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) { step.With = map[string]string{"ref": "main"} })
+		}},
+		{name: "explicit current repository and workspace root", want: true, mutate: func(job, _ *workflowJob) {
+			mutateLauncherAction(job, "actions/checkout", func(step *workflowStep) {
+				step.With = map[string]string{"repository": "${{ github.repository }}", "path": "."}
+			})
+		}},
+		{name: "Linux cannot qualify lifecycle", mutate: func(job, _ *workflowJob) { job.RunsOn = "ubuntu-latest" }},
+		{name: "aggregate shell discards script", mutate: func(_, gate *workflowJob) {
+			mutateWorkflowStep(gate, "Evaluate all gates", func(step *workflowStep) { step.Shell = "true {0}" })
+		}},
+		{name: "aggregate job overrides execution defaults", mutate: func(_, gate *workflowJob) {
+			gate.Additional = map[string]any{"defaults": map[string]any{"run": map[string]any{"shell": "true {0}"}}}
+		}},
+		{name: "aggregate step overrides working directory", mutate: func(_, gate *workflowJob) {
+			mutateWorkflowStep(gate, "Evaluate all gates", func(step *workflowStep) { step.Additional = map[string]any{"working-directory": "other"} })
+		}},
+		{name: "aggregate script exits before checks", mutate: func(_, gate *workflowJob) {
+			mutateWorkflowStep(gate, "Evaluate all gates", func(step *workflowStep) { step.Run = "exit 0\n" + step.Run })
+		}},
+		{name: "aggregate extra step overrides environment", mutate: func(_, gate *workflowJob) {
+			gate.Steps = append([]workflowStep{{Name: "Override Bash environment", Run: "echo BASH_ENV=other >> $GITHUB_ENV"}}, gate.Steps...)
+		}},
+		{name: "Node download source overridden", mutate: func(job, _ *workflowJob) {
+			mutateLauncherNodeSetup(job, func(step *workflowStep) { step.With["mirror"] = "https://example.invalid/node" })
+		}},
+		{name: "aggregate dependency missing", mutate: func(_, gate *workflowJob) {
+			gate.Needs = slices.DeleteFunc(gate.Needs, func(name string) bool { return name == "windows-installer" })
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			data, err := os.ReadFile("../workflows/ci.yml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ci workflow
+			if err := yaml.Unmarshal(data, &ci); err != nil {
+				t.Fatal(err)
+			}
+			job, gate := ci.Jobs["windows-installer"], ci.Jobs["gate"]
+			if c.mutate != nil {
+				c.mutate(&job, &gate)
+			}
+			if got := windowsLauncherGateReady(job, gate); got != c.want {
+				t.Fatalf("windowsLauncherGateReady() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func mutateLauncherNodeSetup(job *workflowJob, mutate func(*workflowStep)) {
+	mutateLauncherAction(job, "actions/setup-node", mutate)
+}
+
+func mutateLauncherAction(job *workflowJob, action string, mutate func(*workflowStep)) {
+	for index := range job.Steps {
+		if strings.HasPrefix(job.Steps[index].Uses, action+"@") {
+			mutate(&job.Steps[index])
+			return
+		}
+	}
+	panic("missing Windows launcher action: " + action)
+}
+
+func reorderLauncherSetup(job *workflowJob, action, after string) {
+	from := slices.IndexFunc(job.Steps, func(step workflowStep) bool { return strings.HasPrefix(step.Uses, action+"@") })
+	to := slices.IndexFunc(job.Steps, func(step workflowStep) bool { return step.Name == after || strings.HasPrefix(step.Uses, after+"@") })
+	if from < 0 || to < 0 || from >= to {
+		panic("invalid setup ordering fixture")
+	}
+	setup := job.Steps[from]
+	copy(job.Steps[from:to], job.Steps[from+1:to+1])
+	job.Steps[to] = setup
+}
+
+func TestLauncherNodeMutationsFollowPinChanges(t *testing.T) {
+	data, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci workflow
+	if err := yaml.Unmarshal(data, &ci); err != nil {
+		t.Fatal(err)
+	}
+	job, gate := ci.Jobs["windows-installer"], ci.Jobs["gate"]
+	mutateLauncherNodeSetup(&job, func(step *workflowStep) { step.Uses = "actions/setup-node@" + strings.Repeat("a", 40) })
+	if !windowsLauncherGateReady(job, gate) {
+		t.Fatal("an immutable pin change must preserve the contract")
+	}
+	job.Steps = append([]workflowStep{{Name: "Unrelated preparation", Run: "echo ready"}}, job.Steps...)
+	mutateLauncherAction(&job, "actions/checkout", func(step *workflowStep) { step.If = "false" })
+	if job.Steps[0].If != "" {
+		t.Fatal("checkout mutation must not target prepended preparation")
+	}
+	checkout := slices.IndexFunc(job.Steps, func(step workflowStep) bool { return strings.HasPrefix(step.Uses, "actions/checkout@") })
+	if checkout != 1 || job.Steps[checkout].If != "false" {
+		t.Fatal("checkout mutation must locate its action after a prepended step")
+	}
+	job.Steps = job.Steps[1:]
+	if windowsLauncherGateReady(job, gate) {
+		t.Fatal("checkout mutations must follow unrelated prepended steps")
+	}
+	mutateLauncherAction(&job, "actions/checkout", func(step *workflowStep) { step.If = "" })
+	if !windowsLauncherGateReady(job, gate) {
+		t.Fatal("restored checkout must qualify before testing Node mutations")
+	}
+	mutateLauncherNodeSetup(&job, func(step *workflowStep) { step.ContinueOnError = true })
+	if windowsLauncherGateReady(job, gate) {
+		t.Fatal("mutations must still target Node after its pin changes")
+	}
+}
+
+func insertBeforeLauncher(job *workflowJob, step workflowStep) {
+	index := slices.IndexFunc(job.Steps, func(candidate workflowStep) bool { return candidate.Name == "Test Windows standalone launcher" })
+	job.Steps = slices.Insert(job.Steps, index, step)
+}
+
+func TestLauncherRejectsGlobalRuntimeOverrides(t *testing.T) {
+	data, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prefix := range []string{"env:\n  PATH: other\n", "defaults:\n  run:\n    working-directory: other\n"} {
+		var ci workflow
+		if err := yaml.Unmarshal(append([]byte(prefix), data...), &ci); err != nil {
+			t.Fatal(err)
+		}
+		if windowsLauncherWorkflowReady(ci) {
+			t.Fatal("global runtime overrides must not qualify the checked-out launcher")
+		}
+	}
+}
+
+func TestAggregateGateRejectsWindowsFailures(t *testing.T) {
+	data, err := os.ReadFile("../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci workflow
+	if err := yaml.Unmarshal(data, &ci); err != nil {
+		t.Fatal(err)
+	}
+	step := namedStep(ci.Jobs["gate"], "Evaluate all gates")
+	for _, result := range []string{"success", "failure", "skipped", "cancelled", ""} {
+		t.Run("Windows-"+result, func(t *testing.T) {
+			script := strings.ReplaceAll(step.Run, "${{ needs.windows-installer.result }}", result)
+			script = regexp.MustCompile(`\$\{\{ needs\.[^}]+\.result \}\}`).ReplaceAllString(script, "success")
+			command := exec.Command("bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script)
+			command.Dir = t.TempDir()
+			command.Env = []string{"PATH=" + os.Getenv("PATH"), "EVENT_NAME=pull_request", "REF=refs/pull/188/merge", "REF_NAME=188/merge", "DEFAULT_BRANCH=main"}
+			output, err := command.CombinedOutput()
+			if result == "success" {
+				if err != nil || !strings.Contains(string(output), "All quality gates passed") {
+					t.Fatalf("success: %v: %s", err, output)
+				}
+				return
+			}
+			var exitError *exec.ExitError
+			if !errors.As(err, &exitError) || exitError.ExitCode() != 1 || !strings.Contains(string(output), "One or more quality gates failed") {
+				t.Fatalf("Windows %q: %v: %s", result, err, output)
+			}
+		})
+	}
+}

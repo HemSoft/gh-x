@@ -48,6 +48,8 @@ type requiredStatusCheck struct {
 }
 
 type workflow struct {
+	Env         map[string]string      `yaml:"env"`
+	Defaults    map[string]any         `yaml:"defaults"`
 	On          workflowTriggers       `yaml:"on"`
 	Concurrency *workflowConcurrency   `yaml:"concurrency"`
 	Jobs        map[string]workflowJob `yaml:"jobs"`
@@ -76,15 +78,18 @@ type workflowRunEvent struct {
 }
 
 type workflowJob struct {
-	Name        string              `yaml:"name"`
-	RunsOn      string              `yaml:"runs-on"`
-	If          string              `yaml:"if"`
-	Uses        string              `yaml:"uses"`
-	Needs       []string            `yaml:"needs"`
-	Permissions map[string]string   `yaml:"permissions"`
-	Strategy    workflowStrategy    `yaml:"strategy"`
-	Concurrency workflowConcurrency `yaml:"concurrency"`
-	Steps       []workflowStep      `yaml:"steps"`
+	Additional      map[string]any      `yaml:",inline"`
+	TimeoutMinutes  int                 `yaml:"timeout-minutes"`
+	ContinueOnError bool                `yaml:"continue-on-error"`
+	Name            string              `yaml:"name"`
+	RunsOn          string              `yaml:"runs-on"`
+	If              string              `yaml:"if"`
+	Uses            string              `yaml:"uses"`
+	Needs           []string            `yaml:"needs"`
+	Permissions     map[string]string   `yaml:"permissions"`
+	Strategy        workflowStrategy    `yaml:"strategy"`
+	Concurrency     workflowConcurrency `yaml:"concurrency"`
+	Steps           []workflowStep      `yaml:"steps"`
 }
 
 type workflowStrategy struct {
@@ -95,6 +100,8 @@ type workflowStrategy struct {
 }
 
 type workflowStep struct {
+	Additional      map[string]any    `yaml:",inline"`
+	Background      bool              `yaml:"background"`
 	Name            string            `yaml:"name"`
 	ID              string            `yaml:"id"`
 	Run             string            `yaml:"run"`
@@ -221,6 +228,7 @@ go run ./.github/scripts/release-targets build`, "CI must build the canonical re
 	gate := ci.Jobs["gate"]
 	require(gate.Name == "Quality Gate", "CI must publish the Quality Gate check")
 	require(windowsInstallerGateReady(ci.Jobs["windows-installer"], gate), "Quality Gate must require Windows PowerShell 5.1 installer regression tests")
+	require(windowsLauncherWorkflowReady(ci), "Quality Gate must execute the standalone launcher lifecycle on Windows with pinned Node")
 	require(equal(gate.Needs, "build-and-test", "windows-installer", "lint", "quality", "mutation", "security-analysis", "dependency-review", "codex-review", "performance"), "Quality Gate must depend on every build, quality, security, review, and performance job")
 	gateStep := namedStep(gate, "Evaluate all gates")
 	gateRun := gateStep.Run
@@ -379,18 +387,128 @@ type rulesetValidation struct {
 }
 
 func unconditionalRequiredStep(step workflowStep) bool {
-	return step.If == "" && !step.ContinueOnError
+	return step.If == "" && !step.ContinueOnError && !step.Background
+}
+
+func requiredWindowsJob(job workflowJob) bool {
+	return job.RunsOn == "windows-latest" && job.If == "" && !job.ContinueOnError && len(job.Additional) == 0
 }
 
 func windowsInstallerGateReady(installer, gate workflowJob) bool {
 	step := namedStep(installer, "Test Windows PowerShell installer")
 	evaluator := namedStep(gate, "Evaluate all gates")
-	return installer.RunsOn == "windows-latest" && installer.If == "" &&
+	return requiredWindowsJob(installer) && !gate.ContinueOnError &&
 		step.Shell == "pwsh" && unconditionalRequiredStep(step) &&
 		strings.TrimSpace(step.Run) == `./tests/installer/test-dashboard-hub.ps1 -InstallerPowerShell "$env:WINDIR/System32/WindowsPowerShell/v1.0/powershell.exe"` &&
 		slices.Contains(gate.Needs, "windows-installer") && gate.If == "always()" &&
 		unconditionalRequiredStep(evaluator) &&
 		strings.Contains(evaluator.Run, `"${{ needs.windows-installer.result }}" != "success"`)
+}
+
+// Keep the supported evaluator identical to CI; substring checks cannot prove execution.
+const qualityGateScript = `echo "Build & Test: ${{ needs.build-and-test.result }}"
+echo "Windows 5.1:  ${{ needs.windows-installer.result }}"
+echo "Lint:         ${{ needs.lint.result }}"
+echo "Quality:      ${{ needs.quality.result }}"
+echo "Mutation:     ${{ needs.mutation.result }}"
+echo "CodeQL:       ${{ needs.security-analysis.result }}"
+echo "Dependencies: ${{ needs.dependency-review.result }}"
+echo "Codex review: ${{ needs.codex-review.result }}"
+echo "Performance:  ${{ needs.performance.result }}"
+
+if [[ "${{ needs.build-and-test.result }}" != "success" || \
+      "${{ needs.windows-installer.result }}" != "success" || \
+      "${{ needs.lint.result }}" != "success" || \
+      "${{ needs.quality.result }}" != "success" || \
+      "${{ needs.mutation.result }}" != "success" || \
+      "${{ needs.security-analysis.result }}" != "success" || \
+      "${{ needs.dependency-review.result }}" != "success" || \
+      "${{ needs.performance.result }}" != "success" ]]; then
+  echo "::error::One or more quality gates failed"
+  exit 1
+fi
+if [[ "$EVENT_NAME" == "workflow_dispatch" && \
+      "$REF" != "refs/heads/$DEFAULT_BRANCH" && \
+      "$REF_NAME" != chore/changelog-* ]]; then
+  echo "::error::A non-changelog branch dispatch cannot publish the required Quality Gate"
+  exit 1
+fi
+if [[ "$EVENT_NAME" == "pull_request" && "${{ needs.codex-review.result }}" != "success" ]]; then
+  echo "::error::Every pull request requires a clean current-head Codex review"
+  exit 1
+fi
+if [[ "${{ needs.codex-review.result }}" != "success" && "${{ needs.codex-review.result }}" != "skipped" ]]; then
+  echo "::error::Current-head Codex review gate did not pass"
+  exit 1
+fi
+echo "All quality gates passed ✅"`
+
+func windowsAggregateGateReady(gate workflowJob) bool {
+	if gate.RunsOn != "ubuntu-latest" || gate.If != "always()" || gate.ContinueOnError || len(gate.Additional) != 0 || len(gate.Steps) != 1 {
+		return false
+	}
+	want := workflowStep{
+		Name: "Evaluate all gates", Shell: "bash", Run: qualityGateScript,
+		Env: map[string]string{
+			"EVENT_NAME":     "${{ github.event_name }}",
+			"REF":            "${{ github.ref }}",
+			"REF_NAME":       "${{ github.ref_name }}",
+			"DEFAULT_BRANCH": "${{ github.event.repository.default_branch }}",
+		},
+	}
+	actual := gate.Steps[0]
+	actual.Run = strings.TrimSpace(actual.Run)
+	return reflect.DeepEqual(actual, want)
+}
+
+func windowsLauncherWorkflowReady(ci workflow) bool {
+	return len(ci.Env) == 0 && len(ci.Defaults) == 0 && windowsLauncherGateReady(ci.Jobs["windows-installer"], ci.Jobs["gate"])
+}
+
+func windowsLauncherGateReady(installer, gate workflowJob) bool {
+	step, found := findWorkflowStep(installer, "Test Windows standalone launcher")
+	return found && windowsInstallerGateReady(installer, gate) && windowsAggregateGateReady(gate) && windowsLauncherSetupReady(installer) &&
+		step.Shell == "pwsh" && unconditionalRequiredStep(step) && launcherNodeEnvironmentReady(step) &&
+		strings.TrimSpace(step.Run) == "node --test src/codex-dashboard/launcher.test.mjs"
+}
+
+func launcherNodeEnvironmentReady(step workflowStep) bool {
+	options, present := step.Env["NODE_OPTIONS"]
+	return present && options == "" && len(step.Env) == 1 && len(step.Additional) == 0
+}
+
+func windowsLauncherSetupReady(job workflowJob) bool {
+	checkout := requiredActionIndex(job, "actions/checkout")
+	node := requiredActionIndex(job, "actions/setup-node")
+	launcher := slices.IndexFunc(job.Steps, func(step workflowStep) bool {
+		return step.Name == "Test Windows standalone launcher"
+	})
+	return checkout == 0 && node == checkout+1 && launcher == node+1 && hasSingleLauncherAction(job, "actions/setup-node") && hasSingleLauncherAction(job, "actions/checkout") && reflect.DeepEqual(job.Steps[node].With, map[string]string{"node-version-file": ".node-version"})
+}
+
+func hasSingleLauncherAction(job workflowJob, action string) bool {
+	count := 0
+	for _, step := range job.Steps {
+		if strings.HasPrefix(step.Uses, action+"@") {
+			count++
+		}
+	}
+	return count == 1
+}
+
+func requiredActionIndex(job workflowJob, action string) int {
+	for index, step := range job.Steps {
+		if isPinnedAction(step.Uses, action) && unconditionalRequiredStep(step) && len(step.Additional) == 0 && len(step.Env) == 0 &&
+			(action != "actions/checkout" || checkoutTargetsWorkspace(step)) {
+			return index
+		}
+	}
+	return -1
+}
+
+func checkoutTargetsWorkspace(step workflowStep) bool {
+	return (step.With["repository"] == "" || step.With["repository"] == "${{ github.repository }}") &&
+		(step.With["path"] == "" || step.With["path"] == ".") && step.With["ref"] == ""
 }
 
 func validateRuleset(configuredRuleset ruleset) error {
