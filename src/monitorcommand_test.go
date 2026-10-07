@@ -173,6 +173,7 @@ func TestLegacyMonitorHostDefaultsToPublicDespiteRepositoryContext(t *testing.T)
 
 func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T) {
 	isolateMonitorHome(t)
+	t.Setenv(githubCommandTimeoutEnv, "2m")
 	configPath, err := monitorConfigPath()
 	if err != nil {
 		t.Fatalf("monitorConfigPath: %v", err)
@@ -185,7 +186,11 @@ func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T)
 
 	savedExec := monitorGHExecFunc
 	t.Cleanup(func() { monitorGHExecFunc = savedExec })
-	monitorGHExecFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+	monitorGHExecFunc = func(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) < 110*time.Second || time.Until(deadline) > 120*time.Second {
+			t.Errorf("print-query must use the configured two-minute one-shot timeout: %v", deadline)
+		}
 		login := "HemSoft"
 		if strings.Contains(strings.Join(args, " "), "ghe.example.com") {
 			login = "enterprise-user"
@@ -222,6 +227,18 @@ func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T)
 	}
 	if strings.Contains(output, "repo:ghe.example.com/Acme/Widgets") {
 		t.Fatalf("enterprise hostname leaked into repo qualifier:\n%s", output)
+	}
+}
+
+func TestPrintMonitorQueryRejectsInvalidOneShotTimeout(t *testing.T) {
+	isolateMonitorHome(t)
+	t.Setenv(githubCommandTimeoutEnv, "invalid")
+	var stdout bytes.Buffer
+	if err := printMonitorQuery(&stdout); err == nil || !strings.Contains(err.Error(), githubCommandTimeoutEnv) {
+		t.Fatalf("invalid one-shot timeout must be reported: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatal("invalid timeout produced query output")
 	}
 }
 

@@ -22,6 +22,7 @@ type monitorSectionData struct {
 
 // monitorFetchResult is the complete payload for one refresh cycle.
 type monitorFetchResult struct {
+	SectionLayout monitorSectionLayout
 	// Pinned retains per-repository results independently of the global cap.
 	Error         string
 	Incomplete    bool
@@ -254,9 +255,7 @@ func executeMonitorFetch(ctx context.Context, cfg *monitorConfig, now time.Time)
 type monitorHostFetcher func(context.Context, monitorHostQuery, *monitorConfig, time.Time) (*monitorFetchResult, error)
 
 func executeMonitorQueries(ctx context.Context, cfg *monitorConfig, queries []monitorHostQuery, now time.Time, fetch monitorHostFetcher) (*monitorFetchResult, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = monitorQueryContext(ctx)
 
 	outcomeChannel := make(chan monitorHostFetchOutcome, len(queries))
 	slots := make(chan struct{}, monitorQueryConcurrency)
@@ -323,6 +322,16 @@ func fetchMonitorHost(ctx context.Context, request monitorHostQuery, cfg *monito
 }
 
 func executeMonitorHostQuery(ctx context.Context, host, query string) (bytes.Buffer, bytes.Buffer, error) {
+	if ctx != nil {
+		if slots, ok := ctx.Value(monitorQuerySlotsKey{}).(chan struct{}); ok {
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				return bytes.Buffer{}, bytes.Buffer{}, githubContextError(ctx.Err())
+			}
+		}
+	}
 	args := []string{"api", "--hostname", host, "graphql", "-f", fmt.Sprintf("query=%s", query)}
 	return monitorGHExecFunc(ctx, args...)
 }
@@ -366,6 +375,7 @@ func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResul
 	result := &monitorFetchResult{
 		FetchedAt:     now,
 		Accessible:    map[string]bool{},
+		SectionLayout: newMonitorSectionLayout(cfg),
 		PRSections:    make([]monitorSectionData, len(cfg.PRSections)),
 		IssueSections: make([]monitorSectionData, len(cfg.IssueSections)),
 	}

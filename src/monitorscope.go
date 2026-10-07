@@ -92,6 +92,20 @@ func fetchMonitorOwnerPage(ctx context.Context, host, cursor string) (*monitorOw
 const monitorOwnerBatchSize = 16
 const monitorQueryConcurrency = 4
 
+type monitorQuerySlotsKey struct{}
+
+// One semaphore covers actual API calls across nested owner batches and pins.
+// Acquire only at the API boundary so parent orchestration cannot deadlock.
+func monitorQueryContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Value(monitorQuerySlotsKey{}) != nil {
+		return ctx
+	}
+	return context.WithValue(ctx, monitorQuerySlotsKey{}, make(chan struct{}, monitorQueryConcurrency))
+}
+
 func resolveMonitorAllHostQueries(ctx context.Context, request monitorHostQuery, cfg *monitorConfig) ([]monitorHostQuery, error) {
 	scope, err := discoverMonitorOwnerScope(ctx, request.Host)
 	if err != nil {
@@ -129,9 +143,7 @@ func executeMonitorAllRepoFetch(ctx context.Context, cfg *monitorConfig, now tim
 	if err != nil {
 		return nil, err
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx = monitorQueryContext(ctx)
 	outcomes := make(chan monitorHostFetchOutcome, len(cfg.Repos)+1)
 	go func() {
 		result, err := executeMonitorQueries(ctx, cfg, queries, now, fetchMonitorAllHost)
@@ -220,8 +232,38 @@ func mergeMonitorScopeMetadata(result, scope *monitorFetchResult) {
 	}
 }
 
+type monitorSectionLayout struct {
+	PRSections    []monitorSection
+	IssueSections []monitorSection
+	DefaultLimit  int
+}
+
+func newMonitorSectionLayout(cfg *monitorConfig) monitorSectionLayout {
+	return monitorSectionLayout{
+		PRSections: slices.Clone(cfg.PRSections), IssueSections: slices.Clone(cfg.IssueSections), DefaultLimit: cfg.Defaults.Limit,
+	}
+}
+
+func monitorSectionLayoutsEqual(a, b monitorSectionLayout) bool {
+	return a.DefaultLimit == b.DefaultLimit && slices.Equal(a.PRSections, b.PRSections) && slices.Equal(a.IssueSections, b.IssueSections)
+}
+
+func (m *monitorModel) invalidateMonitorSectionSnapshot() {
+	if m.data == nil || monitorSectionLayoutsEqual(m.data.SectionLayout, newMonitorSectionLayout(m.cfg)) {
+		return
+	}
+	m.data = nil
+	m.lastRefresh = time.Time{}
+	m.lastChanges = nil
+	m.changedKeys = nil
+	m.addedKeys = nil
+}
+
 func retainMonitorScopeSnapshot(current, previous *monitorFetchResult) {
 	if current == nil || previous == nil || current.Error == "" {
+		return
+	}
+	if !monitorSectionLayoutsEqual(current.SectionLayout, previous.SectionLayout) {
 		return
 	}
 	current.PRSections = previous.PRSections
@@ -254,6 +296,9 @@ func diffMonitorScope(previous, current *monitorFetchResult) []monitorChange {
 	if previous.Error != "" && previous.FetchedAt.IsZero() {
 		return nil
 	}
+	if !monitorSectionLayoutsEqual(previous.SectionLayout, current.SectionLayout) {
+		return nil
+	}
 	changes := diffMonitorSections(previous.PRSections, current.PRSections)
 	return append(changes, diffMonitorSections(previous.IssueSections, current.IssueSections)...)
 }
@@ -277,11 +322,21 @@ func monitorSearchAliasesIncomplete(data map[string]json.RawMessage, errors []mo
 		if !ok || (!strings.HasPrefix(alias, "pr") && !strings.HasPrefix(alias, "is")) {
 			continue
 		}
-		if raw := data[alias]; len(raw) == 0 || string(raw) == "null" {
+		if monitorSearchConnectionUnavailable(data[alias]) {
 			return true
 		}
 	}
 	return false
+}
+
+func monitorSearchConnectionUnavailable(raw json.RawMessage) bool {
+	var connection struct {
+		Nodes json.RawMessage `json:"nodes"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &connection) != nil {
+		return true
+	}
+	return len(connection.Nodes) == 0 || string(connection.Nodes) == "null"
 }
 
 func uniqueMonitorScopeChanges(changes []monitorChange) []monitorChange {

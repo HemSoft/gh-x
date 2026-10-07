@@ -332,7 +332,7 @@ func TestMonitorSectionFiltersCannotExtendRepositoryScope(t *testing.T) {
 			}
 			cfg.PRSections = nil
 			cfg.IssueSections = []monitorSection{{Title: "Issues", Filters: filters}}
-			if err := validateMonitorConfig(cfg); err == nil {
+			if err := validateMonitorConfig(cfg); err == nil || !strings.Contains(err.Error(), "monitor supplies repository scope") {
 				t.Fatalf("issue filters must use the same scope restriction: %q", filters)
 			}
 		})

@@ -86,8 +86,12 @@ func stopMonitorRefresh(initial monitorModel, final tea.Model) {
 	current.refreshState.waitIfStarted()
 }
 
-// printMonitorQuery renders the batched GraphQL document without running it.
+// printMonitorQuery discovers owners and prints searches without fetching items.
 func printMonitorQuery(stdout io.Writer) error {
+	timeout, err := configuredTimeout(githubCommandTimeoutEnv, defaultGitHubCommandTimeout)
+	if err != nil {
+		return err
+	}
 	configPath, err := monitorConfigPath()
 	if err != nil {
 		return err
@@ -100,7 +104,7 @@ func printMonitorQuery(stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultMonitorRefreshTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	allQueries := make([]monitorHostQuery, 0)
 	for _, query := range queries {

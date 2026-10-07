@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -331,6 +332,54 @@ func TestMonitorFailedScopesRetainIndependentSnapshotsAndErrors(t *testing.T) {
 	}
 }
 
+func TestMonitorSnapshotsDoNotCrossChangedSectionLayouts(t *testing.T) {
+	changes := map[string]func(*monitorConfig){
+		"filter":         func(cfg *monitorConfig) { cfg.PRSections[0].Filters = "is:open label:bug" },
+		"order":          func(cfg *monitorConfig) { cfg.PRSections[0], cfg.PRSections[1] = cfg.PRSections[1], cfg.PRSections[0] },
+		"title":          func(cfg *monitorConfig) { cfg.PRSections[0].Title = "Different" },
+		"section limit":  func(cfg *monitorConfig) { cfg.PRSections[0].Limit = 1 },
+		"default limit":  func(cfg *monitorConfig) { cfg.Defaults.Limit = 1 },
+		"issue filter":   func(cfg *monitorConfig) { cfg.IssueSections[0].Filters = "is:open label:bug" },
+		"remove section": func(cfg *monitorConfig) { cfg.PRSections = cfg.PRSections[:1] },
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			cfg := defaultMonitorConfig("owner/pinned")
+			previous := newMonitorFetchResult(cfg, time.Now())
+			previous.PRSections[0].Rows = []monitorRow{{Repo: "owner/pinned", Number: 1, Kind: monitorKindPR}}
+			change(cfg)
+			current := unavailableMonitorScope(cfg, errBoom())
+			retainMonitorScopeSnapshot(current, previous)
+			if !current.FetchedAt.IsZero() || len(current.PRSections[0].Rows) != 0 {
+				t.Fatal("incompatible section rows were retained")
+			}
+			if changes := diffMonitorScope(previous, newMonitorFetchResult(cfg, time.Now())); len(changes) != 0 {
+				t.Fatal("configuration change invented a removal event")
+			}
+			m := newMonitorModel(cfg, "", "", monitorSessionState{})
+			defer m.cancelRefresh()
+			m.data = previous
+			m.invalidateMonitorSectionSnapshot()
+			if m.data != nil {
+				t.Fatal("old layout remained visible after configuration changed")
+			}
+		})
+	}
+}
+
+func TestMonitorInFlightOldLayoutTriggersFreshFetch(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	m := newMonitorModel(cfg, "", "", monitorSessionState{})
+	defer m.cancelRefresh()
+	old := newMonitorFetchResult(cfg, time.Now())
+	cfg.PRSections[0].Filters = "is:open label:bug"
+	model, cmd := m.handleFetched(monitorFetchedMsg{result: old})
+	updated := model.(monitorModel)
+	if cmd == nil || !updated.refreshing || updated.data != nil {
+		t.Fatal("in-flight result for an old layout was accepted instead of scheduling the current layout")
+	}
+}
+
 func TestMonitorAllOwnerSearchBatchesLargeOrganizationMembership(t *testing.T) {
 	saved := monitorGHExecFunc
 	t.Cleanup(func() { monitorGHExecFunc = saved })
@@ -434,6 +483,9 @@ func TestMonitorSearchFailuresAreIncompleteWithoutSuppressingHierarchyChanges(t 
 	}{
 		{"search alias missing", []any{"pr0"}, nil, true},
 		{"search alias null", []any{"is0"}, map[string]json.RawMessage{"is0": json.RawMessage("null")}, true},
+		{"search nodes null", []any{"pr0", "nodes"}, map[string]json.RawMessage{"pr0": json.RawMessage(`{"issueCount":3,"nodes":null}`)}, true},
+		{"search nodes missing", []any{"is0", "nodes"}, map[string]json.RawMessage{"is0": json.RawMessage(`{"issueCount":3}`)}, true},
+		{"search connection malformed", []any{"pr0", "nodes"}, map[string]json.RawMessage{"pr0": json.RawMessage(`{`)}, true},
 		{"hierarchy cell unavailable", []any{"is0", "nodes", float64(0), "parent"}, map[string]json.RawMessage{"is0": json.RawMessage(`{"nodes":[]}`)}, false},
 		{"access probe", []any{"acc0"}, nil, false},
 		{"no path", nil, nil, false},
@@ -445,6 +497,80 @@ func TestMonitorSearchFailuresAreIncompleteWithoutSuppressingHierarchyChanges(t 
 				t.Fatalf("incomplete=%v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMonitorAllScopesShareFourAPICalls(t *testing.T) {
+	saved := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = saved })
+	var mu sync.Mutex
+	active, maximum := 0, 0
+	started := make(chan struct{}, 100)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	monitorGHExecFunc = func(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		mu.Lock()
+		active++
+		maximum = maxInt(maximum, active)
+		mu.Unlock()
+		defer func() { mu.Lock(); active--; mu.Unlock() }()
+		started <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return bytes.Buffer{}, bytes.Buffer{}, ctx.Err()
+		}
+		if strings.Contains(strings.Join(args, " "), "viewer {") {
+			orgs := []string{}
+			for i := range 33 {
+				orgs = append(orgs, fmt.Sprintf(`{"login":"team%d"}`, i))
+			}
+			payload := `{"data":{"viewer":{"login":"owner","organizations":{"nodes":[` + strings.Join(orgs, ",") + `],"pageInfo":{}}}}}`
+			return *bytes.NewBufferString(payload), bytes.Buffer{}, nil
+		}
+		return *bytes.NewBufferString(`{"data":{"pr0":{"issueCount":0,"nodes":[]}}}`), bytes.Buffer{}, nil
+	}
+	cfg := defaultMonitorConfig("")
+	for i := range 8 {
+		cfg.Repos = append(cfg.Repos, fmt.Sprintf("owner/pin%d", i))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := executeMonitorAllRepoFetch(ctx, cfg, time.Now()); done <- err }()
+	for range monitorQueryConcurrency {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("refresh did not fill four available API slots")
+		}
+	}
+	select {
+	case <-started:
+		t.Error("fifth API call started while all four refresh slots were occupied")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unblock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if maximum > monitorQueryConcurrency {
+		t.Fatalf("nested discovery, owner batches and pins reached %d simultaneous calls", maximum)
+	}
+}
+
+func TestMonitorQueuedAPICallHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(monitorQueryContext(context.Background()))
+	slots := ctx.Value(monitorQuerySlotsKey{}).(chan struct{})
+	for range monitorQueryConcurrency {
+		slots <- struct{}{}
+	}
+	cancel()
+	_, _, err := executeMonitorHostQuery(ctx, defaultGitHubHost, "must not run")
+	if err == nil {
+		t.Fatal("canceled queued call did not report cancellation")
 	}
 }
 

@@ -57,7 +57,9 @@ selectable data rows. Resizing recomputes geometry and keeps the cursor visible.
 All repos discovers the authenticated account and every organization through
 paginated GitHub GraphQL queries on each configured host. The resulting
 `user:` and `org:` qualifiers include newly created and unconfigured
-repositories automatically. Configured repositories provide optional sidebar
+repositories automatically. Section filters reject `repo:`, `user:`, and `org:`
+qualifiers because classic search unions them with the monitor's scope.
+Configured repositories provide optional sidebar
 shortcuts, each fetched separately under the same refresh deadline. Their
 results, counts and row limits remain independent. Owner qualifiers are
 batched in groups of at most 16, with bounded query concurrency. Failed scopes
