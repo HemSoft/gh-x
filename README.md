@@ -314,7 +314,7 @@ alternate-screen, keyboard, and mouse behavior.
 | --- | --- |
 | `tab` / `shift+tab` | Focus the list, details, or repository navigation. |
 | `j` / `k`, arrows, `g` / `G` | Move within the focused pane or jump to its beginning/end. |
-| Left / Right | Switch PR and issue tabs; open their All open section. |
+| Left / Right | Switch PR and issue tabs; select All open when configured. |
 | `1`–`9` | Select a configured section. Sections also support mouse clicks. |
 | `/`, Enter, Escape | Type a local filter, apply it, then clear it. |
 | Page Up / Page Down | Scroll the selected item's details. |

@@ -21,7 +21,8 @@ func (m monitorModel) renderSettingsScreen() string {
 	if m.settings.errText != "" {
 		lines = append(lines, m.theme.Error.Render(monitorPlainCell(m.settings.errText)))
 	}
-	lines = append(lines, "", m.theme.Muted.Render("tab next · ctrl+s save · esc cancel"))
+	lines = append(lines, "", m.theme.Muted.Render("tab next · enter newline/save"),
+		m.theme.Muted.Render("ctrl+s save · esc cancel"))
 	body := strings.Split(strings.Join(lines, "\n"), "\n")
 	body = padEachLine(body, innerWidth)
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).

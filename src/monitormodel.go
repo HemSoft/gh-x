@@ -210,6 +210,19 @@ func (m monitorModel) selectedRow() (monitorRow, bool) {
 	return rows[m.cursor], true
 }
 
+func (m monitorModel) selectedRowKey() string {
+	if row, ok := m.selectedRow(); ok {
+		return row.key()
+	}
+	return ""
+}
+
+func (m *monitorModel) resetDetailIfSelectionChanged(previous string) {
+	if previous != m.selectedRowKey() {
+		m.detailScroll = 0
+	}
+}
+
 func formatMonitorClock(t time.Time) string {
 	if t.IsZero() {
 		return "never"

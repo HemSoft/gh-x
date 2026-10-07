@@ -166,6 +166,7 @@ func scheduleMonitorTick(after time.Duration) tea.Cmd {
 // applyFetchResult merges a successful refresh into the model, diffing
 // against previous rows per section for change tracking.
 func (m *monitorModel) applyFetchResult(result *monitorFetchResult) {
+	previous := m.selectedRowKey()
 	var changes []monitorChange
 	if m.data != nil {
 		changes = append(changes, diffMonitorSections(m.data.PRSections, result.PRSections)...)
@@ -180,6 +181,7 @@ func (m *monitorModel) applyFetchResult(result *monitorFetchResult) {
 	m.refreshWarn = sanitizeMonitorMessage(strings.Join(result.Warnings, "; "))
 	m.backoff = minimumMonitorInterval
 	m.clampSelections()
+	m.resetDetailIfSelectionChanged(previous)
 }
 
 // diffMonitorSections pairs up same-index sections and reconciles rows.
@@ -223,10 +225,12 @@ func (m *monitorModel) markSeen(row monitorRow) {
 
 // filterInputUpdate forwards keys to the filter input while filtering.
 func (m monitorModel) filterInputUpdate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	previous := m.selectedRowKey()
 	if msg.String() == "esc" {
 		m.filtering = false
 		m.filter.SetValue("")
 		m.filter.Blur()
+		m.resetListScroll()
 		return m, nil
 	}
 	if msg.String() == "enter" {
@@ -238,5 +242,6 @@ func (m monitorModel) filterInputUpdate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 	m.filter, cmd = m.filter.Update(msg)
 	m.cursor = 0
 	m.offset = 0
+	m.resetDetailIfSelectionChanged(previous)
 	return m, cmd
 }

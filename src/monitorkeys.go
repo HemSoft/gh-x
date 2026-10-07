@@ -34,6 +34,7 @@ func (m monitorModel) handleSettingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 
 // applySettingsForm commits the settings overlay onto the config.
 func (m monitorModel) applySettingsForm() (tea.Model, tea.Cmd) {
+	previous := m.selectedRowKey()
 	if err := applySettings(&m.settings, m.cfg); err != nil {
 		return m, nil // error text already set on the form
 	}
@@ -44,6 +45,7 @@ func (m monitorModel) applySettingsForm() (tea.Model, tea.Cmd) {
 	}
 	m.interval = parseMonitorIntervalOrDefault(m.cfg.Defaults.Interval, defaultMonitorInterval)
 	m.clampSelections()
+	m.resetDetailIfSelectionChanged(previous)
 	m.settings.close()
 	return m.startRefresh()
 }
@@ -203,10 +205,9 @@ func (m *monitorModel) moveRepoSelection(delta int) {
 }
 
 func (m *monitorModel) setCursor(index int) {
-	if index != m.cursor {
-		m.detailScroll = 0
-	}
+	previous := m.selectedRowKey()
 	m.cursor = clampInt(index, 0, maxInt(len(m.visibleRows())-1, 0))
+	m.resetDetailIfSelectionChanged(previous)
 	m.ensureCursorVisible()
 	if row, ok := m.selectedRow(); ok {
 		m.markSeen(row)
@@ -251,8 +252,7 @@ func detailBodyLineCount(m monitorModel) int {
 func (m monitorModel) escapeMonitor() (tea.Model, tea.Cmd) {
 	if m.filter.Value() != "" {
 		m.filter.SetValue("")
-		m.cursor = 0
-		m.offset = 0
+		m.resetListScroll()
 		return m, nil
 	}
 	return m.quitMonitor()
@@ -290,7 +290,9 @@ func (m monitorModel) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	case "tab":
 		return m.selectTabByClick(hit.index), nil
 	case "subtab":
-		return m.selectSubTabByClick(hit.index + m.firstVisibleSection())
+		if hit.index < m.visibleSectionSlots() {
+			return m.selectSubTabByClick(hit.index + m.firstVisibleSection())
+		}
 	case "list":
 		m.focus = monitorFocusList
 		m.setCursor(hit.index + m.offset)

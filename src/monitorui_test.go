@@ -295,7 +295,7 @@ func TestMonitorSelectionAttributesCoverTitleStatusAndGaps(t *testing.T) {
 				number := monitorTestAttributesAt(t, text, "101")
 				for _, target := range []string{"SelectedTitle", "open", "pass"} {
 					attrs := monitorTestAttributesAt(t, text, target)
-					if attrs != number {
+					if attrs.background != number.background || attrs.bold != number.bold || attrs.reverse != number.reverse {
 						t.Fatalf("selection lost at %q: %+v vs %+v", target, attrs, number)
 					}
 				}
@@ -313,6 +313,7 @@ func TestMonitorSelectionAttributesCoverTitleStatusAndGaps(t *testing.T) {
 }
 
 type monitorTestAttributes struct {
+	foreground    string
 	background    string
 	bold, reverse bool
 }
@@ -341,6 +342,8 @@ func monitorTestAttributesAt(t *testing.T, text, target string) monitorTestAttri
 				style.reverse = false
 			case "49":
 				style.background = ""
+			case "39":
+				style.foreground = ""
 			case "38", "48":
 				count := 2
 				if i+1 < len(params) && params[i+1] == "2" {
@@ -349,6 +352,8 @@ func monitorTestAttributesAt(t *testing.T, text, target string) monitorTestAttri
 				if i+count < len(params) {
 					if params[i] == "48" {
 						style.background = strings.Join(params[i+1:i+count+1], ";")
+					} else {
+						style.foreground = strings.Join(params[i+1:i+count+1], ";")
 					}
 					i += count
 				}
@@ -417,7 +422,7 @@ func TestMonitorFetchedTextCannotMoveCursorOrRingBell(t *testing.T) {
 	if strings.ContainsAny(text, "\r\t\a\v\f\u0085") {
 		t.Fatalf("terminal control survived: %q", text)
 	}
-	for _, word := range []string{"SafeTitle", "first", "second", "third    column"} {
+	for _, word := range []string{"SafeTitle", "first", "second", "third   column"} {
 		if !strings.Contains(stripANSIForTest(text), word) {
 			t.Fatalf("normalized text lost %q", word)
 		}

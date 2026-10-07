@@ -22,7 +22,7 @@ const (
 	monitorCellMinWidth   = 4
 	monitorCellGap        = 1
 	monitorChangedMarker  = "●"
-	monitorAddedMarker    = "＋"
+	monitorAddedMarker    = "+"
 	monitorTruncateSuffix = "…"
 )
 

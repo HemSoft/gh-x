@@ -2,13 +2,13 @@ package main
 
 import (
 	"fmt"
-	"github.com/charmbracelet/x/ansi"
 	"strconv"
 	"strings"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // View renders the monitor screen with alt-screen and cell-motion mouse.
@@ -88,23 +88,46 @@ func (m monitorModel) dashboardHeading() string {
 	if m.repoIdx > 0 && m.repoIdx <= len(m.cfg.Repos) {
 		scope = m.cfg.Repos[m.repoIdx-1]
 	}
-	label := "  repo: " + monitorPlainCell(scope)
+	brand, prefix, focus := " GH X / MONITOR", "  repo: ", ""
 	if m.focus == monitorFocusSidebar {
-		label += " [focus]"
+		focus = " [focus]"
 	}
-	left := m.theme.Accent.Render(" GH X / MONITOR") + m.theme.Muted.Render(label)
-	right := fmt.Sprintf(" %d PRs · %d issues ", m.tabTotal(monitorTabPRs), m.tabTotal(monitorTabIssues))
+	right := m.dashboardTotals()
 	budget := maxInt(m.layout.Width-lipgloss.Width(right), 0)
+	scopeWidth := maxInt(budget-lipgloss.Width(brand+prefix+focus), 0)
+	label := prefix + truncateMonitorRepoName(monitorPlainCell(scope), scopeWidth) + focus
+	left := m.theme.Accent.Render(brand) + m.theme.Muted.Render(label)
 	return m.theme.Surface.Render(fitMonitorLine(left, budget) + right)
 }
 
-// Tab counts refer to the broad All open section, independent of active section.
+// A custom section is not an aggregate when All open is absent.
 func (m monitorModel) tabTotal(tab int) int {
 	sections := m.cfg.PRSections
 	if tab == monitorTabIssues {
 		sections = m.cfg.IssueSections
 	}
-	return monitorSectionTotal(m.data, tab, maxInt(monitorAllOpenIndex(sections), 0))
+	index := monitorAllOpenIndex(sections)
+	if index < 0 {
+		return -1
+	}
+	return monitorSectionTotal(m.data, tab, index)
+}
+
+func (m monitorModel) dashboardTotals() string {
+	var totals []string
+	for tab := range monitorTabCount {
+		if count := m.tabTotal(tab); count >= 0 {
+			label := monitorTabLabel(tab)
+			if tab == monitorTabIssues {
+				label = strings.ToLower(label)
+			}
+			totals = append(totals, fmt.Sprintf("%d %s", count, label))
+		}
+	}
+	if len(totals) == 0 {
+		return ""
+	}
+	return " " + strings.Join(totals, " · ") + " "
 }
 
 func (m monitorModel) helpFooter() string {
@@ -132,7 +155,7 @@ func (m monitorModel) footerLine() string {
 		return m.theme.Warning.Render(fitMonitorLine(" "+notice+"warning: r retry · partial data · "+monitorPlainCell(m.refreshWarn), width))
 	}
 	if hidden := hiddenReposSummary(m.cfg.Repos, m.data); hidden != "" {
-		left += " · " + hidden
+		left += " · " + m.theme.Error.Render(hidden)
 	}
 	if len(m.lastChanges) > 0 {
 		left += " · " + summarizeMonitorChanges(m.lastChanges, 1)
@@ -186,7 +209,10 @@ func (m monitorModel) buildMainLines() []string {
 func (m monitorModel) renderTabRow() string {
 	var out strings.Builder
 	for i, label := range []string{"PRs", "Issues"} {
-		slot := fitMonitorLine(fmt.Sprintf(" %s (%d)", label, m.tabTotal(i)), monitorTabSlotWidth)
+		if count := m.tabTotal(i); count >= 0 {
+			label += fmt.Sprintf(" (%d)", count)
+		}
+		slot := fitMonitorLine(" "+label, monitorTabSlotWidth)
 		style := m.theme.Muted
 		if i == m.tab {
 			style = m.theme.Selected
@@ -196,9 +222,13 @@ func (m monitorModel) renderTabRow() string {
 	return out.String()
 }
 
+func (m monitorModel) visibleSectionSlots() int {
+	return maxInt(m.listWidth()/monitorSubTabSlotWidth, 1)
+}
+
 func (m monitorModel) firstVisibleSection() int {
-	slots := maxInt(m.listWidth()/monitorSubTabSlotWidth, 1)
-	return maxInt(m.subTab-slots+1, 0)
+	// Keep a following slot available so mouse navigation can reach sections 10+.
+	return clampInt(m.subTab-1, 0, maxInt(len(m.sectionsForTab())-m.visibleSectionSlots(), 0))
 }
 
 func (m monitorModel) renderSubTabRow() string {
@@ -207,7 +237,7 @@ func (m monitorModel) renderSubTabRow() string {
 	}
 	sections := m.sectionsForTab()
 	var out strings.Builder
-	for i := m.firstVisibleSection(); i < len(sections); i++ {
+	for i := m.firstVisibleSection(); i < minInt(len(sections), m.firstVisibleSection()+m.visibleSectionSlots()); i++ {
 		label := truncateMonitorCell(monitorPlainCell(sections[i].Title), monitorSubTabSlotWidth-6)
 		slot := fitMonitorLine(fmt.Sprintf("%d [%s]", i+1, label), monitorSubTabSlotWidth)
 		style := m.theme.Muted

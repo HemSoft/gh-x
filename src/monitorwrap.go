@@ -3,69 +3,34 @@ package main
 import (
 	"strings"
 
-	"github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 )
 
-// wrapMonitorBody hard-wraps text to width using display cells.
-// Blank lines are preserved; long words are split without a suffix.
+// wrapMonitorBody hard-wraps text by display cells, preserving whitespace.
 func wrapMonitorBody(text string, width int) []string {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	if width < 10 {
-		width = 10
-	}
-	var wrapped []string
+	width = maxInt(width, 10)
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
-	text = strings.ReplaceAll(text, "\t", "    ")
+	var wrapped []string
 	for _, paragraph := range strings.Split(text, "\n") {
-		wrapped = append(wrapped, wrapMonitorLine(paragraph, width)...)
+		wrapped = append(wrapped, strings.Split(ansi.Hardwrap(expandMonitorTabs(paragraph), width, true), "\n")...)
 	}
 	return wrapped
 }
 
-func wrapMonitorLine(line string, width int) []string {
-	if runewidth.StringWidth(line) <= width {
-		return []string{line}
-	}
-	var out []string
-	var current string
-	flush := func() {
-		out = append(out, current)
-		current = ""
-	}
-	for _, word := range strings.Split(line, " ") {
-		switch {
-		case runewidth.StringWidth(word) > width:
-			chunks := splitLongWord(word, width)
-			if current != "" {
-				flush()
-			}
-			out = append(out, chunks[:len(chunks)-1]...)
-			current = chunks[len(chunks)-1]
-		case current == "":
-			current = word
-		case runewidth.StringWidth(current)+1+runewidth.StringWidth(word) <= width:
-			current += " " + word
-		default:
-			flush()
-			current = word
+func expandMonitorTabs(line string) string {
+	var out strings.Builder
+	column := 0
+	for i, part := range strings.Split(line, "\t") {
+		if i > 0 {
+			spaces := 4 - column%4
+			out.WriteString(strings.Repeat(" ", spaces))
+			column += spaces
 		}
+		out.WriteString(part)
+		column += ansi.StringWidth(part)
 	}
-	flush()
-	return out
-}
-
-// splitLongWord chops an over-long word into width-sized chunks.
-func splitLongWord(word string, width int) []string {
-	var chunks []string
-	for runewidth.StringWidth(word) > width {
-		head := runewidth.Truncate(word, width, "")
-		chunks = append(chunks, head)
-		word = strings.TrimPrefix(word, head)
-	}
-	if word != "" || len(chunks) == 0 {
-		chunks = append(chunks, word)
-	}
-	return chunks
+	return out.String()
 }
