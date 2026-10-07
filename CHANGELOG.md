@@ -248,9 +248,10 @@ and this project uses semantic versioning.
 
 ## Legacy history
 
-The entries below came from an earlier versioning scheme. `HemSoft/gh-x` has no
-`v0.16.0`, `v0.17.0`, or `v0.18.0` tags, so these are not published releases
-and intentionally have no version links.
+The entries below came from an earlier versioning scheme and are retained as
+historical notes without version links. They do not describe later GitHub
+Releases that reuse the same version numbers. Their dates distinguish them from
+the published releases above.
 
 ### 0.18.0 legacy entry (2026-06-08)
 
