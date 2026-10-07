@@ -16,9 +16,7 @@ type changelogOptions struct {
 	version string
 }
 
-func parseChangelogOptions(args []string, stderr io.Writer) (changelogOptions, error) {
-	var options changelogOptions
-
+func changelogFlags(options *changelogOptions, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet("changelog", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -28,6 +26,14 @@ func parseChangelogOptions(args []string, stderr io.Writer) (changelogOptions, e
 	flags.IntVar(&options.limit, "limit", 1, "Number of releases to show")
 	flags.IntVar(&options.limit, "L", 1, "Number of releases to show")
 	flags.StringVar(&options.version, "version", "", "Show a specific version (e.g. v0.3.0 or 0.3.0)")
+
+	return flags
+}
+
+func parseChangelogOptions(args []string, stderr io.Writer) (changelogOptions, error) {
+	var options changelogOptions
+
+	flags := changelogFlags(&options, stderr)
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

@@ -254,13 +254,19 @@ func runRunCmd(args []string, stdout io.Writer, stderr io.Writer) error {
 }
 
 func run(args []string, stdout io.Writer, stderr io.Writer) (<-chan string, error) {
+	args, terminal, err := extractTerminalOptions(args)
+	if clearErr := terminal.clearOutput(stdout); clearErr != nil {
+		return nil, clearErr
+	}
+	if err != nil {
+		return nil, err
+	}
 	var updateCh <-chan string
 	skipUpdate := len(args) > 0 && shouldSkipUpdateCheck(args[0])
 	if !skipUpdate && version != "dev" {
 		updateCh = asyncUpdateCheck()
 	}
 
-	var err error
 	if len(args) == 0 {
 		printBanner(stderr)
 		writeRootUsage(stdout)
@@ -339,9 +345,7 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) error {
 	return executeListFunc(options, stdout, stderr)
 }
 
-func parseListOptions(args []string, stderr io.Writer) (listOptions, error) {
-	options := defaultListOptions()
-
+func listFlags(options *listOptions, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet("list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -373,6 +377,14 @@ func parseListOptions(args []string, stderr io.Writer) (listOptions, error) {
 	flags.BoolVar(&options.web, "web", false, "Open the matching pull requests in the browser")
 	flags.BoolVar(&options.web, "w", false, "Open the matching pull requests in the browser")
 	flags.BoolVar(&options.json, "json", false, "Output enriched JSON instead of a table")
+
+	return flags
+}
+
+func parseListOptions(args []string, stderr io.Writer) (listOptions, error) {
+	options := defaultListOptions()
+
+	flags := listFlags(&options, stderr)
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -541,7 +553,11 @@ func matchesAll(s string, patterns []string) bool {
 const rootUsage = `gh-x adds opinionated commands for GitHub CLI.
 
 Usage:
-  gh x <command> [flags]
+  gh x [global flags] <command> [flags]
+
+Global flags:
+  --clear    Clear the terminal before output (default false)
+             May also appear among command flags; ignored for JSON and non-TTY stdout.
 
 Available Commands:
   status     Show repository health, issues, pull requests, and runs (alias: s)

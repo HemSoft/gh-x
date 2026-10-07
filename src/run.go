@@ -77,10 +77,7 @@ func runRunList(args []string, stdout io.Writer, stderr io.Writer) error {
 	return executeRunListFunc(options, stdout, time.Now())
 }
 
-func parseRunListOptions(args []string, stderr io.Writer) (runListOptions, error) {
-	var options runListOptions
-	options.limit = 20
-
+func runListFlags(options *runListOptions, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet("run list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -101,6 +98,15 @@ func parseRunListOptions(args []string, stderr io.Writer) (runListOptions, error
 	flags.StringVar(&options.event, "e", "", "Filter runs by event type")
 	flags.StringVar(&options.user, "user", "", "Filter runs by user who triggered the run")
 	flags.StringVar(&options.user, "u", "", "Filter runs by user who triggered the run")
+
+	return flags
+}
+
+func parseRunListOptions(args []string, stderr io.Writer) (runListOptions, error) {
+	var options runListOptions
+	options.limit = 20
+
+	flags := runListFlags(&options, stderr)
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

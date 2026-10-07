@@ -104,13 +104,7 @@ func defaultReviewOptions() prReviewOptions {
 	}
 }
 
-func parseReviewOptions(args []string, stderr io.Writer) (prReviewOptions, error) {
-	options := defaultReviewOptions()
-	flagArgs, target, err := splitReviewFlagArgs(args)
-	if err != nil {
-		return options, err
-	}
-
+func reviewFlags(options *prReviewOptions, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet("review", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -136,6 +130,18 @@ func parseReviewOptions(args []string, stderr io.Writer) (prReviewOptions, error
 	flags.BoolVar(&options.dryRun, "dry-run", false, "Print the resolved command and prompt without running the agent")
 	flags.BoolVar(&options.post, "post", options.post, "Post a GitHub pull request review with inline comments")
 	flags.BoolVar(&options.allowApprove, "allow-approve", options.allowApprove, "Allow strict-mode approval when the review has no findings")
+
+	return flags
+}
+
+func parseReviewOptions(args []string, stderr io.Writer) (prReviewOptions, error) {
+	options := defaultReviewOptions()
+	flagArgs, target, err := splitReviewFlagArgs(args)
+	if err != nil {
+		return options, err
+	}
+
+	flags := reviewFlags(&options, stderr)
 
 	if err := flags.Parse(flagArgs); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

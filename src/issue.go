@@ -84,11 +84,7 @@ func runIssueList(args []string, stdout io.Writer, stderr io.Writer) error {
 // executeIssueListFunc is swapped in tests to avoid real API calls.
 var executeIssueListFunc = executeIssueList
 
-func parseIssueListOptions(args []string, stderr io.Writer) (issueListOptions, error) {
-	var options issueListOptions
-	options.limit = 30
-	options.state = "open"
-
+func issueListFlags(options *issueListOptions, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet("issue list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -113,6 +109,16 @@ func parseIssueListOptions(args []string, stderr io.Writer) (issueListOptions, e
 	flags.BoolVar(&options.web, "w", false, "Open the matching issues in the browser")
 	flags.Var(&options.labels, "label", "Filter by label (repeatable)")
 	flags.Var(&options.labels, "l", "Filter by label (repeatable)")
+
+	return flags
+}
+
+func parseIssueListOptions(args []string, stderr io.Writer) (issueListOptions, error) {
+	var options issueListOptions
+	options.limit = 30
+	options.state = "open"
+
+	flags := issueListFlags(&options, stderr)
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
