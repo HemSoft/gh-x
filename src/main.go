@@ -255,10 +255,8 @@ func runRunCmd(args []string, stdout io.Writer, stderr io.Writer) error {
 
 func run(args []string, stdout io.Writer, stderr io.Writer) (<-chan string, error) {
 	args, terminal, err := extractTerminalOptions(args)
-	if terminal.clear && !terminal.json && terminalOutputFunc(stdout) {
-		if clearErr := clearTerminal(stdout); clearErr != nil {
-			return nil, fmt.Errorf("clear terminal: %w", clearErr)
-		}
+	if clearErr := terminal.clearOutput(stdout); clearErr != nil {
+		return nil, clearErr
 	}
 	if err != nil {
 		return nil, err

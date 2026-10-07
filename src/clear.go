@@ -25,6 +25,16 @@ type terminalOptions struct {
 	json  bool
 }
 
+func (options terminalOptions) clearOutput(w io.Writer) error {
+	if !options.clear || options.json || !terminalOutputFunc(w) {
+		return nil
+	}
+	if err := clearTerminal(w); err != nil {
+		return fmt.Errorf("clear terminal: %w", err)
+	}
+	return nil
+}
+
 type terminalFlagScan struct {
 	options terminalOptions
 	command []string
