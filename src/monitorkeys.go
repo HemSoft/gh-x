@@ -292,9 +292,7 @@ func (m monitorModel) handleClick(mouse tea.Mouse) (tea.Model, tea.Cmd) {
 	case "tab":
 		return m.selectTabByClick(hit.index), nil
 	case "subtab":
-		if hit.index < m.visibleSectionSlots() {
-			return m.selectSubTabByClick(hit.index + m.firstVisibleSection())
-		}
+		return m.selectVisibleSubTab(hit.index)
 	case "list":
 		m.focus = monitorFocusList
 		m.setCursor(hit.index + m.offset)
@@ -327,6 +325,13 @@ func (m monitorModel) selectTabByClick(slot int) tea.Model {
 	m.applyDefaultSubTab()
 	m.resetListScroll()
 	return m
+}
+
+func (m monitorModel) selectVisibleSubTab(slot int) (tea.Model, tea.Cmd) {
+	if slot < 0 || slot >= m.visibleSectionSlots() {
+		return m, nil
+	}
+	return m.selectSubTabByClick(slot + m.firstVisibleSection())
 }
 
 func (m monitorModel) selectSubTabByClick(slot int) (tea.Model, tea.Cmd) {
