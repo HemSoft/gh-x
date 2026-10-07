@@ -332,6 +332,23 @@ func TestMonitorFailedScopesRetainIndependentSnapshotsAndErrors(t *testing.T) {
 	}
 }
 
+func TestMonitorRetainedEmptySectionSuggestsCachedRowsAndKeepsFailureNotice(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	m := newMonitorModel(cfg, "", "", monitorSessionState{})
+	defer m.cancelRefresh()
+	previous := newMonitorFetchResult(cfg, time.Now())
+	previous.PRSections[2] = monitorSectionData{Total: 1, Rows: []monitorRow{{Repo: "owner/pinned", Number: 1, Kind: monitorKindPR}}}
+	m.applyFetchResult(previous)
+	m.applyFetchResult(unavailableMonitorScope(cfg, errBoom()))
+	if message := m.emptyListMessage(); !strings.Contains(message, "All open has 1") || !strings.Contains(message, "press 3") {
+		t.Fatalf("cached rows in other sections are not discoverable: %q", message)
+	}
+	m.layout = computeMonitorLayout(120, 40)
+	if !strings.Contains(m.footerLine(), "unavailable:") {
+		t.Fatal("retained-row suggestions hid the active refresh failure")
+	}
+}
+
 func TestMonitorSnapshotsDoNotCrossChangedSectionLayouts(t *testing.T) {
 	changes := map[string]func(*monitorConfig){
 		"filter":         func(cfg *monitorConfig) { cfg.PRSections[0].Filters = "is:open label:bug" },

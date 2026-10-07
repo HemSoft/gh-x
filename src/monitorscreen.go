@@ -284,7 +284,7 @@ func (m monitorModel) listLines() string {
 
 // emptyListMessage explains an empty view and points at sections with data.
 func (m monitorModel) emptyListMessage() string {
-	if data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos); data != nil && data.Error != "" {
+	if data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos); data != nil && data.Error != "" && data.FetchedAt.IsZero() {
 		return "Repository data unavailable · r retry"
 	}
 	sections := m.sectionsForTab()
