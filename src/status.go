@@ -76,6 +76,8 @@ type statusDashboard struct {
 	CurrentStatus             statusSummary
 	Branches                  statusBranchInventory
 	Worktrees                 []statusWorktree
+	Stashes                   int
+	StashesErr                error
 	Issues                    []displayIssue
 	IssuesErr                 error
 	IssuesRelErr              error
@@ -198,6 +200,7 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 		CurrentStatus: parseGitStatus(output),
 		Branches:      branches,
 	}
+	dashboard.Stashes, dashboard.StashesErr = fetchStatusStashes()
 
 	now := statusNowFunc()
 	cacheDirectory, cacheFingerprint, cacheErr := statusCacheDirectoryFunc()
@@ -225,6 +228,14 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 	merged, mergedKnown := fetchMergedStatusBranches(dashboard.DefaultBranch)
 	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, dashboard.DefaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
 	return dashboard, nil
+}
+
+func fetchStatusStashes() (int, error) {
+	output, err := statusCommandFunc("git", "stash", "list", "--format=%H")
+	if err != nil {
+		return 0, fmt.Errorf("git stash list: %w", err)
+	}
+	return len(strings.Fields(output)), nil
 }
 
 func fetchStatusRemoteData(dashboard *statusDashboard, mergedLimit int, colorEnabled bool, now time.Time) (map[string]bool, bool) {
@@ -773,19 +784,18 @@ const (
 
 func renderStatusHeader(stdout io.Writer, styler tableStyler, dashboard statusDashboard) {
 	rows := [][]tableCell{
-		{styler.dim("Repository"), statusRepositoryCell(styler, dashboard.Repository, dashboard.RepositoryURL)},
-		{styler.dim("Local time"), styler.plain(statusNowFunc().Local().Format("2006-01-02 03:04 PM MST"))},
-		{styler.dim(statusDefaultBranchLabel(dashboard.DefaultBranch)), statusDefaultBranchCell(styler, dashboard)},
+		{styler.plain(""), styler.dim("Repository"), statusRepositoryCell(styler, dashboard.Repository, dashboard.RepositoryURL)},
+		{styler.plain(""), styler.dim("Local time"), styler.plain(statusNowFunc().Local().Format("2006-01-02 03:04 PM MST"))},
+		{styler.plain(""), styler.dim(statusDefaultBranchLabel(dashboard.DefaultBranch)), statusDefaultBranchCell(styler, dashboard)},
+		statusBranchInventoryRow(styler, dashboard.Branches),
+		statusWorktreeInventoryRow(styler, dashboard.Worktrees),
+		statusStashInventoryRow(styler, dashboard.Stashes, dashboard.StashesErr),
 	}
 	if dashboard.CurrentStatus.Branch != dashboard.DefaultBranch || dashboard.DefaultStatusErr != nil {
-		rows = append(rows, []tableCell{styler.dim("Current"), statusCurrentBranchCell(styler, dashboard.CurrentStatus)})
+		rows = append(rows, []tableCell{styler.plain(""), styler.dim("Current"), statusCurrentBranchCell(styler, dashboard.CurrentStatus)})
 	}
-	rows = append(rows,
-		[]tableCell{styler.dim("Branches"), statusBranchInventoryCell(styler, dashboard.Branches)},
-		[]tableCell{styler.dim("Worktrees"), statusWorktreeInventoryCell(styler, dashboard.Worktrees)},
-	)
 
-	widths := computeColumnWidths([]tableCell{styler.plain(""), styler.plain("")}, rows)
+	widths := computeColumnWidths([]tableCell{styler.plain("✓"), styler.plain(""), styler.plain("")}, rows)
 	for _, row := range rows {
 		writeRow(stdout, row, widths)
 	}
@@ -861,23 +871,33 @@ func statusBranchSeverity(summary statusSummary) statusSeverity {
 	return statusHealthy
 }
 
-func statusBranchInventoryCell(styler tableStyler, inventory statusBranchInventory) tableCell {
+func statusBranchInventoryRow(styler tableStyler, inventory statusBranchInventory) []tableCell {
 	text := fmt.Sprintf("%d local (%d dangling) · %d remote", inventory.LocalCount, inventory.DanglingCount, inventory.RemoteCount)
-	severity := statusHealthy
-	if inventory.DanglingCount > 0 {
-		severity = statusAttention
-	}
-	return statusHeaderValue(styler, text, severity)
+	clean := inventory.LocalCount == 1 && inventory.DanglingCount == 0 && inventory.RemoteCount == 1
+	return statusInventoryRow(styler, "Branches", text, clean)
 }
 
-func statusWorktreeInventoryCell(styler tableStyler, worktrees []statusWorktree) tableCell {
+func statusWorktreeInventoryRow(styler tableStyler, worktrees []statusWorktree) []tableCell {
 	candidates := statusCleanupCandidateCount(worktrees)
 	text := fmt.Sprintf("%d total · %d cleanup %s", len(worktrees), candidates, pluralWord(candidates, "candidate", "candidates"))
-	severity := statusHealthy
-	if candidates > 0 {
-		severity = statusAttention
+	return statusInventoryRow(styler, "Worktrees", text, len(worktrees) == 1 && candidates == 0)
+}
+
+func statusStashInventoryRow(styler tableStyler, count int, err error) []tableCell {
+	if err != nil {
+		return []tableCell{styler.plain(""), styler.dim("Stashes"), statusHeaderValue(styler, "Unavailable: "+conciseStatusError(err), statusUnavailable)}
 	}
-	return statusHeaderValue(styler, text, severity)
+	return statusInventoryRow(styler, "Stashes", plural(count, "stash", "stashes"), count == 0)
+}
+
+func statusInventoryRow(styler tableStyler, label, text string, clean bool) []tableCell {
+	marker := styler.plain("")
+	severity := statusAttention
+	if clean {
+		marker = styler.colored("✓", termenv.ANSIGreen)
+		severity = statusHealthy
+	}
+	return []tableCell{marker, styler.dim(label), statusHeaderValue(styler, text, severity)}
 }
 
 func pluralWord(count int, singular, pluralText string) string {
@@ -1045,7 +1065,7 @@ func writeStatusUsage(w io.Writer) {
 const statusUsage = `Usage:
   gh x status [flags]
 
-Show repository health, branches, worktrees, open issues, open pull requests,
+Show repository health, branches, worktrees, stashes, open issues, open pull requests,
 recently merged pull requests, and the five most recent workflow runs.
 
 Flags:

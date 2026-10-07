@@ -278,6 +278,8 @@ func TestFetchStatusDashboard(t *testing.T) {
 			return branchOutput, nil
 		case "git worktree list --porcelain -z":
 			return worktreeOutput, nil
+		case "git stash list --format=%H":
+			return "first\nsecond\n", nil
 		case "git rev-parse --show-toplevel":
 			return "C:/repo.worktrees/issue-7 \r\n", nil
 		case "git -C C:/repo status --porcelain=v2 --branch":
@@ -300,6 +302,9 @@ func TestFetchStatusDashboard(t *testing.T) {
 	}
 	if got.Branches.LocalCount != 3 || got.Branches.RemoteCount != 1 || got.Branches.DanglingCount != 1 {
 		t.Fatalf("unexpected branch inventory: %#v", got.Branches)
+	}
+	if got.Stashes != 2 || got.StashesErr != nil {
+		t.Fatalf("stash inventory = %d, err=%v", got.Stashes, got.StashesErr)
 	}
 	if got.CurrentStatus.Branch != "feature/status" || len(got.Issues) != 1 || len(got.PullRequests) != 1 || len(got.WorkflowRuns) != statusWorkflowRunLimit {
 		t.Fatalf("unexpected dashboard data: %#v", got)
@@ -410,6 +415,8 @@ func installStatusDashboardGitFixture() {
 			return "refs/heads/main\tmain\torigin/main\t\t\nrefs/heads/old\told\torigin/old\t\t\nrefs/remotes/origin/HEAD\torigin\t\t\trefs/remotes/origin/main\n", nil
 		case "git worktree list --porcelain -z":
 			return strings.Join([]string{"worktree C:/repo", "HEAD a", "branch refs/heads/main", "", "worktree C:/old", "HEAD b", "branch refs/heads/old", ""}, "\x00"), nil
+		case "git stash list --format=%H":
+			return "", nil
 		case "git rev-parse --show-toplevel":
 			return "C:/repo\n", nil
 		case "git -C C:/repo status --porcelain=v2 --branch":

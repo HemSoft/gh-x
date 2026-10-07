@@ -1,0 +1,225 @@
+package main
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mattn/go-runewidth"
+	"github.com/muesli/termenv"
+)
+
+func TestStatusInventoryChecksExactCleanState(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		branches  statusBranchInventory
+		worktrees []statusWorktree
+		stashes   int
+		stashErr  error
+		want      [3]bool
+	}{
+		{name: "clean", branches: statusBranchInventory{LocalCount: 1, RemoteCount: 1}, worktrees: []statusWorktree{{}}, want: [3]bool{true, true, true}},
+		{name: "no local branch", branches: statusBranchInventory{RemoteCount: 1}, want: [3]bool{false, false, true}},
+		{name: "extra local branch", branches: statusBranchInventory{LocalCount: 2, RemoteCount: 1}, worktrees: []statusWorktree{{}}, want: [3]bool{false, true, true}},
+		{name: "missing remote branch", branches: statusBranchInventory{LocalCount: 1}, want: [3]bool{false, false, true}},
+		{name: "extra remote branch", branches: statusBranchInventory{LocalCount: 1, RemoteCount: 2}, want: [3]bool{false, false, true}},
+		{name: "dangling", branches: statusBranchInventory{LocalCount: 1, RemoteCount: 1, DanglingCount: 1}, want: [3]bool{false, false, true}},
+		{name: "extra worktree", worktrees: []statusWorktree{{}, {}}, want: [3]bool{false, false, true}},
+		{name: "cleanup candidate", worktrees: []statusWorktree{{CleanupCandidate: true}}, want: [3]bool{false, false, true}},
+		{name: "one stash", stashes: 1},
+		{name: "multiple stashes", stashes: 2},
+		{name: "stash unavailable", stashErr: errors.New("reflog unreadable")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, color := range []bool{false, true} {
+				var output bytes.Buffer
+				styler := newTableStyler(&output, color)
+				rows := [][]tableCell{statusBranchInventoryRow(styler, test.branches), statusWorktreeInventoryRow(styler, test.worktrees), statusStashInventoryRow(styler, test.stashes, test.stashErr)}
+				for i, row := range rows {
+					if got := row[0].text == "✓"; got != test.want[i] {
+						t.Fatalf("%s check = %v, want %v", row[1].text, got, test.want[i])
+					}
+					if test.want[i] && color && row[0].styled != styler.colored("✓", termenv.ANSIGreen).styled {
+						t.Fatalf("%s check is not green", row[1].text)
+					}
+				}
+				if test.stashErr != nil && !strings.Contains(rows[2][2].text, "Unavailable: reflog unreadable") {
+					t.Fatalf("stash error = %q", rows[2][2].text)
+				}
+			}
+		})
+	}
+}
+
+func TestStatusHeaderInventoryAlignment(t *testing.T) {
+	for _, color := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no color", true: "color"}[color], func(t *testing.T) {
+			dashboard := statusDashboard{Repository: "demo/service", DefaultBranch: "main", DefaultStatus: statusSummary{Upstream: "origin/main"}, DefaultCheckedOut: true, CurrentStatus: statusSummary{Branch: "feature/example"}, Branches: statusBranchInventory{LocalCount: 1, RemoteCount: 1}, Worktrees: []statusWorktree{{}}}
+			var buf bytes.Buffer
+			renderStatusHeader(&buf, newTableStyler(&buf, color), dashboard)
+			output := buf.String()
+			if !color && strings.Contains(output, "\x1b") {
+				t.Fatal("no-color header contains ANSI escapes")
+			}
+			lines := strings.Split(strings.TrimSpace(stripANSIForTest(output)), "\n")
+			labels := []string{"Main", "Branches", "Worktrees", "Stashes", "Current"}
+			indices := make([]int, len(labels))
+			for i, label := range labels {
+				found := false
+				for n, line := range lines {
+					if at := strings.Index(line, label); at >= 0 {
+						indices[i] = n
+						found = true
+						if runewidth.StringWidth(line[:at]) != 2 {
+							t.Fatalf("%s column=%d, want 2: %q", label, at, line)
+						}
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("missing %s in header: %s", label, output)
+				}
+			}
+			for i := 1; i < len(indices); i++ {
+				if indices[i] != indices[i-1]+1 {
+					t.Fatalf("inventory order=%v", indices)
+				}
+			}
+			for _, n := range indices[:4] {
+				line := lines[n]
+				if runewidth.StringWidth(line) > 80 {
+					t.Fatalf("inventory wraps at 80 columns: %q", line)
+				}
+			}
+			for _, want := range []string{"✓ Branches   1 local (0 dangling) · 1 remote", "✓ Worktrees  1 total · 0 cleanup candidates", "✓ Stashes    0 stashes"} {
+				if !strings.Contains(stripANSIForTest(output), want) {
+					t.Fatalf("missing aligned row %q in %s", want, output)
+				}
+			}
+		})
+	}
+}
+
+func TestFetchStatusStashes(t *testing.T) {
+	for _, test := range []struct {
+		name, output string
+		err          error
+		count        int
+	}{
+		{name: "zero"}, {name: "one", output: "abc\n", count: 1}, {name: "multiple", output: "abc\ndef\r\n", count: 2}, {name: "same commit twice", output: "abc\nabc\n", count: 2}, {name: "unavailable", output: "abc\n", err: errors.New("failed")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer saveStatusFuncs()()
+			statusCommandFunc = func(name string, args ...string) (string, error) {
+				if name != "git" || strings.Join(args, " ") != "stash list --format=%H" {
+					t.Fatalf("unexpected stash command: %s %v", name, args)
+				}
+				return test.output, test.err
+			}
+			count, err := fetchStatusStashes()
+			if count != test.count || !errors.Is(err, test.err) {
+				t.Fatalf("stashes=%d err=%v, want %d err=%v", count, err, test.count, test.err)
+			}
+		})
+	}
+}
+
+func TestStatusStashesRefreshWithCachedGitHubData(t *testing.T) {
+	defer saveStatusFuncs()()
+	installStatusDashboardGitFixture()
+	directory := t.TempDir()
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	statusNowFunc = func() time.Time { return now }
+	statusCacheDirectoryFunc = func() (string, string, error) { return directory, "demo", nil }
+	saveStatusCache(statusOptions{mergedLimit: 0}, false, now, statusDashboard{Repository: "demo/service", DefaultBranch: "main"}, nil, true)
+	statusIssueListFunc = func(issueListOptions, time.Time) (issueListResult, error) {
+		t.Fatal("warm cache fetched issues")
+		return issueListResult{}, nil
+	}
+	statusPullRequestListFunc = func(listOptions, time.Time) (pullRequestListResult, error) {
+		t.Fatal("warm cache fetched PRs")
+		return pullRequestListResult{}, nil
+	}
+	statusWorkflowRunListFunc = func(runListOptions, time.Time) (workflowRunListResult, error) {
+		t.Fatal("warm cache fetched runs")
+		return workflowRunListResult{}, nil
+	}
+	original := statusCommandFunc
+	for _, test := range []struct {
+		name, output string
+		err          error
+		count        int
+	}{{name: "zero"}, {name: "two", output: "one\ntwo\n", count: 2}, {name: "error", err: errors.New("stash denied")}, {name: "recovered"}} {
+		t.Run(test.name, func(t *testing.T) {
+			statusCommandFunc = func(name string, args ...string) (string, error) {
+				if strings.Join(args, " ") == "stash list --format=%H" {
+					return test.output, test.err
+				}
+				return original(name, args...)
+			}
+			dashboard, err := fetchStatusDashboard(false, statusOptions{mergedLimit: 0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dashboard.Repository != "demo/service" || dashboard.Stashes != test.count || !errors.Is(dashboard.StashesErr, test.err) {
+				t.Fatalf("cached dashboard=%#v", dashboard)
+			}
+		})
+	}
+}
+
+func TestStatusStashesSharedWithLinkedWorktrees(t *testing.T) {
+	defer saveStatusFuncs()()
+	root := t.TempDir()
+	main := filepath.Join(root, "main")
+	linked := filepath.Join(root, "linked")
+	if err := os.Mkdir(main, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	git := func(path string, args ...string) string {
+		t.Helper()
+		out, err := runStatusCommand("git", append([]string{"-C", path}, args...)...)
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return out
+	}
+	git(main, "init", "-q", "-b", "main")
+	git(main, "config", "user.name", "Demo")
+	git(main, "config", "user.email", "demo@example.test")
+	file := filepath.Join(main, "file.txt")
+	if err := os.WriteFile(file, []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git(main, "add", "file.txt")
+	git(main, "commit", "-qm", "Initial")
+	git(main, "worktree", "add", "-q", "-b", "example", linked)
+	for _, value := range []string{"one\n", "two\n"} {
+		if err := os.WriteFile(file, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		git(main, "stash", "push", "-q", "-m", "demo stash\nwith a multiline subject")
+	}
+	before := git(main, "stash", "list", "--format=%H")
+	for _, path := range []string{main, linked} {
+		statusCommandFunc = func(name string, args ...string) (string, error) {
+			return runStatusCommand(name, append([]string{"-C", path}, args...)...)
+		}
+		count, err := fetchStatusStashes()
+		if err != nil || count != 2 {
+			t.Fatalf("stash count from %s=%d, err=%v", path, count, err)
+		}
+	}
+	if after := git(main, "stash", "list", "--format=%H"); after != before {
+		t.Fatal("stash inspection changed the inventory")
+	}
+	git(linked, "stash", "drop", "-q")
+	count, err := fetchStatusStashes()
+	if err != nil || count != 1 {
+		t.Fatalf("after drop, stashes=%d err=%v", count, err)
+	}
+}
