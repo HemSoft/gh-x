@@ -71,6 +71,10 @@ jobs:
         shell: pwsh
         run: ./.agents/skills/perfection/scripts/test-audit.ps1
 
+      - name: Test migration credential parsing and policy
+        shell: pwsh
+        run: ./scripts/test-migration-credential.ps1
+
       - name: Test dashboard hub installer
         shell: pwsh
         run: ./tests/installer/test-dashboard-hub.ps1

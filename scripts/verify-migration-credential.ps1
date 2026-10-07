@@ -32,9 +32,11 @@ function Invoke-CredentialMetadataGet {
         }
         $script:failureCategory = 'invalid_response'
         $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json -AsHashtable
-        $scopes = if ($response.Headers.Contains('X-OAuth-Scopes')) {
-            ($response.Headers.GetValues('X-OAuth-Scopes') -join ',').Split(',').Trim()
-        } else { @() }
+        [string[]]$scopes = @()
+        if ($response.Headers.Contains('X-OAuth-Scopes')) {
+            $scopes = @(($response.Headers.GetValues('X-OAuth-Scopes') -join ',').Split(',').Trim() |
+                Where-Object { $_ -ne '' })
+        }
         return @{ data = $body; scopes = $scopes }
     } finally {
         if ($null -ne $response) { $response.Dispose() }

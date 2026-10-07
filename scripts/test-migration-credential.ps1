@@ -1,6 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $paths=@((Join-Path $PSScriptRoot 'verify-migration-credential.ps1'))
+& (Join-Path $PSScriptRoot 'test-migration-credential-http.ps1') -VerifierPath $paths[0]
 $content=Get-Content -Raw -LiteralPath $paths[0]
 foreach($path in $paths){if((Get-Content -Raw -LiteralPath $path) -cne $content){throw 'Credential helper copies differ.'}}
 $tokens=$null;$errors=$null
