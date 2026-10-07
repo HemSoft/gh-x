@@ -185,3 +185,30 @@ func TestMonitorReviewHiddenRepositoryIsAnErrorAndSettingsShowEnter(t *testing.T
 		}
 	}
 }
+
+func TestMonitorReviewRejectedSettingsPreserveScopeAndSelection(t *testing.T) {
+	for _, failure := range []string{"limit", "interval", "save"} {
+		t.Run(failure, func(t *testing.T) {
+			m := scrollableReviewModel()
+			m.cfg.Repos = []string{"owner/one"}
+			m.repoIdx = 1
+			m.settings.open(m.cfg)
+			m.settings.repos.SetValue("owner/two")
+			m.settings.limit.SetValue("10")
+			m.settings.interval.SetValue("5m")
+			m.configPath = t.TempDir() // A directory cannot be replaced by a config file.
+			switch failure {
+			case "limit":
+				m.settings.limit.SetValue("0")
+			case "interval":
+				m.settings.interval.SetValue("bad")
+			}
+			beforeKey, beforeLimit, beforeInterval := m.selectedRowKey(), m.cfg.Defaults.Limit, m.cfg.Defaults.Interval
+			model, cmd := m.applySettingsForm()
+			updated := model.(monitorModel)
+			if cmd != nil || updated.selectedRowKey() != beforeKey || updated.detailScroll != 12 || updated.cfg.Defaults.Limit != beforeLimit || updated.cfg.Defaults.Interval != beforeInterval {
+				t.Fatal("rejected settings partially changed live config or selection")
+			}
+		})
+	}
+}

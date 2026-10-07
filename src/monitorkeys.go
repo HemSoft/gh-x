@@ -35,14 +35,16 @@ func (m monitorModel) handleSettingsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 // applySettingsForm commits the settings overlay onto the config.
 func (m monitorModel) applySettingsForm() (tea.Model, tea.Cmd) {
 	previous := m.selectedRowKey()
-	if err := applySettings(&m.settings, m.cfg); err != nil {
+	next := *m.cfg
+	if err := applySettings(&m.settings, &next); err != nil {
 		return m, nil // error text already set on the form
 	}
-	if err := saveMonitorConfig(m.configPath, m.cfg); err != nil {
+	if err := saveMonitorConfig(m.configPath, &next); err != nil {
 		m.refreshErr = "save config: " + err.Error()
 		m.settings.close()
 		return m, nil
 	}
+	*m.cfg = next
 	m.interval = parseMonitorIntervalOrDefault(m.cfg.Defaults.Interval, defaultMonitorInterval)
 	m.clampSelections()
 	m.resetDetailIfSelectionChanged(previous)
