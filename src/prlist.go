@@ -271,7 +271,7 @@ func wrapExecError(err error, stderr string) error {
 func parseViewArgs(args []string) (number, repo string, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if (arg == "--repo" || arg == "-R") && i+1 < len(args) {
+		if isViewRepoFlag(arg) && i+1 < len(args) {
 			i++
 			repo = args[i]
 		} else if !looksLikeFlag(arg) {

@@ -52,9 +52,7 @@ func runCodespaceList(args []string, stdout io.Writer, stderr io.Writer) error {
 	return executeCodespaceList(options, stdout)
 }
 
-func parseCodespaceListOptions(args []string, stderr io.Writer) (codespaceListOptions, error) {
-	var options codespaceListOptions
-
+func codespaceListFlags(options *codespaceListOptions, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet("codespace list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -65,6 +63,14 @@ func parseCodespaceListOptions(args []string, stderr io.Writer) (codespaceListOp
 	flags.StringVar(&options.org, "o", "", "Filter by organization")
 	flags.StringVar(&options.repo, "repo", "", "Filter by repository (OWNER/REPO)")
 	flags.StringVar(&options.repo, "R", "", "Filter by repository (OWNER/REPO)")
+
+	return flags
+}
+
+func parseCodespaceListOptions(args []string, stderr io.Writer) (codespaceListOptions, error) {
+	var options codespaceListOptions
+
+	flags := codespaceListFlags(&options, stderr)
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

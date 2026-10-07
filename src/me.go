@@ -31,9 +31,7 @@ func runMe(args []string, stdout io.Writer, stderr io.Writer) error {
 	return executeMe(options, stdout)
 }
 
-func parseMeOptions(args []string, stderr io.Writer) (meOptions, error) {
-	options := meOptions{limit: 30}
-
+func meFlags(options *meOptions, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet("me", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -45,6 +43,14 @@ func parseMeOptions(args []string, stderr io.Writer) (meOptions, error) {
 	flags.IntVar(&options.limit, "limit", 30, "Maximum number of pull requests to show")
 	flags.IntVar(&options.limit, "L", 30, "Maximum number of pull requests to show")
 	flags.BoolVar(&options.json, "json", false, "Output enriched JSON instead of a table")
+
+	return flags
+}
+
+func parseMeOptions(args []string, stderr io.Writer) (meOptions, error) {
+	options := meOptions{limit: 30}
+
+	flags := meFlags(&options, stderr)
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

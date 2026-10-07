@@ -124,8 +124,7 @@ func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 	return renderStatus(stdout, dashboard, colorEnabled)
 }
 
-func parseStatusArgs(args []string, stderr io.Writer) (statusOptions, error) {
-	options := statusOptions{mergedLimit: statusMergedDefaultLimit}
+func statusFlags(options *statusOptions, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -133,6 +132,13 @@ func parseStatusArgs(args []string, stderr io.Writer) (statusOptions, error) {
 	}
 	flags.IntVar(&options.mergedLimit, "merged", statusMergedDefaultLimit, "number of recently merged pull requests to show; 0 hides the section")
 	flags.BoolVar(&options.refresh, "refresh", false, "bypass cached GitHub data and refresh it")
+
+	return flags
+}
+
+func parseStatusArgs(args []string, stderr io.Writer) (statusOptions, error) {
+	options := statusOptions{mergedLimit: statusMergedDefaultLimit}
+	flags := statusFlags(&options, stderr)
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

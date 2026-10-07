@@ -35,9 +35,7 @@ func runAtm(args []string, stdout io.Writer, stderr io.Writer) error {
 	return executeAtm(options, stdout)
 }
 
-func parseAtmOptions(args []string, stderr io.Writer) (atmOptions, error) {
-	options := atmOptions{limit: 30}
-
+func atmFlags(options *atmOptions, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet("atm", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -54,6 +52,14 @@ func parseAtmOptions(args []string, stderr io.Writer) (atmOptions, error) {
 	flags.BoolVar(&options.reviewRequired, "r", false, "Show only PRs where your review is directly requested")
 	flags.BoolVar(&options.ready, "ready", false, "Show only PRs ready to merge (open, AI pass, checks pass, all comments resolved)")
 	flags.BoolVar(&options.json, "json", false, "Output enriched JSON instead of a table")
+
+	return flags
+}
+
+func parseAtmOptions(args []string, stderr io.Writer) (atmOptions, error) {
+	options := atmOptions{limit: 30}
+
+	flags := atmFlags(&options, stderr)
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

@@ -45,6 +45,23 @@ gh x run list [flags]   # workflow runs with clickable IDs
 gh x version            # show version and check for updates (also: --version, -v)
 ```
 
+### Clear the terminal before output
+
+Use the global `--clear` flag to start with a clean terminal display:
+
+```bash
+gh x --clear status
+gh x s --clear
+gh x pr me --clear
+```
+
+The flag may appear before the command or among its flags. It clears the visible
+display and moves the cursor to the top once, before the banner and command
+output. It defaults to false; `--clear=false` also leaves the display unchanged.
+JSON output and non-terminal stdout ignore clearing, so pipes and redirected
+files do not receive terminal-clearing sequences. Existing watch and monitor
+refresh and terminal restoration behavior stays the same.
+
 ### Multi-account fallback
 
 If you switch between personal and work accounts, `gh x` adapts automatically.

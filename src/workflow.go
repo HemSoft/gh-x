@@ -44,9 +44,7 @@ func runWorkflowList(args []string, stdout io.Writer, stderr io.Writer) error {
 	return executeWorkflowList(options, stdout)
 }
 
-func parseWorkflowListOptions(args []string, stderr io.Writer) (workflowListOptions, error) {
-	var options workflowListOptions
-
+func workflowListFlags(options *workflowListOptions, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet("workflow list", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
@@ -57,6 +55,14 @@ func parseWorkflowListOptions(args []string, stderr io.Writer) (workflowListOpti
 	flags.StringVar(&options.repo, "R", "", "Select another repository using the [HOST/]OWNER/REPO format")
 	flags.BoolVar(&options.all, "all", false, "Include disabled workflows")
 	flags.BoolVar(&options.all, "a", false, "Include disabled workflows")
+
+	return flags
+}
+
+func parseWorkflowListOptions(args []string, stderr io.Writer) (workflowListOptions, error) {
+	var options workflowListOptions
+
+	flags := workflowListFlags(&options, stderr)
 
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
