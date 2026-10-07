@@ -885,7 +885,8 @@ func statusWorktreeInventoryRow(styler tableStyler, worktrees []statusWorktree) 
 
 func statusStashInventoryRow(styler tableStyler, count int, err error) []tableCell {
 	if err != nil {
-		return []tableCell{styler.plain(""), styler.dim("Stashes"), statusHeaderValue(styler, "Unavailable: "+conciseStatusError(err), statusUnavailable)}
+		text := boundedSingleLine("Unavailable: "+conciseStatusError(err), 60)
+		return []tableCell{styler.plain(""), styler.dim("Stashes"), statusHeaderValue(styler, text, statusUnavailable)}
 	}
 	return statusInventoryRow(styler, "Stashes", plural(count, "stash", "stashes"), count == 0)
 }
