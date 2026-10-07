@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-07
+
+- feat: include open Dependabot PRs in pr me (#192) (#193)
+- docs: record v0.15.7 release (#191)
+
 ## [0.15.7] - 2026-10-07
 
 - fix: discard dashboard theme previews on native cancellation (#190)
@@ -243,9 +248,10 @@ and this project uses semantic versioning.
 
 ## Legacy history
 
-The entries below came from an earlier versioning scheme. `HemSoft/gh-x` has no
-`v0.16.0`, `v0.17.0`, or `v0.18.0` tags, so these are not published releases
-and intentionally have no version links.
+The entries below came from an earlier versioning scheme and are retained as
+historical notes without version links. They do not describe later GitHub
+Releases that reuse the same version numbers. Their dates distinguish them from
+the published releases above.
 
 ### 0.18.0 legacy entry (2026-06-08)
 
@@ -295,7 +301,8 @@ and intentionally have no version links.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.15.7...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.16.0
 [0.15.7]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.7
 [0.15.6]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.6
 [0.15.5]: https://github.com/HemSoft/gh-x/releases/tag/v0.15.5
