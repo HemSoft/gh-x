@@ -357,6 +357,7 @@ func retainMonitorScopeSnapshot(current, previous *monitorFetchResult) {
 	if !monitorSectionLayoutsEqual(current.SectionLayout, previous.SectionLayout) {
 		return
 	}
+	current.Incomplete = current.Incomplete || previous.Incomplete
 	current.PRSections = previous.PRSections
 	current.IssueSections = previous.IssueSections
 	current.FetchedAt = previous.FetchedAt
@@ -427,12 +428,17 @@ func monitorSearchAliasesIncomplete(data map[string]json.RawMessage, errors []mo
 
 func monitorSearchConnectionUnavailable(raw json.RawMessage) bool {
 	var connection struct {
-		Nodes json.RawMessage `json:"nodes"`
+		Nodes []json.RawMessage `json:"nodes"`
 	}
-	if len(raw) == 0 || json.Unmarshal(raw, &connection) != nil {
+	if len(raw) == 0 || json.Unmarshal(raw, &connection) != nil || connection.Nodes == nil {
 		return true
 	}
-	return len(connection.Nodes) == 0 || string(connection.Nodes) == "null"
+	for _, node := range connection.Nodes {
+		if strings.TrimSpace(string(node)) == "null" {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueMonitorScopeChanges(changes []monitorChange) []monitorChange {

@@ -834,3 +834,46 @@ func TestMonitorSectionScopeValidationRespectsQuotedSearchValues(t *testing.T) {
 		})
 	}
 }
+
+func TestMonitorRetainedPartialSnapshotsDoNotInventRecoveryChanges(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	partial := newMonitorFetchResult(cfg, time.Now())
+	partial.Incomplete = true
+	partial.PRSections[2] = monitorSectionData{Total: 2, Rows: []monitorRow{{Repo: "owner/pinned", Kind: monitorKindPR, Number: 1}}}
+	partial.Pinned = map[string]*monitorFetchResult{"owner/pinned": newMonitorFetchResult(cfg, time.Now())}
+	partial.Pinned["owner/pinned"].Incomplete = true
+	partial.Pinned["owner/pinned"].PRSections[2] = partial.PRSections[2]
+	failed := unavailableMonitorScope(cfg, errBoom())
+	failed.Pinned = map[string]*monitorFetchResult{"owner/pinned": unavailableMonitorScope(cfg, errBoom())}
+	retainMonitorScopeSnapshots(failed, partial)
+	if !failed.Incomplete || !failed.Pinned["owner/pinned"].Incomplete {
+		t.Fatal("retention lost partial-data metadata for global or shortcut snapshots")
+	}
+	recovered := newMonitorFetchResult(cfg, time.Now())
+	recovered.PRSections[2] = monitorSectionData{Total: 2, Rows: []monitorRow{{Repo: "owner/pinned", Kind: monitorKindPR, Number: 1}, {Repo: "owner/pinned", Kind: monitorKindPR, Number: 2}}}
+	recovered.Pinned = map[string]*monitorFetchResult{"owner/pinned": newMonitorFetchResult(cfg, time.Now())}
+	recovered.Pinned["owner/pinned"].PRSections[2] = recovered.PRSections[2]
+	if changes := diffMonitorFetchScopes(failed, recovered); len(changes) != 0 {
+		t.Fatalf("recovery from retained partial data invented changes: %+v", changes)
+	}
+	if recovered.Incomplete || recovered.Pinned["owner/pinned"].Incomplete {
+		t.Fatal("complete recovery inherited the stale partial marker")
+	}
+}
+
+func TestMonitorNullSearchNodesDoNotBecomeRowsOrInventChanges(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	partialJSON := []byte(`{"data":{"pr0":{"issueCount":2,"nodes":[{"number":1,"repository":{"nameWithOwner":"owner/pinned"}},null]},"is0":{"issueCount":2,"nodes":[{"number":1,"repository":{"nameWithOwner":"owner/pinned"}},null]}},"errors":[{"message":"node field unavailable","path":["pr0","nodes",1,"repository"]},{"message":"node field unavailable","path":["is0","nodes",1,"repository"]}]}`)
+	partial, err := parseMonitorHostResponse(partialJSON, cfg, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !partial.Incomplete || len(partial.PRSections[0].Rows) != 1 || len(partial.IssueSections[0].Rows) != 1 {
+		t.Fatalf("nullable nodes must be skipped and mark the response incomplete: partial=%v, prs=%v, issues=%v", partial.Incomplete, partial.PRSections[0].Rows, partial.IssueSections[0].Rows)
+	}
+	complete := newMonitorFetchResult(cfg, time.Now())
+	complete.PRSections[0].Rows = []monitorRow{{Repo: "owner/pinned", Number: 1, Kind: monitorKindPR}, {Repo: "owner/pinned", Number: 2, Kind: monitorKindPR}}
+	if changes := diffMonitorScope(partial, complete); len(changes) != 0 {
+		t.Fatalf("null-node recovery invented change notifications: %v", changes)
+	}
+}

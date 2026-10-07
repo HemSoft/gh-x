@@ -605,7 +605,7 @@ func decodeMonitorPRSection(raw json.RawMessage, now time.Time) monitorSectionDa
 	rows := make([]monitorRow, 0, len(nodes))
 	for _, node := range nodes {
 		var prNode monitorPRNode
-		if json.Unmarshal(node, &prNode) != nil {
+		if json.Unmarshal(node, &prNode) != nil || prNode.Number <= 0 {
 			continue
 		}
 		rows = append(rows, mapMonitorPRNode(prNode, now))
