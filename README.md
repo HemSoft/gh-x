@@ -35,7 +35,7 @@ That's it. Prebuilt binaries are available for all platforms — no Go toolchain
 
 ```bash
 gh x pr list [flags]    # enriched PR list for current repo
-gh x pr me [flags]      # all your open PRs (authored + assigned) across an org
+gh x pr me [flags]      # your open PRs plus Dependabot PRs across an owner
 gh x pr atm [flags]     # org-wide PRs needing your attention
 gh x pr review [number] # read-only agentic PR review
 gh x pr changelog       # show release notes for recent versions
@@ -356,7 +356,10 @@ with a configuration error; they never disable the deadline.
 
 ## What `gh x pr me` adds
 
-All your open PRs — authored or assigned — across every repo in the org.
+Your open PRs, authored or assigned, plus all open Dependabot PRs across every
+repo in the selected organization or personal account. Dependabot PRs appear
+even when they are unassigned. The combined results show each PR once, ordered
+by most recent update, with `--limit` applied to the whole list.
 
 ```text
 #   Title                                      Repo   Author State Rev AI   Appv Checks Cmts Upd
@@ -377,10 +380,11 @@ Works with both organizations and personal accounts.
 ### `me` examples
 
 ```bash
-gh x pr me                           # my PRs across current org
-gh x pr me --org AcmeCorp            # my PRs in a specific org
-gh x pr me --limit 10                # capped at 10
-gh x pr me --json                    # machine-readable output
+gh x pr me                           # my PRs and Dependabot PRs across current owner
+gh x pr me --org AcmeCorp            # the same selection in a specific org
+gh x pr me --org octocat             # the same selection in a personal account
+gh x pr me --limit 10                # combined list capped at 10
+gh x pr me --json                    # the same enriched results as JSON
 ```
 
 ## What `gh x pr atm` adds
