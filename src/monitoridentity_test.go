@@ -197,10 +197,10 @@ func TestMonitorTotalFailurePreservesScopeErrorsAndBackoff(t *testing.T) {
 	if actual.data.Error != "global search unavailable" || pin.Error != "shortcut search unavailable" || len(pin.PRSections[2].Rows) != 1 || actual.refreshErr != "global search unavailable" || actual.backoff != minimumMonitorInterval*8 || actual.lastRefresh != old.FetchedAt {
 		t.Fatalf("scope failures lost state/backoff: %+v", actual)
 	}
-	if message := monitorScopeRefreshError(pin, actual.refreshErr); message != "shortcut search unavailable" {
+	if message := monitorScopeRefreshError(pin, actual.refreshErr, actual.refreshErrIsFetch); message != "shortcut search unavailable" {
 		t.Fatalf("selected failure hidden: %s", message)
 	}
-	if message := monitorScopeRefreshError(nil, actual.refreshErr); message != actual.refreshErr {
+	if message := monitorScopeRefreshError(nil, actual.refreshErr, actual.refreshErrIsFetch); message != actual.refreshErr {
 		t.Fatal("global error lost without a scope")
 	}
 	fresh := newMonitorModel(cfg, "", "", monitorSessionState{})
@@ -211,5 +211,26 @@ func TestMonitorTotalFailurePreservesScopeErrorsAndBackoff(t *testing.T) {
 	actual = updated.(monitorModel)
 	if actual.data == nil || actual.data.Pinned["owner/pinned"].Error == "" || len(actual.lastChanges) != 0 {
 		t.Fatal("initial failures did not reach the UI")
+	}
+}
+
+func TestMonitorActionErrorOverridesRetainedRefreshError(t *testing.T) {
+	cfg := defaultMonitorConfig("owner/pinned")
+	m := newMonitorModel(cfg, "", "", monitorSessionState{})
+	m.layout = computeMonitorLayout(120, 40)
+	m.data = unavailableMonitorScope(cfg, errors.New("old repository failure"))
+	m.refreshErr = "old global failure"
+	m.refreshErrIsFetch = true
+	model, _ := m.handleEditorDone(monitorEditorDoneMsg{err: errors.New("new editor failure")})
+	actual := model.(monitorModel)
+	if actual.refreshErrIsFetch || !strings.Contains(actual.footerLine(), "new editor failure") || strings.Contains(actual.footerLine(), "old repository failure") {
+		t.Fatalf("action failure masked: %s", actual.footerLine())
+	}
+	if got := monitorScopeRefreshError(m.data, "new browser failure", false); got != "new browser failure" {
+		t.Fatal("new action error lost")
+	}
+	actual.applyFetchResult(newMonitorTestFetchResult(cfg, time.Now()))
+	if actual.refreshErr != "" || actual.refreshErrIsFetch {
+		t.Fatal("successful refresh did not clear error provenance")
 	}
 }

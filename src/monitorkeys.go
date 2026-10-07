@@ -40,7 +40,7 @@ func (m monitorModel) applySettingsForm() (tea.Model, tea.Cmd) {
 		return m, nil // error text already set on the form
 	}
 	if err := saveMonitorConfig(m.configPath, &next); err != nil {
-		m.refreshErr = "save config: " + err.Error()
+		m.setMonitorActionError("save config: " + err.Error())
 		m.settings.close()
 		return m, nil
 	}

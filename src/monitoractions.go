@@ -22,7 +22,7 @@ func (m monitorModel) openSelectedInBrowser() tea.Model {
 	}
 	b := browser.New("", os.Stdout, os.Stderr)
 	if err := b.Browse(row.URL); err != nil {
-		m.refreshErr = "open browser: " + err.Error()
+		m.setMonitorActionError("open browser: " + err.Error())
 	}
 	return m
 }
@@ -50,7 +50,7 @@ func checkoutCommandFor(row monitorRow) string {
 func (m monitorModel) editConfigCmd() (tea.Model, tea.Cmd) {
 	editor := resolveMonitorEditor()
 	if editor == "" {
-		m.refreshErr = "set $EDITOR or $VISUAL to edit the config"
+		m.setMonitorActionError("set $EDITOR or $VISUAL to edit the config")
 		return m, nil
 	}
 	command := exec.Command(editor, m.configPath)
@@ -75,12 +75,12 @@ func resolveMonitorEditor() string {
 // handleEditorDone reloads the config after the editor exits.
 func (m monitorModel) handleEditorDone(msg monitorEditorDoneMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		m.refreshErr = "editor: " + msg.err.Error()
+		m.setMonitorActionError("editor: " + msg.err.Error())
 		return m, nil
 	}
 	cfg, _, err := loadOrCreateMonitorConfig(m.configPath, monitorSeedRepo(), legacyMonitorHost())
 	if err != nil {
-		m.refreshErr = "reload config: " + err.Error()
+		m.setMonitorActionError("reload config: " + err.Error())
 		return m, nil
 	}
 	previous := m.selectedRowKey()
@@ -90,4 +90,9 @@ func (m monitorModel) handleEditorDone(msg monitorEditorDoneMsg) (tea.Model, tea
 	m.clampSelections()
 	m.resetDetailIfSelectionChanged(previous)
 	return m.startRefresh()
+}
+
+func (m *monitorModel) setMonitorActionError(message string) {
+	m.refreshErr = message
+	m.refreshErrIsFetch = false
 }

@@ -155,7 +155,7 @@ func (m monitorModel) footerLine() string {
 	if m.refreshErr != "" {
 		data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos)
 		status := monitorSnapshotStatus(data)
-		return m.theme.Error.Render(fitMonitorLine(" "+notice+"error: r retry · "+status+" · "+monitorPlainCell(monitorScopeRefreshError(data, m.refreshErr)), width))
+		return m.theme.Error.Render(fitMonitorLine(" "+notice+"error: r retry · "+status+" · "+monitorPlainCell(monitorScopeRefreshError(data, m.refreshErr, m.refreshErrIsFetch)), width))
 	}
 	if data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos); data != nil && data.Error != "" {
 		return m.theme.Error.Render(fitMonitorLine(" "+notice+"unavailable: r retry · "+monitorPlainCell(data.Error), width))
@@ -173,8 +173,8 @@ func (m monitorModel) footerLine() string {
 	return m.theme.Muted.Render(fitMonitorLine(left, budget) + fitMonitorLine(right, minInt(width, lipgloss.Width(right))))
 }
 
-func monitorScopeRefreshError(data *monitorFetchResult, refreshErr string) string {
-	if data != nil && data.Error != "" {
+func monitorScopeRefreshError(data *monitorFetchResult, refreshErr string, isFetch bool) string {
+	if isFetch && data != nil && data.Error != "" {
 		return data.Error
 	}
 	return refreshErr

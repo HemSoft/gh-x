@@ -42,20 +42,21 @@ type monitorModel struct {
 	filtering bool
 	filter    textinput.Model
 
-	data           *monitorFetchResult
-	changedKeys    map[string]bool
-	addedKeys      map[string]bool
-	seenKeys       map[string]bool
-	lastChanges    []monitorChange
-	lastRefresh    time.Time
-	refreshErr     string
-	refreshWarn    string
-	refreshing     bool
-	refreshContext context.Context
-	cancelRefresh  context.CancelFunc
-	refreshState   *monitorRefreshState
-	interval       time.Duration
-	backoff        time.Duration
+	data              *monitorFetchResult
+	changedKeys       map[string]bool
+	addedKeys         map[string]bool
+	seenKeys          map[string]bool
+	lastChanges       []monitorChange
+	lastRefresh       time.Time
+	refreshErr        string
+	refreshErrIsFetch bool
+	refreshWarn       string
+	refreshing        bool
+	refreshContext    context.Context
+	cancelRefresh     context.CancelFunc
+	refreshState      *monitorRefreshState
+	interval          time.Duration
+	backoff           time.Duration
 
 	helpOpen bool
 	settings monitorSettingsModel

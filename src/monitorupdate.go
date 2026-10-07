@@ -141,6 +141,7 @@ func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) 
 	if msg.err != nil {
 		m.retainMonitorFailedRefresh(msg.result)
 		m.refreshErr = sanitizeMonitorError(msg.err)
+		m.refreshErrIsFetch = true
 		m.backoff = nextMonitorBackoff(m.backoff)
 		return m, scheduleMonitorTick(m.backoff)
 	}
@@ -202,6 +203,7 @@ func (m *monitorModel) applyFetchResult(result *monitorFetchResult) {
 	m.addedKeys = addedKeysSet(changes)
 	m.lastRefresh = result.FetchedAt
 	m.refreshErr = ""
+	m.refreshErrIsFetch = false
 	m.refreshWarn = sanitizeMonitorMessage(strings.Join(result.Warnings, "; "))
 	m.backoff = minimumMonitorInterval
 	m.clampSelections()
