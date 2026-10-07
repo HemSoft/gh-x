@@ -128,7 +128,8 @@ func bootstrapMonitorModel() (monitorModel, error) {
 		return monitorModel{}, err
 	}
 	state := loadMonitorState(statePath)
-	if _, statErr := os.Stat(statePath); statErr != nil {
+	_, statErr := os.Stat(statePath)
+	if statErr != nil {
 		// Virgin launch: no saved selections yet, so start on the broadest
 		// section instead of the first (often narrowest) one.
 		if state.Tab == monitorTabIssues && len(cfg.IssueSections) > 0 {
@@ -139,7 +140,11 @@ func bootstrapMonitorModel() (monitorModel, error) {
 	}
 	state = clampMonitorState(state, monitorTabCount,
 		len(cfg.PRSections), len(cfg.IssueSections), len(cfg.Repos)+1)
-	return newMonitorModel(cfg, configPath, statePath, state), nil
+	model := newMonitorModel(cfg, configPath, statePath, state)
+	if statErr != nil {
+		model.applyDefaultSubTab()
+	}
+	return model, nil
 }
 
 var monitorResolveRepoFunc = resolveRepo

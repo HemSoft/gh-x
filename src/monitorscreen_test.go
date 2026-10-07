@@ -70,7 +70,7 @@ func TestRenderTableHeaderAndRows(t *testing.T) {
 		t.Fatalf("header missing: %q", out)
 	}
 	if !strings.Contains(out, "title") {
-		t.Fatal("row content missing")
+		t.Fatalf("row content missing: %q", out)
 	}
 	if strings.Count(out, "\n") < 3 {
 		t.Fatalf("expected header plus rows plus padding: %q", out)
@@ -169,7 +169,7 @@ func TestTruncateMonitorCell(t *testing.T) {
 func TestSidebarRendersCountsAndSelection(t *testing.T) {
 	m := modelWithData()
 	counts := countMonitorRowsByRepo(m.data, m.cfg.Repos)
-	out := renderMonitorSidebar(m.cfg.Repos, 1, counts, 20, monitorSidebarWidth, false)
+	out := renderMonitorSidebar(m.cfg.Repos, 1, counts, 20, monitorSidebarWidth, false, newMonitorTheme(true, true))
 	if !strings.Contains(out, monitorRepoAll) {
 		t.Fatalf("'All repos' entry missing: %q", out)
 	}
@@ -206,7 +206,7 @@ func TestDetailMetadataPerKind(t *testing.T) {
 	}
 
 	standalone := monitorRow{Kind: monitorKindIssue, Number: 4, State: "open", Repo: "o/r", Parent: "-", SubIssues: "-"}
-	rendered := strings.Join(renderMonitorMetadataLines(monitorDetailMetadata(standalone), 80), "\n")
+	rendered := strings.Join(renderMonitorMetadataLines(monitorDetailMetadata(standalone), 80, newMonitorTheme(true, true)), "\n")
 	for _, want := range []string{"Parent:", "Sub-issues:"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("standalone issue detail omitted %s: %q", want, rendered)
@@ -223,13 +223,13 @@ func detailLinesText(lines []monitorDetailLine) string {
 }
 
 func TestRenderDetailEmptyAndPopulated(t *testing.T) {
-	empty := renderMonitorDetail(monitorRow{}, 80, 12, false)
+	empty := renderMonitorDetail(monitorRow{}, 80, 12, false, 0, newMonitorTheme(true, true))
 	if !strings.Contains(empty, "No selection") {
 		t.Fatalf("empty state wrong: %q", empty)
 	}
 	row := monitorRowForTest("o/r", 9, "open")
 	row.Body = strings.Repeat("word ", 200)
-	filled := renderMonitorDetail(row, 80, 12, true)
+	filled := renderMonitorDetail(row, 80, 12, true, 0, newMonitorTheme(true, true))
 	if !strings.Contains(filled, "9 ") {
 		t.Fatalf("detail should show number+title: %q", filled[:120])
 	}
@@ -253,7 +253,7 @@ func TestWrapMonitorBody(t *testing.T) {
 
 func TestLayoutBoundsAndHits(t *testing.T) {
 	layout := computeMonitorLayout(100, 24)
-	if layout.DetailHeight != 6 { // 24/4
+	if layout.DetailHeight != 8 { // 24/3
 		t.Fatalf("detail height wrong: %d", layout.DetailHeight)
 	}
 	tiny := computeMonitorLayout(100, 8)
@@ -267,40 +267,40 @@ func TestLayoutBoundsAndHits(t *testing.T) {
 	if hit := hitMonitorLocation(layout, 5, 5); hit.area != "sidebar" {
 		t.Fatalf("sidebar hit wrong: %+v", hit)
 	}
-	if hit := hitMonitorLocation(layout, 40, 0); hit.area != "tab" {
+	if hit := hitMonitorLocation(layout, layout.MainLeft+2, layout.TabTop); hit.area != "tab" {
 		t.Fatalf("tab hit wrong: %+v", hit)
 	}
-	if hit := hitMonitorLocation(layout, 40, 1); hit.area != "subtab" {
+	if hit := hitMonitorLocation(layout, layout.MainLeft+2, layout.SubTabTop); hit.area != "subtab" {
 		t.Fatalf("subtab hit wrong: %+v", hit)
 	}
 	if hit := hitMonitorLocation(layout, 40, layout.ListTop+2); hit.area != "list" {
 		t.Fatalf("list hit wrong: %+v", hit)
 	}
-	if hit := hitMonitorLocation(layout, 40, layout.DetailTop); hit.area != "detail" {
+	if hit := hitMonitorLocation(layout, 40, layout.DetailTop+1); hit.area != "detail" {
 		t.Fatalf("detail hit wrong: %+v", hit)
 	}
 }
 
 func TestMouseClickRouting(t *testing.T) {
 	m := modelWithData()
-	m.subTab = 0                                     // first PR section holds the seeded rows
-	model, _ := m.handleClick(tea.Mouse{X: 5, Y: 2}) // sidebar header row is a no-op
+	m.subTab = 0                                                       // first PR section holds the seeded rows
+	model, _ := m.handleClick(tea.Mouse{X: 5, Y: m.layout.SidebarTop}) // sidebar header row is a no-op
 	if updated := model.(monitorModel); updated.repoIdx != 0 {
 		t.Fatalf("header click should not change repo: %d", updated.repoIdx)
 	}
-	model, _ = m.handleClick(tea.Mouse{X: 5, Y: 4}) // first configured repo
+	model, _ = m.handleClick(tea.Mouse{X: 5, Y: m.layout.SidebarTop + 2}) // first configured repo
 	if updated := model.(monitorModel); updated.repoIdx != 1 {
 		t.Fatalf("click did not select repo: %d", updated.repoIdx)
 	}
-	model, _ = m.handleClick(tea.Mouse{X: 5, Y: 0}) // PRs tab slot
+	model, _ = m.handleClick(tea.Mouse{X: m.layout.MainLeft + 2, Y: m.layout.TabTop}) // PRs tab slot
 	if updated := model.(monitorModel); updated.tab != monitorTabPRs {
 		t.Fatalf("PRs tab click wrong: %d", updated.tab)
 	}
-	model, _ = m.handleClick(tea.Mouse{X: 15, Y: 0}) // Issues tab slot
+	model, _ = m.handleClick(tea.Mouse{X: m.layout.MainLeft + monitorTabSlotWidth + 2, Y: m.layout.TabTop}) // Issues tab slot
 	if updated := model.(monitorModel); updated.tab != monitorTabIssues {
 		t.Fatalf("issues tab click did not switch: %d", updated.tab)
 	}
-	model, _ = m.handleClick(tea.Mouse{X: 40, Y: m.layout.ListTop + 1})
+	model, _ = m.handleClick(tea.Mouse{X: m.layout.MainLeft + 2, Y: m.layout.ListTop + 2})
 	if updated := model.(monitorModel); updated.cursor != 1 {
 		t.Fatalf("row click did not move cursor: %d", updated.cursor)
 	}
@@ -647,7 +647,7 @@ func TestSidebarEntriesNeverOverflowWidth(t *testing.T) {
 		repos[0]: {Accessible: false},
 		repos[1]: {PRs: 12, Issues: 3, Accessible: true},
 	}
-	out := renderMonitorSidebar(repos, 0, counts, 20, monitorSidebarWidth, false)
+	out := renderMonitorSidebar(repos, 0, counts, 20, monitorSidebarWidth, false, newMonitorTheme(true, true))
 	for i, line := range strings.Split(out, "\n") {
 		if w := lipglossWidth(line); w > monitorSidebarWidth {
 			t.Fatalf("sidebar line %d overflows: width %d > %d (%q)", i, w, monitorSidebarWidth, line)
@@ -677,7 +677,7 @@ func TestTruncateMonitorRepoNameKeepsRepoHalf(t *testing.T) {
 func TestDetailRuleSpansMainWidth(t *testing.T) {
 	m := modelWithData()
 	lines := m.detailLines()
-	width := m.layout.Width - m.layout.SidebarWidth - 1
+	width := m.layout.Width - m.layout.MainLeft
 	if len(lines) != m.layout.DetailHeight {
 		t.Fatalf("detail region height wrong: %d != %d", len(lines), m.layout.DetailHeight)
 	}
@@ -686,7 +686,7 @@ func TestDetailRuleSpansMainWidth(t *testing.T) {
 			t.Fatalf("detail line %d overflows main area: %d > %d (%q)", i, w, width, line)
 		}
 	}
-	if !strings.Contains(strings.TrimRight(lines[0], " "), strings.Repeat("─", width)) {
+	if !strings.Contains(strings.TrimRight(lines[0], " "), strings.Repeat("─", width-len(" DETAILS "))) {
 		t.Fatalf("rule should span the full main width (%d): %q", width, lines[0])
 	}
 }

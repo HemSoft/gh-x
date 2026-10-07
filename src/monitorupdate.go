@@ -54,6 +54,8 @@ func (state *monitorRefreshState) waitIfStarted() {
 // Update dispatches messages; each branch delegates to a small handler.
 func (m monitorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		return m.handleMonitorBackground(msg)
 	case tea.WindowSizeMsg:
 		return m.handleResize(msg)
 	case monitorFetchedMsg:
@@ -77,6 +79,9 @@ func (m monitorModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.layout = computeMonitorLayout(msg.Width, msg.Height)
 	m.ready = true
 	m.cursor = m.clampedCursor()
+	m.ensureCursorVisible()
+	m.scrollDetailBy(0)
+	m.applyMonitorTheme()
 	return m, nil
 }
 
@@ -161,6 +166,7 @@ func scheduleMonitorTick(after time.Duration) tea.Cmd {
 // applyFetchResult merges a successful refresh into the model, diffing
 // against previous rows per section for change tracking.
 func (m *monitorModel) applyFetchResult(result *monitorFetchResult) {
+	previous := m.selectedRowKey()
 	var changes []monitorChange
 	if m.data != nil {
 		changes = append(changes, diffMonitorSections(m.data.PRSections, result.PRSections)...)
@@ -175,6 +181,7 @@ func (m *monitorModel) applyFetchResult(result *monitorFetchResult) {
 	m.refreshWarn = sanitizeMonitorMessage(strings.Join(result.Warnings, "; "))
 	m.backoff = minimumMonitorInterval
 	m.clampSelections()
+	m.resetDetailIfSelectionChanged(previous)
 }
 
 // diffMonitorSections pairs up same-index sections and reconciles rows.
@@ -203,6 +210,9 @@ func (m *monitorModel) clampSelections() {
 	m.subTab = clampInt(m.subTab, 0, maxInt(len(m.sectionsForTab())-1, 0))
 	m.repoIdx = clampInt(m.repoIdx, 0, len(m.cfg.Repos))
 	m.cursor = m.clampedCursor()
+	m.ensureCursorVisible()
+	m.scrollDetailBy(0)
+	m.applyMonitorTheme()
 	m.offset = clampInt(m.offset, 0, maxInt(len(m.visibleRows())-1, 0))
 }
 
@@ -215,10 +225,12 @@ func (m *monitorModel) markSeen(row monitorRow) {
 
 // filterInputUpdate forwards keys to the filter input while filtering.
 func (m monitorModel) filterInputUpdate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	previous := m.selectedRowKey()
 	if msg.String() == "esc" {
 		m.filtering = false
 		m.filter.SetValue("")
 		m.filter.Blur()
+		m.resetListScroll()
 		return m, nil
 	}
 	if msg.String() == "enter" {
@@ -230,5 +242,6 @@ func (m monitorModel) filterInputUpdate(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 	m.filter, cmd = m.filter.Update(msg)
 	m.cursor = 0
 	m.offset = 0
+	m.resetDetailIfSelectionChanged(previous)
 	return m, cmd
 }

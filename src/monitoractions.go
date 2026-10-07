@@ -83,8 +83,10 @@ func (m monitorModel) handleEditorDone(msg monitorEditorDoneMsg) (tea.Model, tea
 		m.refreshErr = "reload config: " + err.Error()
 		return m, nil
 	}
+	previous := m.selectedRowKey()
 	*m.cfg = *cfg
 	m.interval = parseMonitorIntervalOrDefault(cfg.Defaults.Interval, defaultMonitorInterval)
 	m.clampSelections()
+	m.resetDetailIfSelectionChanged(previous)
 	return m.startRefresh()
 }

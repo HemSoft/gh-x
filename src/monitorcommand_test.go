@@ -219,6 +219,7 @@ func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T)
 func isolateMonitorHome(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)            // macOS user config dir
 	t.Setenv("AppData", dir)         // Windows user config dir
 	t.Setenv("XDG_CONFIG_HOME", dir) // Unix user config dir
 }
@@ -362,7 +363,7 @@ func TestRenderSettingsScreenContent(t *testing.T) {
 }
 
 func TestCenteringHelpers(t *testing.T) {
-	block := blockCentered("line1\nline2", 40)
+	block := centerMonitorBlock("line1\nline2", 40, 2)
 	if !strings.HasPrefix(block, " ") {
 		t.Fatal("block not indented")
 	}
@@ -408,5 +409,45 @@ func TestInitSchedulesInitialFetch(t *testing.T) {
 	m := newTestMonitorModel()
 	if m.Init() == nil {
 		t.Fatal("Init must fetch")
+	}
+}
+
+func TestBootstrapMonitorDistinguishesFirstLaunchAndSavedSelection(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		saved bool
+		want  int
+	}{
+		{"first launch", false, 0}, {"saved custom section", true, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			isolateMonitorHome(t)
+			cfg := monitorTestConfig()
+			cfg.PRSections = []monitorSection{{Title: "All open", Filters: "is:open"}, {Title: "Needs review", Filters: "is:open review:required"}}
+			configPath, err := monitorConfigPath()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = saveMonitorConfig(configPath, cfg); err != nil {
+				t.Fatal(err)
+			}
+			if test.saved {
+				statePath, stateErr := monitorStatePath()
+				if stateErr != nil {
+					t.Fatal(stateErr)
+				}
+				if err = saveMonitorState(statePath, monitorSessionState{SubTab: 1}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			model, err := bootstrapMonitorModel()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer model.cancelRefresh()
+			if model.subTab != test.want {
+				t.Fatalf("section=%d want %d", model.subTab, test.want)
+			}
+		})
 	}
 }

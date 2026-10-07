@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -12,6 +13,7 @@ type monitorColumn struct {
 	Width   int
 	Flex    bool // flexible columns absorb width changes
 	Primary bool // the main reading column, protected while shrinking
+	Index   int  // source cell before responsive projection
 	Min     int  // floor for flex columns during fair shrinking
 }
 
@@ -20,7 +22,7 @@ const (
 	monitorCellMinWidth   = 4
 	monitorCellGap        = 1
 	monitorChangedMarker  = "●"
-	monitorAddedMarker    = "＋"
+	monitorAddedMarker    = "+"
 	monitorTruncateSuffix = "…"
 )
 
@@ -32,7 +34,7 @@ func monitorPRColumns() []monitorColumn {
 		{Title: "Repo", Width: 12, Flex: true, Min: 8},
 		{Title: "Author", Width: 12, Flex: true, Min: 8},
 		{Title: "State", Width: 7},
-		{Title: "Rev", Width: 4},
+		{Title: "Rev", Width: 8},
 		{Title: "AI", Width: 5},
 		{Title: "Appv", Width: 4},
 		{Title: "Checks", Width: 8},
@@ -92,7 +94,7 @@ func planMonitorColumns(columns []monitorColumn, rows [][]string, availWidth int
 		if !planned[i].Flex && natural < planned[i].Width {
 			continue
 		}
-		planned[i].Width = minInt(natural, planned[i].Width+2)
+		planned[i].Width = maxInt(minInt(natural, planned[i].Width+2), planned[i].Min)
 	}
 	shrinkMonitorColumns(planned, availWidth)
 	growMonitorColumns(planned, availWidth)
@@ -213,38 +215,35 @@ type monitorTableRenderInput struct {
 	Width       int
 	ChangedKeys map[string]bool
 	AddedKeys   map[string]bool
+	Theme       monitorTheme
+	Focused     bool
 }
 
 // renderMonitorTable renders the visible slice of rows with header.
 func renderMonitorTable(input monitorTableRenderInput) string {
-	columns := monitorColumnsForKind(input.Kind)
+	columns := responsiveMonitorColumns(monitorColumnsForKind(input.Kind), input.Width-1)
 	cells := make([][]string, len(input.Rows))
 	for i, row := range input.Rows {
-		cells[i] = monitorRowCells(input.Kind, row)
+		source := monitorRowCells(input.Kind, row)
+		for _, col := range columns {
+			cells[i] = append(cells[i], monitorPlainCell(source[col.Index]))
+		}
 	}
-	planned := planMonitorColumns(columns, cells, input.Width)
-
-	var sb strings.Builder
-	sb.WriteString(renderMonitorHeaderLine(planned))
-	sb.WriteString("\n")
-
-	last := clampInt(input.Offset+input.Height-1, 0, len(input.Rows)-1)
-	for i := input.Offset; i <= last && len(input.Rows) > 0; i++ {
-		line := renderMonitorRowLine(planned, cells[i])
-		sb.WriteString(decorateMonitorRowLine(line, input.Rows[i], input, i))
-		sb.WriteString("\n")
+	planned := planMonitorColumns(columns, cells, maxInt(input.Width-1, 0))
+	lines := []string{fitMonitorLine(renderMonitorHeaderLine(planned, input.Theme.resolved()), input.Width)}
+	last := minInt(input.Offset+maxInt(input.Height-1, 0), len(input.Rows))
+	for i := input.Offset; i < last; i++ {
+		line := renderMonitorRowLine(planned, cells[i], input.Theme.resolved(), monitorRowSelection(input, i))
+		lines = append(lines, decorateMonitorRowLine(line, input.Rows[i], input, i))
 	}
-	for i := last - input.Offset + 1; i < input.Height; i++ {
-		sb.WriteString("\n")
-	}
-	return sb.String()
+	return strings.Join(padToMonitorLines(lines, input.Height), "\n")
 }
 
-func renderMonitorHeaderLine(planned []monitorColumn) string {
+func renderMonitorHeaderLine(planned []monitorColumn, theme monitorTheme) string {
 	parts := make([]string, len(planned))
 	for i, col := range planned {
 		text := truncateMonitorCell(col.Title, col.Width)
-		parts[i] = monitorStyleHeader.Render(text + padTo(col.Width, text))
+		parts[i] = theme.Heading.Render(text + padTo(col.Width, text))
 	}
 	// Data rows carry a one-cell change marker before column 0; the header
 	// reserves the same gutter so titles sit above their data.
@@ -260,29 +259,73 @@ func padTo(width int, text string) string {
 	return strings.Repeat(" ", padding)
 }
 
-func renderMonitorRowLine(planned []monitorColumn, cells []string) string {
+func renderMonitorRowLine(planned []monitorColumn, cells []string, theme monitorTheme, selection lipgloss.Style) string {
 	parts := make([]string, len(planned))
 	for i, col := range planned {
 		text := ""
 		if i < len(cells) {
 			text = truncateMonitorCell(cells[i], col.Width)
 		}
-		parts[i] = text + padTo(col.Width, text)
+		parts[i] = monitorCellStyle(theme, col.Title, cells[i]).Inherit(selection).Render(text + padTo(col.Width, text))
 	}
-	return strings.Join(parts, strings.Repeat(" ", monitorCellGap))
+	return strings.Join(parts, selection.Render(strings.Repeat(" ", monitorCellGap)))
 }
 
 // decorateMonitorRowLine applies selection, glow, and marker styling.
 func decorateMonitorRowLine(line string, row monitorRow, input monitorTableRenderInput, index int) string {
-	marker := " "
+	theme := input.Theme.resolved()
+	selection := monitorRowSelection(input, index)
+	marker := selection.Render(" ")
 	switch {
 	case input.AddedKeys[row.key()]:
-		marker = monitorStyleAdded.Render(monitorAddedMarker)
+		marker = theme.Success.Inherit(selection).Render(monitorAddedMarker)
 	case input.ChangedKeys[row.key()]:
-		marker = monitorStyleChanged.Render(monitorChangedMarker)
+		marker = theme.Warning.Inherit(selection).Render(monitorChangedMarker)
 	}
-	if index == input.Cursor {
-		return monitorStyleSelected.Render(marker + line)
+	text := marker + line
+	padding := selection.Render(strings.Repeat(" ", maxInt(input.Width-lipgloss.Width(text), 0)))
+	return fitMonitorLine(text+padding, input.Width)
+}
+
+func monitorRowSelection(input monitorTableRenderInput, index int) lipgloss.Style {
+	if index != input.Cursor {
+		return lipgloss.NewStyle()
 	}
-	return marker + line
+	theme := input.Theme.resolved()
+	if input.Focused {
+		return theme.Selected
+	}
+	return theme.Selection
+}
+
+// Compact views keep decision fields; the detail view retains every other field.
+func responsiveMonitorColumns(columns []monitorColumn, width int) []monitorColumn {
+	var keep map[string]bool
+	switch {
+	case width < 60:
+		keep = map[string]bool{"#": true, "Title": true, "Checks": true, "State": true}
+	case width < 90:
+		keep = map[string]bool{"#": true, "Title": true, "Repo": true, "State": true, "Checks": true, "Rev": true}
+	case width < 110:
+		keep = map[string]bool{"#": true, "Title": true, "Repo": true, "State": true, "Checks": true, "Rev": true, "AI": true, "Appv": true, "Upd": true}
+	}
+	selected := make([]monitorColumn, 0, len(columns))
+	for i, col := range columns {
+		col.Index = i
+		if keep == nil || keep[col.Title] {
+			selected = append(selected, col)
+		}
+	}
+	return selected
+}
+
+func monitorCellStyle(theme monitorTheme, column, value string) lipgloss.Style {
+	switch column {
+	case "State", "Rev", "AI", "Checks":
+		return theme.semantic(value)
+	case "Title":
+		return theme.Text
+	default:
+		return theme.Muted
+	}
 }

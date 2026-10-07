@@ -275,9 +275,11 @@ approval.
 ## What `gh x monitor` adds
 
 `gh x monitor` is an interactive, read-only dashboard for pull requests and
-issues across multiple repositories. The sidebar selects a repository, the top
-tabs switch between pull requests and issues, configurable sections apply
-GitHub search filters, and the detail pane shows the selected item's body.
+issues across multiple repositories. The sidebar selects a repository in
+terminals at least 100 columns wide; compact terminals show the repository in
+the header instead. The top tabs switch between pull requests and issues,
+configurable sections apply GitHub search filters, and the detail pane shows
+the selected item's metadata and scrollable body.
 Issue rows include the immediate parent and direct sub-issue progress. The
 issue detail pane repeats both values.
 
@@ -299,6 +301,33 @@ working directory.
 
 The repository's `src/cfg.yml` is development data and is not read by
 `gh x monitor` in production.
+
+The dashboard supports terminals from 60×16 cells and adapts its columns to
+80×24, 120×40, and larger windows. Compact tables keep titles and decision
+fields readable; details retain the remaining fields. The monitor asks the
+terminal for its background color and selects a dark or light palette. It
+starts with the dark palette if the terminal does not answer. Set `NO_COLOR=1`
+for text-only status cues, bold focus, and reverse selection. This preserves
+alternate-screen, keyboard, and mouse behavior.
+
+| Keys | Action |
+| --- | --- |
+| `tab` / `shift+tab` | Focus the list, details, or repository navigation. |
+| `j` / `k`, arrows, `g` / `G` | Move within the focused pane or jump to its beginning/end. |
+| Left / Right | Switch PR and issue tabs; select All open when configured. |
+| `1`–`9` | Select a configured section. Sections also support mouse clicks. |
+| `/`, Enter, Escape | Type a local filter, apply it, then clear it. |
+| Page Up / Page Down | Scroll the selected item's details. |
+| `s`, `e`, `?`, `r` | Open settings, edit YAML, show help, or refresh. |
+| `o`, `y`, `Y` | Open the selected URL, copy it, or copy its checkout/development command. |
+| `q`, Ctrl+C | Save selections, cancel any refresh, and restore the terminal. |
+
+Mouse clicks select tabs, sections, rows, and panes; the wheel moves within the
+focused pane. In compact layouts, focus repositories with `tab` and use `j`/`k`,
+or click the header to cycle repositories. Settings mark their active field
+with `>` and validate before saving. Selection remains visible when another
+pane has focus. Long details scroll with a pinned title and position indicator.
+The [monitor design record](docs/monitor-design.md) explains the stack and layout.
 
 ### Monitor configuration
 
