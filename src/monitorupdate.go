@@ -141,7 +141,7 @@ func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) 
 	if msg.err != nil {
 		m.retainMonitorFailedRefresh(msg.result)
 		m.refreshErr = sanitizeMonitorError(msg.err)
-		m.refreshErrIsFetch = true
+		m.refreshErrIsFetch = msg.result != nil && msg.result.Error != ""
 		m.backoff = nextMonitorBackoff(m.backoff)
 		return m, scheduleMonitorTick(m.backoff)
 	}

@@ -285,3 +285,23 @@ func TestMonitorPinAccountObservationInvalidatesFailedSiblingAndGlobalCaches(t *
 		})
 	}
 }
+
+func TestMonitorPreQueryErrorsOverrideOlderScopeErrors(t *testing.T) {
+	for _, withUnscopedResult := range []bool{false, true} {
+		cfg := defaultMonitorConfig("owner/pinned")
+		m := newMonitorModel(cfg, "", "", monitorSessionState{})
+		m.layout = computeMonitorLayout(120, 40)
+		m.data = unavailableMonitorScope(cfg, errors.New("old discovery failure"))
+		m.refreshErr = "old refresh failure"
+		m.refreshErrIsFetch = true
+		msg := monitorFetchedMsg{err: errors.New("invalid GH_X_MONITOR_REFRESH_TIMEOUT")}
+		if withUnscopedResult {
+			msg.result = newMonitorTestFetchResult(cfg, time.Now())
+		}
+		model, _ := m.handleFetched(msg)
+		actual := model.(monitorModel)
+		if actual.refreshErrIsFetch || !strings.Contains(actual.footerLine(), "invalid GH_X_MONITOR_REFRESH_TIMEOUT") || strings.Contains(actual.footerLine(), "old discovery failure") {
+			t.Fatalf("new pre-query error masked: %s", actual.footerLine())
+		}
+	}
+}
