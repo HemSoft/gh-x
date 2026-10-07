@@ -805,3 +805,32 @@ func TestMonitorDuplicateCaseVariantPinsSelectTheirExactSnapshot(t *testing.T) {
 		t.Fatal("case-insensitive fallback lost a compatible snapshot")
 	}
 }
+
+func TestMonitorSectionScopeValidationRespectsQuotedSearchValues(t *testing.T) {
+	allowed := []string{
+		`is:open label:"needs org:review"`,
+		`is:open "find repo:owner/project"`,
+		`is:open label:"some user:example"`,
+		`is:open label:"escaped \" quote org:review"`,
+	}
+	for _, filters := range allowed {
+		t.Run(filters, func(t *testing.T) {
+			if err := validateMonitorSections([]monitorSection{{Title: "Quoted", Filters: filters}}); err != nil {
+				t.Fatalf("quoted search text was treated as a scope qualifier: %v", err)
+			}
+		})
+	}
+	rejected := []string{
+		`is:open label:"needs org:review" org:another`,
+		`is:open "some words" repo:"owner/project"`,
+		`is:open label:"some user:example" -user:another`,
+		`is:open label:"escaped \" quote org:review" (ORG:another)`,
+	}
+	for _, filters := range rejected {
+		t.Run(filters, func(t *testing.T) {
+			if err := validateMonitorSections([]monitorSection{{Title: "Scope", Filters: filters}}); err == nil {
+				t.Fatal("real ownership qualifier escaped section validation")
+			}
+		})
+	}
+}
