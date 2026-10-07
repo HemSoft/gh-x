@@ -110,7 +110,10 @@ func TestFetchStatusStashes(t *testing.T) {
 		err          error
 		count        int
 	}{
-		{name: "zero"}, {name: "one", output: "abc\n", count: 1}, {name: "multiple", output: "abc\ndef\r\n", count: 2}, {name: "same commit twice", output: "abc\nabc\n", count: 2}, {name: "unavailable", output: "abc\n", err: errors.New("failed")},
+		{name: "zero"}, {name: "one", output: strings.Repeat("a", 40) + "\n", count: 1}, {name: "multiple", output: strings.Repeat("a", 40) + "\n" + strings.Repeat("b", 40) + "\r\n", count: 2}, {name: "same commit twice", output: strings.Repeat("a", 40) + "\n" + strings.Repeat("a", 40) + "\n", count: 2}, {name: "unavailable", output: "abc\n", err: errors.New("failed")},
+		{name: "SHA-256", output: strings.Repeat("a", 64) + "\n", count: 1},
+		{name: "uppercase hex", output: strings.Repeat("B", 40) + "\n", count: 1},
+		{name: "blank lines", output: "\n\r\n" + strings.Repeat("a", 40) + "\n\n", count: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			defer saveStatusFuncs()()
@@ -123,6 +126,34 @@ func TestFetchStatusStashes(t *testing.T) {
 			count, err := fetchStatusStashes()
 			if count != test.count || !errors.Is(err, test.err) {
 				t.Fatalf("stashes=%d err=%v, want %d err=%v", count, err, test.count, test.err)
+			}
+		})
+	}
+}
+
+func TestFetchStatusStashesRejectsUnexpectedOutput(t *testing.T) {
+	for _, test := range []struct{ name, output string }{
+		{name: "successful command warning", output: "warning: stash reflog is incomplete\n"},
+		{name: "warning after valid stash", output: strings.Repeat("a", 40) + "\nwarning: stash reflog is incomplete\n"},
+		{name: "warning before valid stash", output: "warning: stash reflog is incomplete\n" + strings.Repeat("a", 40) + "\n"},
+		{name: "hash inside warning", output: "warning: missing object " + strings.Repeat("a", 40) + "\n"},
+		{name: "short hash", output: strings.Repeat("a", 39) + "\n"},
+		{name: "wrong hash size", output: strings.Repeat("a", 41) + "\n"},
+		{name: "long hash", output: strings.Repeat("a", 65) + "\n"},
+		{name: "nonhex SHA-1", output: strings.Repeat("g", 40) + "\n"},
+		{name: "nonhex SHA-256", output: strings.Repeat("g", 64) + "\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer saveStatusFuncs()()
+			statusCommandFunc = func(string, ...string) (string, error) { return test.output, nil }
+			count, err := fetchStatusStashes()
+			if count != 0 || err == nil || !strings.Contains(err.Error(), "unexpected output") {
+				t.Fatalf("unexpected output produced count=%d err=%v", count, err)
+			}
+			var output bytes.Buffer
+			row := statusStashInventoryRow(newTableStyler(&output, false), count, err)
+			if row[0].text != "" || !strings.HasPrefix(row[2].text, "Unavailable:") || runewidth.StringWidth(row[2].text) > 60 {
+				t.Fatalf("unexpected output produced an incorrect stash row: %#v", row)
 			}
 		})
 	}
@@ -153,7 +184,7 @@ func TestStatusStashesRefreshWithCachedGitHubData(t *testing.T) {
 		name, output string
 		err          error
 		count        int
-	}{{name: "zero"}, {name: "two", output: "one\ntwo\n", count: 2}, {name: "error", err: errors.New("stash denied")}, {name: "recovered"}} {
+	}{{name: "zero"}, {name: "two", output: strings.Repeat("a", 40) + "\n" + strings.Repeat("b", 40) + "\n", count: 2}, {name: "error", err: errors.New("stash denied")}, {name: "recovered"}} {
 		t.Run(test.name, func(t *testing.T) {
 			statusCommandFunc = func(name string, args ...string) (string, error) {
 				if strings.Join(args, " ") == "stash list --format=%H" {

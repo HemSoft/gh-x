@@ -279,7 +279,7 @@ func TestFetchStatusDashboard(t *testing.T) {
 		case "git worktree list --porcelain -z":
 			return worktreeOutput, nil
 		case "git stash list --format=%H":
-			return "first\nsecond\n", nil
+			return strings.Repeat("a", 40) + "\n" + strings.Repeat("b", 40) + "\n", nil
 		case "git rev-parse --show-toplevel":
 			return "C:/repo.worktrees/issue-7 \r\n", nil
 		case "git -C C:/repo status --porcelain=v2 --branch":

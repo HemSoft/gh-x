@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -235,7 +236,26 @@ func fetchStatusStashes() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("git stash list: %w", err)
 	}
-	return len(strings.Fields(output)), nil
+	count := 0
+	for _, line := range strings.Split(output, "\n") {
+		oid := strings.TrimSpace(line)
+		if oid == "" {
+			continue
+		}
+		if !statusStashOIDValid(oid) {
+			return 0, fmt.Errorf("git stash list: unexpected output: %s", boundedSingleLine(oid, 200))
+		}
+		count++
+	}
+	return count, nil
+}
+
+func statusStashOIDValid(oid string) bool {
+	if len(oid) != 40 && len(oid) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(oid)
+	return err == nil
 }
 
 func fetchStatusRemoteData(dashboard *statusDashboard, mergedLimit int, colorEnabled bool, now time.Time) (map[string]bool, bool) {
