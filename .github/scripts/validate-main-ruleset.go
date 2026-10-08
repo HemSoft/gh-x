@@ -353,7 +353,7 @@ func validateChangelogDelivery(releaseJob workflowJob, authoritativeRunContent s
 	require(mergeChangelog.Env["RELEASE_SHA"] == "${{ github.event.workflow_run.head_sha }}", "changelog reconciliation must retain the released commit SHA")
 	require(strings.Contains(mergeChangelog.Run, `"repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches"`) && strings.Contains(mergeChangelog.Run, `-f ref="$branch" --jq '.workflow_run_id'`), "changelog pull request must dispatch CI on its exact branch and capture the run ID")
 	require(strings.Contains(mergeChangelog.Run, `bash .github/scripts/verify-authoritative-run.sh \`) && strings.Contains(mergeChangelog.Run, `"$GITHUB_REPOSITORY" "$pr_url" "$head_sha" "$ci_run"`), "changelog merge must invoke the authoritative run verifier with exact identities")
-	require(strings.Contains(authoritativeRunContent, `timeout 40m gh run watch "$run_id" --repo "$repo" --exit-status`) && strings.Contains(authoritativeRunContent, `"$actual_head" != "$expected_head"`), "authoritative verifier must wait for the dispatched run and verify its head")
+	require(strings.Contains(authoritativeRunContent, `timeout 60m gh run watch "$run_id" --repo "$repo" --exit-status`) && strings.Contains(authoritativeRunContent, `"$actual_head" != "$expected_head"`), "authoritative verifier must wait for the dispatched run and verify its head")
 	require(
 		strings.Contains(authoritativeRunContent, `gh api --paginate "repos/${repo}/actions/runs/${run_id}/jobs?per_page=100" |`) &&
 			strings.Contains(authoritativeRunContent, `jq -sr '[.[].jobs[] |`) &&
