@@ -5,22 +5,17 @@ import (
 	"fmt"
 )
 
-// Use the repository connection, not search: an incomplete search index can
-// return zero matches even when the repository contains merged pull requests.
+// Search through an old repository name can return no matches after a move.
+// The repository connection still returns the existing merged pull requests.
 const mergedPRFields = `
   number title state isDraft reviewDecision updatedAt mergedAt
   headRefName baseRefName url mergeable
   author { login ... on User { name } }
   latestReviews(first: 100) { nodes { state author { login ... on User { name } } } }
-  commits(last: 1) { nodes { commit { statusCheckRollup {
-    contexts(first: 100) { nodes {
-      __typename
-      ... on CheckRun {
-        name status conclusion startedAt completedAt
-        checkSuite { workflowRun { workflow { name } } }
-      }
-      ... on StatusContext { context state }
-    } }
+  commits(last: 1) { nodes { commit { id statusCheckRollup {
+    contexts(first: 100) { nodes { ` + mergedCheckFields + ` }
+      pageInfo { hasNextPage endCursor }
+    }
   } } } }
 `
 
@@ -43,11 +38,8 @@ type mergedPRNode struct {
 	Commits struct {
 		Nodes []struct {
 			Commit struct {
-				StatusCheckRollup *struct {
-					Contexts struct {
-						Nodes []mergedCheckNode `json:"nodes"`
-					} `json:"contexts"`
-				} `json:"statusCheckRollup"`
+				ID                string                   `json:"id"`
+				StatusCheckRollup *mergedStatusCheckRollup `json:"statusCheckRollup"`
 			} `json:"commit"`
 		} `json:"nodes"`
 	} `json:"commits"`
@@ -55,10 +47,7 @@ type mergedPRNode struct {
 
 type mergedPRConnection struct {
 	Nodes    []mergedPRNode `json:"nodes"`
-	PageInfo struct {
-		HasNextPage bool   `json:"hasNextPage"`
-		EndCursor   string `json:"endCursor"`
-	} `json:"pageInfo"`
+	PageInfo mergedPageInfo `json:"pageInfo"`
 }
 
 func fetchMergedRepositoryPullRequests(options listOptions) ([]pullRequest, error) {
@@ -67,14 +56,18 @@ func fetchMergedRepositoryPullRequests(options listOptions) ([]pullRequest, erro
 		return nil, err
 	}
 	host := repositoryTargetHost(options.repo)
+	client := mergedQueryClient{host: host}
 	var result []pullRequest
 	cursor := ""
 	for len(result) < options.limit {
-		page, err := fetchMergedPRPage(host, owner, name, cursor, min(100, options.limit-len(result)))
+		page, err := fetchMergedPRPage(&client, owner, name, cursor, min(100, options.limit-len(result)))
 		if err != nil {
 			return nil, err
 		}
 		for _, node := range page.Nodes {
+			if err := completeMergedChecks(&client, &node); err != nil {
+				return nil, err
+			}
 			result = append(result, node.pullRequestRow())
 		}
 		if !page.PageInfo.HasNextPage {
@@ -88,7 +81,7 @@ func fetchMergedRepositoryPullRequests(options listOptions) ([]pullRequest, erro
 	return result, nil
 }
 
-func fetchMergedPRPage(host, owner, name, cursor string, limit int) (*mergedPRConnection, error) {
+func fetchMergedPRPage(client *mergedQueryClient, owner, name, cursor string, limit int) (*mergedPRConnection, error) {
 	after := "null"
 	if cursor != "" {
 		after = fmt.Sprintf("%q", cursor)
@@ -99,7 +92,7 @@ func fetchMergedPRPage(host, owner, name, cursor string, limit int) (*mergedPRCo
     pageInfo { hasNextPage endCursor }
   }
 } }`, owner, name, limit, after, mergedPRFields)
-	data, err := fetchGraphQL(host, query)
+	data, err := client.query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +126,7 @@ func (node mergedPRNode) pullRequestRow() pullRequest {
 	pr := node.pullRequest
 	pr.LatestReviews = node.LatestReviews.Nodes
 	if len(node.Commits.Nodes) > 0 {
-		if rollup := node.Commits.Nodes[0].Commit.StatusCheckRollup; rollup != nil {
+		if rollup := node.Commits.Nodes[0].Commit.StatusCheckRollup; rollup != nil && rollup.Contexts != nil {
 			for _, node := range rollup.Contexts.Nodes {
 				check := node.checkItem
 				check.WorkflowName = node.CheckSuite.WorkflowRun.Workflow.Name

@@ -10,12 +10,12 @@ import (
 	"time"
 )
 
-func TestRecentlyMergedSurvivesEmptySearchIndex(t *testing.T) {
+func TestRecentlyMergedSurvivesEmptySearchResults(t *testing.T) {
 	saved := ghExecFunc
 	t.Cleanup(func() { ghExecFunc = saved })
 	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 		command := strings.Join(args, " ")
-		// Reproduce Mini: the search index is empty but the repository has merges.
+		// Reproduce Mini: search through the old name misses existing merges.
 		if strings.Contains(command, "pr list") {
 			return *bytes.NewBufferString("[]"), bytes.Buffer{}, nil
 		}
@@ -130,5 +130,64 @@ func TestRecentlyMergedEmptyAndLimit(t *testing.T) {
 				t.Fatalf("rows = %#v, error = %v, want empty and error=%v", got, err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestMergedEnterpriseWithoutWorkflowRun(t *testing.T) {
+	saved := ghExecFunc
+	t.Cleanup(func() { ghExecFunc = saved })
+	calls := 0
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		calls++
+		query := strings.Join(args, " ")
+		if calls == 1 {
+			return bytes.Buffer{}, bytes.Buffer{}, errors.New("GraphQL: Field 'workflowRun' doesn't exist on type 'CheckSuite'")
+		}
+		if strings.Contains(query, "workflowRun") {
+			t.Fatalf("unsupported field retained in retry: %s", query)
+		}
+		if calls == 2 {
+			return *bytes.NewBufferString(`{"data":{"repository":{"pullRequests":{"nodes":[{"number":1}],"pageInfo":{"hasNextPage":true,"endCursor":"older"}}}}}`), bytes.Buffer{}, nil
+		}
+		if calls != 3 || !strings.Contains(query, `after: "older"`) {
+			t.Fatalf("unexpected continuation: %s", query)
+		}
+		return *bytes.NewBufferString(`{"data":{"repository":{"pullRequests":{"nodes":[{"number":2}],"pageInfo":{"hasNextPage":false}}}}}`), bytes.Buffer{}, nil
+	}
+	got, err := fetchMergedRepositoryPullRequests(listOptions{repo: "ghe.example.com/owner/repo", limit: 2})
+	if err != nil || len(got) != 2 || calls != 3 {
+		t.Fatalf("rows=%#v, calls=%d, error=%v, want legacy Enterprise PR", got, calls, err)
+	}
+}
+
+func TestMergedChecksIncludeFailureBeyondFirstPage(t *testing.T) {
+	saved := ghExecFunc
+	t.Cleanup(func() { ghExecFunc = saved })
+	calls := 0
+	ghExecFunc = func(args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		calls++
+		query := strings.Join(args, " ")
+		if strings.Contains(query, "pullRequests(states: MERGED") {
+			checks := make([]map[string]string, 100)
+			for i := range checks {
+				checks[i] = map[string]string{"__typename": "CheckRun", "name": fmt.Sprintf("check-%d", i), "status": "COMPLETED", "conclusion": "SUCCESS"}
+			}
+			data, err := json.Marshal(checks)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return *bytes.NewBufferString(fmt.Sprintf(`{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,"commits":{"nodes":[{"commit":{"id":"commit-id","statusCheckRollup":{"contexts":{"nodes":%s,"pageInfo":{"hasNextPage":true,"endCursor":"checks-next"}}}}}]}}],"pageInfo":{"hasNextPage":false}}}}}`, data)), bytes.Buffer{}, nil
+		}
+		if !strings.Contains(query, `node(id: "commit-id")`) || !strings.Contains(query, `after: "checks-next"`) {
+			t.Fatalf("unexpected continuation: %s", query)
+		}
+		return *bytes.NewBufferString(`{"data":{"node":{"statusCheckRollup":{"contexts":{"nodes":[{"__typename":"CheckRun","name":"late-failure","status":"COMPLETED","conclusion":"FAILURE"}],"pageInfo":{"hasNextPage":false}}}}}}`), bytes.Buffer{}, nil
+	}
+	got, err := fetchMergedRepositoryPullRequests(listOptions{repo: "owner/repo", limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || len(got) != 1 || len(got[0].StatusCheckRollup) != 101 || normalizeCheckState(got[0].StatusCheckRollup) != "fail" {
+		t.Fatalf("rows=%d, calls=%d, want 101 checks including second-page failure", len(got), calls)
 	}
 }
