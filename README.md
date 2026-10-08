@@ -974,11 +974,11 @@ persist the head, author, URL, and GitHub creation time. Verification jobs never
 post requests. Ordinary pull requests reuse automatic or manual Codex activity;
 a later `HemSoft` `@codex review` comment is bound to the full head through the
 ordered pull-request timeline. Duplicate pull-request events replace an older
-verifier for the same pull request/head and reuse the original ten-minute
-deadline. Auto Release's manually dispatched verifier uses a run-specific
+verifier for the same pull request/head and reuse the original 30-minute
+review deadline. Auto Release's manually dispatched verifier uses a run-specific
 concurrency lane, so pull-request, edited, and replacement-head events cannot
 cancel the exact run that the release job awaits. Before any
-current-head activity exists, the bounded setup window starts from the later of
+current-head activity exists, the ten-minute setup window starts from the later of
 the head commit and the triggering pull-request update, so old branches and
 newly ready drafts receive one fresh window without a check rerun resetting it.
 Refusal comments persist terminal access, quota, plan, or configuration failures;

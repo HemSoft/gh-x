@@ -207,13 +207,15 @@ func TestRequestDeadlineSurvivesDuplicateJobsAndTriggers(t *testing.T) {
 	state := cleanState()
 	start := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	first := markedRequest("HemSoft", start)
-	duplicate := markedRequest("HemSoft", start.Add(9*time.Minute))
+	duplicate := markedRequest("HemSoft", start.Add(29*time.Minute))
 	state.Comments.Nodes = []reviewComment{first, duplicate}
-	if err := pendingReview(state, testConfig, "12", start.Add(9*time.Minute)); err != nil {
-		t.Fatal(err)
+	for _, elapsed := range []time.Duration{21 * time.Minute, 30*time.Minute - time.Nanosecond} {
+		if err := pendingReview(state, testConfig, "12", start.Add(elapsed)); err != nil {
+			t.Fatalf("review should still be pending before thirty minutes: %v", err)
+		}
 	}
-	for _, elapsed := range []time.Duration{10 * time.Minute, 40 * time.Minute} {
-		if err := pendingReview(state, testConfig, "12", start.Add(elapsed)); err == nil || !strings.Contains(err.Error(), "timed out at 2026-09-05T12:10:00Z") {
+	for _, elapsed := range []time.Duration{30 * time.Minute, 40 * time.Minute} {
+		if err := pendingReview(state, testConfig, "12", start.Add(elapsed)); err == nil || !strings.Contains(err.Error(), "timed out at 2026-09-05T12:30:00Z") {
 			t.Fatalf("duplicate job must retain original terminal timeout: %v", err)
 		}
 	}
@@ -226,7 +228,7 @@ func TestSetupWindowDoesNotRestart(t *testing.T) {
 	if err := pendingReview(state, testConfig, "12", state.CommittedAt.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := pendingReview(state, testConfig, "12", state.CommittedAt.Add(time.Hour)); err == nil {
+	if err := pendingReview(state, testConfig, "12", state.CommittedAt.Add(10*time.Minute)); err == nil {
 		t.Fatal("a rerun must not create a new setup window")
 	}
 }
@@ -247,10 +249,12 @@ func TestOrdinaryPendingReviewUsesCurrentHeadActivity(t *testing.T) {
 	state := reviewState{HeadRefOID: testHead, CommittedAt: committed}
 	state.Comments.Nodes = []reviewComment{activity}
 	state.TimelineItems.Nodes = []timelineItem{{TypeName: "PullRequestCommit", Commit: struct{ OID string }{testHead}}}
-	if err := pendingOrdinaryReview(state, testConfig, "12", started.Add(9*time.Minute)); err != nil {
-		t.Fatal(err)
+	for _, elapsed := range []time.Duration{21 * time.Minute, 30*time.Minute - time.Nanosecond} {
+		if err := pendingOrdinaryReview(state, testConfig, "12", started.Add(elapsed)); err != nil {
+			t.Fatalf("review should still be pending before thirty minutes: %v", err)
+		}
 	}
-	if err := pendingOrdinaryReview(state, testConfig, "12", started.Add(reviewWindow)); err == nil || !strings.Contains(err.Error(), "timed out") {
+	if err := pendingOrdinaryReview(state, testConfig, "12", started.Add(30*time.Minute)); err == nil || !strings.Contains(err.Error(), "timed out at 2026-09-05T12:31:00Z") {
 		t.Fatalf("rerun must retain the current-head activity deadline: %v", err)
 	}
 
@@ -273,7 +277,7 @@ func TestOrdinarySetupWindowUsesTriggerTimestamp(t *testing.T) {
 	if err := pendingOrdinaryReview(state, cfg, "12", triggered.Add(9*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := pendingOrdinaryReview(state, cfg, "12", triggered.Add(reviewWindow)); err == nil || !strings.Contains(err.Error(), "no current-head Codex activity") {
+	if err := pendingOrdinaryReview(state, cfg, "12", triggered.Add(10*time.Minute)); err == nil || !strings.Contains(err.Error(), "no current-head Codex activity") {
 		t.Fatalf("event-bound setup window must not reset: %v", err)
 	}
 	cfg.setup = "invalid"
@@ -553,7 +557,7 @@ func TestOrdinaryRefusalAndNewActivitySupersedeOldClean(t *testing.T) {
 func TestVerifierBudgetIncludesLateRequest(t *testing.T) {
 	processStart := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	requestPosted := processStart.Add(9 * time.Minute)
-	requestDeadline := requestPosted.Add(10 * time.Minute)
+	requestDeadline := requestPosted.Add(30 * time.Minute)
 	processDeadline := processStart.Add(executionTimeout([]string{"review"}))
 	if !processDeadline.After(requestDeadline) {
 		t.Fatalf("setup consumed the review window: process expires %s, request expires %s", processDeadline, requestDeadline)

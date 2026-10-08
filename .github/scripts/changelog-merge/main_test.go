@@ -441,10 +441,23 @@ func TestRequestsUseTrustedGraphQLIdentity(t *testing.T) {
 }
 
 func TestMergeBudgetOutlivesRequiredGates(t *testing.T) {
-	if executionTimeout([]string{"enable"}) <= 2*35*time.Minute {
+	contents, err := os.ReadFile("../../workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow struct {
+		Jobs map[string]struct {
+			TimeoutMinutes int `yaml:"timeout-minutes"`
+		}
+	}
+	if err := yaml.Unmarshal(contents, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	jobBudget := time.Duration(workflow.Jobs["codex-review"].TimeoutMinutes) * time.Minute
+	if executionTimeout([]string{"enable"}) <= 2*jobBudget {
 		t.Fatal("merge must outlive two queued review jobs")
 	}
-	if executionTimeout([]string{"review"}) >= 35*time.Minute {
+	if executionTimeout([]string{"review"}) >= jobBudget {
 		t.Fatal("review must finish within its CI job budget")
 	}
 }
