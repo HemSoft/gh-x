@@ -42,20 +42,21 @@ type monitorModel struct {
 	filtering bool
 	filter    textinput.Model
 
-	data           *monitorFetchResult
-	changedKeys    map[string]bool
-	addedKeys      map[string]bool
-	seenKeys       map[string]bool
-	lastChanges    []monitorChange
-	lastRefresh    time.Time
-	refreshErr     string
-	refreshWarn    string
-	refreshing     bool
-	refreshContext context.Context
-	cancelRefresh  context.CancelFunc
-	refreshState   *monitorRefreshState
-	interval       time.Duration
-	backoff        time.Duration
+	data              *monitorFetchResult
+	changedKeys       map[string]bool
+	addedKeys         map[string]bool
+	seenKeys          map[string]bool
+	lastChanges       []monitorChange
+	lastRefresh       time.Time
+	refreshErr        string
+	refreshErrIsFetch bool
+	refreshWarn       string
+	refreshing        bool
+	refreshContext    context.Context
+	cancelRefresh     context.CancelFunc
+	refreshState      *monitorRefreshState
+	interval          time.Duration
+	backoff           time.Duration
 
 	helpOpen bool
 	settings monitorSettingsModel
@@ -65,9 +66,10 @@ type monitorModel struct {
 type monitorTickMsg time.Time
 
 type monitorFetchedMsg struct {
-	result *monitorFetchResult
-	err    error
-	at     time.Time
+	result      *monitorFetchResult
+	queryConfig *monitorQueryConfig
+	err         error
+	at          time.Time
 }
 
 func newMonitorModel(cfg *monitorConfig, configPath, statePath string, state monitorSessionState) monitorModel {
@@ -147,6 +149,7 @@ func (m monitorModel) visibleRows() []monitorRow {
 
 // computeVisibleRows is the pure core of visibleRows for testability.
 func computeVisibleRows(data *monitorFetchResult, tab, subTab, repoIdx int, repos []string, filterText string) []monitorRow {
+	data = monitorDataForScope(data, repoIdx, repos)
 	if data == nil {
 		return nil
 	}
@@ -164,10 +167,18 @@ func computeVisibleRows(data *monitorFetchResult, tab, subTab, repoIdx int, repo
 	return filterMonitorRowsByText(rows, filterText)
 }
 
+// monitorDataForScope chooses independent pinned results without limiting All repos.
+func monitorDataForScope(data *monitorFetchResult, repoIdx int, repos []string) *monitorFetchResult {
+	if data != nil && repoIdx > 0 && repoIdx <= len(repos) && data.Pinned != nil {
+		return monitorPinnedScope(data.Pinned, repos[repoIdx-1])
+	}
+	return data
+}
+
 func filterMonitorRowsByRepo(rows []monitorRow, nameWithOwner string) []monitorRow {
 	filtered := make([]monitorRow, 0, len(rows))
 	for _, row := range rows {
-		if row.Repo == nameWithOwner {
+		if strings.EqualFold(row.Repo, nameWithOwner) {
 			filtered = append(filtered, row)
 		}
 	}

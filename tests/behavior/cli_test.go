@@ -134,6 +134,9 @@ func TestCLIBehaviorStatusCache(t *testing.T) {
 	if cold.exitCode != 0 || !strings.Contains(cold.calls, "issue list") || !strings.Contains(cold.calls, "pr list") || !strings.Contains(cold.calls, "run list") {
 		t.Fatalf("cold status did not fetch every GitHub section\nexit=%d\ncalls:\n%s\nstderr:\n%s", cold.exitCode, cold.calls, cold.stderr)
 	}
+	if !strings.Contains(cold.stdout, "Recently merged pull requests (1)") || !strings.Contains(cold.stdout, "#43") || strings.Contains(cold.stdout, "No merged pull requests found.") {
+		t.Fatalf("status lost existing merges despite the empty search index:\n%s", cold.stdout)
+	}
 
 	if err := os.WriteFile(filepath.Join(repository, "local-change.txt"), []byte("local change\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -159,7 +162,7 @@ func TestCLIBehaviorStatusCache(t *testing.T) {
 	}
 
 	disabledMerged := runCLI(t, repository, "success", "status", "--merged=0")
-	if disabledMerged.exitCode != 0 || disabledMerged.calls == "" || strings.Contains(disabledMerged.stdout, "Recently merged pull requests") || strings.Contains(disabledMerged.calls, "--state merged") {
+	if disabledMerged.exitCode != 0 || disabledMerged.calls == "" || strings.Contains(disabledMerged.stdout, "Recently merged pull requests") || strings.Contains(disabledMerged.calls, "states: MERGED") {
 		t.Fatalf("changed merged option reused incompatible data or fetched merged rows\nexit=%d\ncalls:\n%s\nstdout:\n%s", disabledMerged.exitCode, disabledMerged.calls, disabledMerged.stdout)
 	}
 
@@ -404,6 +407,10 @@ func runFakeGH() int {
 	fixture := ""
 	switch {
 	case hasCommandPrefix(args, "pr", "list"):
+		if strings.Contains(strings.Join(args, " "), "--state merged") {
+			fmt.Fprintln(os.Stdout, "[]")
+			return 0
+		}
 		fixture = "pr-list.json"
 	case hasCommandPrefix(args, "issue", "list"):
 		fixture = "issue-list.json"
@@ -417,6 +424,10 @@ func runFakeGH() int {
 		fixture = "issue-hierarchy.json"
 	case hasCommandPrefix(args, "api") && strings.Contains(strings.Join(args, " "), "pullRequest(number: 42)"):
 		fixture = "pr-supplemental.json"
+	case hasCommandPrefix(args, "api") && strings.Contains(strings.Join(args, " "), "pullRequest(number: 43)"):
+		fixture = "merged-pr-supplemental.json"
+	case hasCommandPrefix(args, "api") && strings.Contains(strings.Join(args, " "), "pullRequests(states: MERGED"):
+		fixture = "merged-prs.json"
 	default:
 		fmt.Fprintf(os.Stderr, "unsupported fake gh call: %s\n", strings.Join(args, " "))
 		return 2

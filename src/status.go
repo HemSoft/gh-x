@@ -313,7 +313,6 @@ func fetchStatusMergedPullRequests(dashboard *statusDashboard, limit int, now ti
 	options := defaultListOptions()
 	options.limit = limit
 	options.state = "merged"
-	options.search = "sort:updated-desc"
 	options.recentlyMerged = true
 	result, err := statusPullRequestListFunc(options, now)
 	dashboard.MergedPullRequestsErr = err

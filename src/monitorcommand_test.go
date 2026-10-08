@@ -173,6 +173,7 @@ func TestLegacyMonitorHostDefaultsToPublicDespiteRepositoryContext(t *testing.T)
 
 func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T) {
 	isolateMonitorHome(t)
+	t.Setenv(githubCommandTimeoutEnv, "2m")
 	configPath, err := monitorConfigPath()
 	if err != nil {
 		t.Fatalf("monitorConfigPath: %v", err)
@@ -183,6 +184,19 @@ func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T)
 		t.Fatalf("saveMonitorConfig: %v", err)
 	}
 
+	savedExec := monitorGHExecFunc
+	t.Cleanup(func() { monitorGHExecFunc = savedExec })
+	monitorGHExecFunc = func(ctx context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) < 110*time.Second || time.Until(deadline) > 120*time.Second {
+			t.Errorf("print-query must use the configured two-minute one-shot timeout: %v", deadline)
+		}
+		login := "HemSoft"
+		if strings.Contains(strings.Join(args, " "), "ghe.example.com") {
+			login = "enterprise-user"
+		}
+		return *bytes.NewBufferString(`{"data":{"viewer":{"login":"` + login + `","organizations":{"nodes":[{"login":"Acme"}],"pageInfo":{"hasNextPage":false}}}}}`), bytes.Buffer{}, nil
+	}
 	savedResolve := monitorResolveRepoFunc
 	savedHost := monitorRepoHostFunc
 	defer func() {
@@ -204,8 +218,8 @@ func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T)
 		"# ghe.example.com\n",
 		"query Monitor1 {",
 		"query Monitor2 {",
-		"repo:HemSoft/gh-x",
-		"repo:Acme/Widgets",
+		"user:HemSoft org:Acme",
+		"user:enterprise-user org:Acme",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("printed queries missing %q:\n%s", want, output)
@@ -213,6 +227,18 @@ func TestPrintMonitorQuerySeparatesHostsAndKeepsQualifiersHostless(t *testing.T)
 	}
 	if strings.Contains(output, "repo:ghe.example.com/Acme/Widgets") {
 		t.Fatalf("enterprise hostname leaked into repo qualifier:\n%s", output)
+	}
+}
+
+func TestPrintMonitorQueryRejectsInvalidOneShotTimeout(t *testing.T) {
+	isolateMonitorHome(t)
+	t.Setenv(githubCommandTimeoutEnv, "invalid")
+	var stdout bytes.Buffer
+	if err := printMonitorQuery(&stdout); err == nil || !strings.Contains(err.Error(), githubCommandTimeoutEnv) {
+		t.Fatalf("invalid one-shot timeout must be reported: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatal("invalid timeout produced query output")
 	}
 }
 
@@ -351,7 +377,7 @@ func TestRenderSettingsScreenContent(t *testing.T) {
 	m := sizedModel()
 	m.settings.open(m.cfg)
 	screen := m.renderSettingsScreen()
-	for _, want := range []string{"Settings", "Repos", "interval"} {
+	for _, want := range []string{"Settings", "Sidebar repos", "interval"} {
 		if !strings.Contains(screen, want) {
 			t.Fatalf("settings screen missing %q: %s", want, screen)
 		}

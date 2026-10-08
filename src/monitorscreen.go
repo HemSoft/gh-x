@@ -110,7 +110,11 @@ func (m monitorModel) tabTotal(tab int) int {
 	if index < 0 {
 		return -1
 	}
-	return monitorSectionTotal(m.data, tab, index)
+	data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos)
+	if data == nil || (data.Error != "" && data.FetchedAt.IsZero()) {
+		return -1
+	}
+	return monitorSectionTotal(data, tab, index)
 }
 
 func (m monitorModel) dashboardTotals() string {
@@ -141,7 +145,7 @@ func (m monitorModel) helpFooter() string {
 
 func (m monitorModel) footerLine() string {
 	width := maxInt(m.layout.Width, 1)
-	left := fmt.Sprintf(" %s · %d/%d rows", monitorTabLabel(m.tab), len(m.visibleRows()), monitorSectionTotal(m.data, m.tab, m.subTab))
+	left := fmt.Sprintf(" %s · %d/%d rows", monitorTabLabel(m.tab), len(m.visibleRows()), monitorSectionTotal(monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos), m.tab, m.subTab))
 	right := fmt.Sprintf("rate %d · last %s ", m.data.RateRemainingSafe(), formatMonitorClock(m.lastRefresh))
 	notice := ""
 	if m.refreshing {
@@ -149,7 +153,12 @@ func (m monitorModel) footerLine() string {
 		notice = "refreshing… · "
 	}
 	if m.refreshErr != "" {
-		return m.theme.Error.Render(fitMonitorLine(" "+notice+"error: r retry · data retained · "+monitorPlainCell(m.refreshErr), width))
+		data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos)
+		status := monitorSnapshotStatus(data)
+		return m.theme.Error.Render(fitMonitorLine(" "+notice+"error: r retry · "+status+" · "+monitorPlainCell(monitorScopeRefreshError(data, m.refreshErr, m.refreshErrIsFetch)), width))
+	}
+	if data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos); data != nil && data.Error != "" {
+		return m.theme.Error.Render(fitMonitorLine(" "+notice+"unavailable: r retry · "+monitorPlainCell(data.Error), width))
 	}
 	if m.refreshWarn != "" {
 		return m.theme.Warning.Render(fitMonitorLine(" "+notice+"warning: r retry · partial data · "+monitorPlainCell(m.refreshWarn), width))
@@ -162,6 +171,20 @@ func (m monitorModel) footerLine() string {
 	}
 	budget := maxInt(width-lipgloss.Width(right), 0)
 	return m.theme.Muted.Render(fitMonitorLine(left, budget) + fitMonitorLine(right, minInt(width, lipgloss.Width(right))))
+}
+
+func monitorScopeRefreshError(data *monitorFetchResult, refreshErr string, isFetch bool) string {
+	if isFetch && data != nil && data.Error != "" {
+		return data.Error
+	}
+	return refreshErr
+}
+
+func monitorSnapshotStatus(data *monitorFetchResult) string {
+	if data == nil || data.FetchedAt.IsZero() {
+		return "data unavailable"
+	}
+	return "data retained"
 }
 
 func sidebarAt(lines []string, y int) string {
@@ -254,8 +277,12 @@ func (m monitorModel) renderSubTabRow() string {
 
 func (m monitorModel) listLines() string {
 	rows := m.visibleRows()
-	if m.data == nil {
-		return m.theme.Muted.Render(centeredDim("Loading GitHub data…", m.listWidth(), maxInt(m.layout.ListHeight, 1)))
+	if monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos) == nil {
+		message := "Loading GitHub data…"
+		if m.refreshErr != "" && !m.refreshing {
+			message = "GitHub data unavailable · r retry"
+		}
+		return m.theme.Muted.Render(centeredDim(message, m.listWidth(), maxInt(m.layout.ListHeight, 1)))
 	}
 	if len(rows) == 0 {
 		return m.theme.Muted.Render(centeredDim(m.emptyListMessage(), m.listWidth(), maxInt(m.layout.ListHeight, 1)))
@@ -277,6 +304,9 @@ func (m monitorModel) listLines() string {
 
 // emptyListMessage explains an empty view and points at sections with data.
 func (m monitorModel) emptyListMessage() string {
+	if data := monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos); data != nil && data.Error != "" && data.FetchedAt.IsZero() {
+		return "Repository data unavailable · r retry"
+	}
 	sections := m.sectionsForTab()
 	message := "No items match " + strconv.Quote(m.currentSection().Title)
 	suggestions := make([]string, 0, len(sections))
@@ -284,7 +314,7 @@ func (m monitorModel) emptyListMessage() string {
 		if i == m.subTab {
 			continue
 		}
-		if total := monitorSectionTotal(m.data, m.tab, i); total > 0 {
+		if total := monitorSectionTotal(monitorDataForScope(m.data, m.repoIdx, m.cfg.Repos), m.tab, i); total > 0 {
 			suggestions = append(suggestions,
 				fmt.Sprintf("%s has %d — press %d", section.Title, total, i+1))
 		}
@@ -329,7 +359,8 @@ func (m monitorModel) keyInScope(key string) bool {
 	if m.repoIdx-1 >= len(repos) {
 		return false
 	}
-	return strings.HasPrefix(key, repos[m.repoIdx-1]+"#")
+	repo, _, _ := strings.Cut(key, "#")
+	return strings.EqualFold(repo, repos[m.repoIdx-1])
 }
 
 // detailLines renders the detail region: a separator rule spanning the full

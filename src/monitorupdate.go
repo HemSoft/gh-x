@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -104,17 +105,22 @@ func newMonitorFetchCmd(parent context.Context, cfg monitorConfig, state *monito
 	if parent == nil {
 		parent = context.Background()
 	}
+	cfg.defaultHost = monitorDefaultHost(&cfg)
+	cfg.Repos = slices.Clone(cfg.Repos)
+	cfg.PRSections = slices.Clone(cfg.PRSections)
+	cfg.IssueSections = slices.Clone(cfg.IssueSections)
+	queryConfig := newMonitorQueryConfig(&cfg)
 	return func() tea.Msg {
 		state.markStarted()
 		defer state.markDone()
 		timeout, err := configuredTimeout(monitorRefreshTimeoutEnv, defaultMonitorRefreshTimeout)
 		if err != nil {
-			return monitorFetchedMsg{err: err, at: monitorNowFunc()}
+			return monitorFetchedMsg{err: err, queryConfig: &queryConfig, at: monitorNowFunc()}
 		}
 		ctx, cancel := context.WithTimeout(parent, timeout)
 		defer cancel()
-		result, err := executeMonitorFetch(ctx, &cfg, monitorNowFunc())
-		return monitorFetchedMsg{result: result, err: err, at: monitorNowFunc()}
+		result, err := executeMonitorAllRepoFetch(ctx, &cfg, monitorNowFunc())
+		return monitorFetchedMsg{result: result, err: err, queryConfig: &queryConfig, at: monitorNowFunc()}
 	}
 }
 
@@ -127,14 +133,33 @@ func (m monitorModel) initialMonitorCmd() tea.Cmd {
 func (m monitorModel) handleFetched(msg monitorFetchedMsg) (tea.Model, tea.Cmd) {
 	m.refreshing = false
 	m.refreshState = nil
+	m.invalidateMonitorConfigSnapshot()
+	if monitorFetchedConfigStale(msg, m.cfg) {
+		return m.startRefresh()
+	}
+	m.invalidateMonitorOwnerSnapshot(msg.result)
 	if msg.err != nil {
+		m.retainMonitorFailedRefresh(msg.result)
 		m.refreshErr = sanitizeMonitorError(msg.err)
-		m.refreshWarn = ""
+		m.refreshErrIsFetch = msg.result != nil && msg.result.Error != ""
 		m.backoff = nextMonitorBackoff(m.backoff)
 		return m, scheduleMonitorTick(m.backoff)
 	}
 	m.applyFetchResult(msg.result)
 	return m, scheduleMonitorTick(m.interval)
+}
+
+func (m *monitorModel) retainMonitorFailedRefresh(result *monitorFetchResult) {
+	m.refreshWarn = ""
+	if result == nil || result.Error == "" {
+		return
+	}
+	previous := m.selectedRowKey()
+	retainMonitorScopeSnapshots(result, m.data)
+	m.data = result
+	m.refreshWarn = sanitizeMonitorMessage(strings.Join(result.Warnings, "; "))
+	m.clampSelections()
+	m.resetDetailIfSelectionChanged(previous)
 }
 
 func sanitizeMonitorError(err error) string {
@@ -167,10 +192,10 @@ func scheduleMonitorTick(after time.Duration) tea.Cmd {
 // against previous rows per section for change tracking.
 func (m *monitorModel) applyFetchResult(result *monitorFetchResult) {
 	previous := m.selectedRowKey()
+	retainMonitorScopeSnapshots(result, m.data)
 	var changes []monitorChange
 	if m.data != nil {
-		changes = append(changes, diffMonitorSections(m.data.PRSections, result.PRSections)...)
-		changes = append(changes, diffMonitorSections(m.data.IssueSections, result.IssueSections)...)
+		changes = diffMonitorFetchScopes(m.data, result)
 	}
 	m.data = result
 	m.lastChanges = changes
@@ -178,6 +203,7 @@ func (m *monitorModel) applyFetchResult(result *monitorFetchResult) {
 	m.addedKeys = addedKeysSet(changes)
 	m.lastRefresh = result.FetchedAt
 	m.refreshErr = ""
+	m.refreshErrIsFetch = false
 	m.refreshWarn = sanitizeMonitorMessage(strings.Join(result.Warnings, "; "))
 	m.backoff = minimumMonitorInterval
 	m.clampSelections()
