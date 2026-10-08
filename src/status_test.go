@@ -230,7 +230,7 @@ func TestFetchStatusDashboard(t *testing.T) {
 				Rendered: []displayPullRequest{{Number: 2, Title: "Open PR", State: "open"}},
 			}, nil
 		case "merged":
-			if options.limit != statusMergedDefaultLimit || options.search != "sort:updated-desc" || !options.recentlyMerged {
+			if options.limit != statusMergedDefaultLimit || options.search != "" || !options.recentlyMerged {
 				t.Fatalf("unexpected merged PR options: %#v", options)
 			}
 			return pullRequestListResult{Rendered: []displayPullRequest{

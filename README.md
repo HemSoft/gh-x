@@ -170,7 +170,8 @@ requests, and the five most recent workflow runs appear in separate tables
 below the header. Use `--merged=N` to change the merged pull request count.
 `--merged=0` hides that section and skips its fetch. Merged pull requests are
 ordered by merge time, newest first, and use the same enriched table as open
-pull requests. Workflow runs keep the same
+pull requests. They are fetched directly from the repository so an incomplete
+GitHub search index cannot hide existing merges. Workflow runs keep the same
 status, title, workflow, branch, event, linked ID, elapsed-time, and age columns
 as `gh x run list`. Local Git status still renders
 when GitHub data is unavailable. When supplemental pull request data or issue
