@@ -107,6 +107,7 @@ function Get-AuditActions {
         'helper-tests' = { param($c) Invoke-CheckedCommand 'release automation helpers' 'go' @('test', '-race', '-count=1', './.github/scripts/...') }
         'behavior-tests' = { param($c) Invoke-CheckedCommand 'CLI behavior' 'go' @('test', '-trimpath', '-race', '-count=1', './tests/behavior') }
         'dashboard-tests' = { param($c) Invoke-CheckedCommand 'Node dashboards' 'node' @('--test', 'src/codex-dashboard/*.test.mjs', 'src/dashboard-hub/*.test.mjs') }
+        'migration-credential-tests' = { param($c) Invoke-CheckedCommand 'migration credential parsing and policy' 'pwsh' @('-NoProfile', '-File', 'scripts/test-migration-credential.ps1') }
         'dashboard-quality-fixtures' = { param($c) Invoke-CheckedCommand 'dashboard quality fixtures' 'node' @('--test', '.github/scripts/dashboard-quality/*.test.mjs') }
         'dashboard-quality' = { param($c) Invoke-CheckedCommand 'dashboard JavaScript quality' 'node' @('.github/scripts/dashboard-quality/run.mjs', (Join-Path $c.Temp 'dashboard-quality')) }
         'runner-tests' = {

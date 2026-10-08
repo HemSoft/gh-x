@@ -144,6 +144,19 @@ The zero-padded 12-hour clock and zone abbreviation follow the machine's local
 time zone, including daylight saving time. The timestamp also appears in plain
 redirected output and when GitHub sections are unavailable.
 
+The compact header aligns branch, worktree, and stash inventories beneath the
+default branch. It always reports stashes, including `0 stashes`, and marks each
+inventory row with a green `✓` only when its clean-state rule passes:
+
+- Branches: 1 local branch, 0 dangling branches, and 1 remote-tracking branch.
+- Worktrees: 1 total worktree and 0 cleanup candidates.
+- Stashes: 0 stashes.
+
+Other inventory values appear in yellow without a check. No-color output keeps
+the checks and alignment. Stash counts come from the shared repository inventory
+on every invocation, including from linked worktrees; an inspection failure
+shows an unavailable message without a check.
+
 The header counts local, remote, and dangling branches,
 then reports linked worktrees and conservative cleanup candidates. A linked
 worktree is suggested only when it is unlocked, clean, merged into the default
@@ -157,7 +170,8 @@ requests, and the five most recent workflow runs appear in separate tables
 below the header. Use `--merged=N` to change the merged pull request count.
 `--merged=0` hides that section and skips its fetch. Merged pull requests are
 ordered by merge time, newest first, and use the same enriched table as open
-pull requests. Workflow runs keep the same
+pull requests. The repository API returns existing merges even when the remote
+retains an old repository name after a move. Workflow runs keep the same
 status, title, workflow, branch, event, linked ID, elapsed-time, and age columns
 as `gh x run list`. Local Git status still renders
 when GitHub data is unavailable. When supplemental pull request data or issue
@@ -183,7 +197,7 @@ The cache is isolated by effective remote configuration (including
 GitHub authentication context, `GH_REPO`, `GH_HOST`, `--merged`, and color mode.
 Environment and credential-store tokens affect the fingerprint;
 no tokens or authentication files are stored in snapshots. Local branches,
-worktrees, cleanup candidates, working-tree changes, and relative time labels
+worktrees, stashes, cleanup candidates, working-tree changes, and relative time labels
 are updated on every run.
 The hosted default branch is cached when no local remote HEAD is available.
 `--refresh` bypasses a fresh entry and replaces it after every GitHub section

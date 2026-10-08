@@ -76,9 +76,9 @@ func TestFetchRecentlyMergedPullRequestsExpandsUntilMergeOrderIsProven(t *testin
 		command := strings.Join(args, " ")
 		var rows []pullRequest
 		switch {
-		case strings.Contains(command, "--limit 25"):
+		case strings.Contains(command, "first: 25"):
 			rows = firstPage
-		case strings.Contains(command, "--limit 50"):
+		case strings.Contains(command, "first: 50"):
 			rows = secondPage
 		default:
 			t.Fatalf("unexpected arguments: %s", command)
@@ -87,10 +87,10 @@ func TestFetchRecentlyMergedPullRequestsExpandsUntilMergeOrderIsProven(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		return *bytes.NewBuffer(data), bytes.Buffer{}, nil
+		return *bytes.NewBufferString(fmt.Sprintf(`{"data":{"repository":{"pullRequests":{"nodes":%s,"pageInfo":{"hasNextPage":false}}}}}`, data)), bytes.Buffer{}, nil
 	}
 
-	got, err := fetchRecentlyMergedPullRequests(listOptions{limit: 2, state: "merged", search: "sort:updated-desc", recentlyMerged: true})
+	got, err := fetchRecentlyMergedPullRequests(listOptions{repo: "owner/repo", limit: 2, state: "merged", recentlyMerged: true})
 	if err != nil {
 		t.Fatal(err)
 	}

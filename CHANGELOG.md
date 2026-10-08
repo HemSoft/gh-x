@@ -10,6 +10,16 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-08
+
+- feat: show stash counts and aligned clean status rows (#206)
+- docs: record v0.18.2 release (#207)
+
+## [0.18.2] - 2026-10-08
+
+- fix: preserve OAuth scope arrays in credential checks (#204)
+- docs: record v0.18.1 release (#203)
+
 ## [0.18.1] - 2026-10-07
 
 - ci: add read-only migration credential checks (#202)
@@ -316,7 +326,9 @@ the published releases above.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.18.1...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.19.0
+[0.18.2]: https://github.com/HemSoft/gh-x/releases/tag/v0.18.2
 [0.18.1]: https://github.com/HemSoft/gh-x/releases/tag/v0.18.1
 [0.18.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.18.0
 [0.17.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.17.0

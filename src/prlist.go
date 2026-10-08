@@ -213,7 +213,7 @@ func fetchRecentlyMergedPullRequests(options listOptions) ([]pullRequest, error)
 	for {
 		candidateOptions := options
 		candidateOptions.limit = candidateLimit
-		candidates, err := fetchRawPullRequests(candidateOptions)
+		candidates, err := fetchMergedRepositoryPullRequests(candidateOptions)
 		if err != nil {
 			return nil, err
 		}
