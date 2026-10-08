@@ -238,7 +238,7 @@ func TestMonitorMonochromeScreensKeepTextAndFocus(t *testing.T) {
 		})
 	}
 	m.settings.open(m.cfg)
-	if !strings.Contains(stripANSIForTest(m.renderSettingsScreen()), "> Repositories") {
+	if !strings.Contains(stripANSIForTest(m.renderSettingsScreen()), "> Sidebar repos") {
 		t.Fatal("focused settings field has no text cue")
 	}
 	m.settings.cycleFocus(1)

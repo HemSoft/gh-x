@@ -11,11 +11,7 @@ import (
 
 func TestMonitorUpdateTransitions(t *testing.T) {
 	now := time.Date(2026, 8, 24, 9, 30, 0, 0, time.UTC)
-	success := &monitorFetchResult{
-		FetchedAt:     now,
-		PRSections:    make([]monitorSectionData, len(monitorTestConfig().PRSections)),
-		IssueSections: make([]monitorSectionData, len(monitorTestConfig().IssueSections)),
-	}
+	success := newMonitorTestFetchResult(monitorTestConfig(), now)
 
 	tests := []struct {
 		name  string

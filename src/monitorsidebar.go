@@ -23,30 +23,50 @@ func countMonitorRowsByRepo(result *monitorFetchResult, repos []string) map[stri
 	if result == nil {
 		return counts
 	}
+	if result.Pinned != nil {
+		return countMonitorPinnedRows(result, repos)
+	}
 	for repo, accessible := range result.Accessible {
 		entry := counts[repo]
 		entry.Accessible = accessible
 		counts[repo] = entry
 	}
-	for i := range result.PRSections {
-		for _, row := range result.PRSections[i].Rows {
-			entry := counts[row.Repo]
-			if _, known := counts[row.Repo]; !known {
+	addMonitorSidebarRows(counts, repos, result.PRSections, true)
+	addMonitorSidebarRows(counts, repos, result.IssueSections, false)
+	return counts
+}
+
+func addMonitorSidebarRows(counts map[string]monitorRepoCounts, repos []string, sections []monitorSectionData, prs bool) {
+	for _, section := range sections {
+		for _, row := range section.Rows {
+			key := monitorSidebarRepoKey(repos, row.Repo)
+			entry, known := counts[key]
+			if !known {
 				entry.Accessible = true
 			}
-			entry.PRs++
-			counts[row.Repo] = entry
+			if prs {
+				entry.PRs++
+			} else {
+				entry.Issues++
+			}
+			counts[key] = entry
 		}
 	}
-	for i := range result.IssueSections {
-		for _, row := range result.IssueSections[i].Rows {
-			entry := counts[row.Repo]
-			if _, known := counts[row.Repo]; !known {
-				entry.Accessible = true
-			}
-			entry.Issues++
-			counts[row.Repo] = entry
+}
+
+func monitorSidebarRepoKey(repos []string, repo string) string {
+	for _, configured := range repos {
+		if strings.EqualFold(configured, repo) {
+			return configured
 		}
+	}
+	return repo
+}
+
+func countMonitorPinnedRows(result *monitorFetchResult, repos []string) map[string]monitorRepoCounts {
+	counts := make(map[string]monitorRepoCounts, len(repos))
+	for _, repo := range repos {
+		counts[repo] = countMonitorRowsByRepo(result.Pinned[repo], []string{repo})[repo]
 	}
 	return counts
 }

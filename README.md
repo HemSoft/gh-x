@@ -289,7 +289,11 @@ approval.
 ## What `gh x monitor` adds
 
 `gh x monitor` is an interactive, read-only dashboard for pull requests and
-issues across multiple repositories. The sidebar selects a repository in
+issues across all repositories owned by the active account and its organizations.
+“All repos” discovers those owners on every refresh, including repositories
+absent from the configuration. Configured repositories are optional sidebar
+shortcuts, each with its own query, counts and row limit. A busy repository
+cannot crowd another shortcut out. The sidebar selects a repository in
 terminals at least 100 columns wide; compact terminals show the repository in
 the header instead. The top tabs switch between pull requests and issues,
 configurable sections apply GitHub search filters, and the detail pane shows
@@ -300,7 +304,7 @@ issue detail pane repeats both values.
 ```bash
 gh x monitor                 # launch the dashboard
 gh x m                       # short alias
-gh x monitor --print-query   # print the host-specific GraphQL query and exit
+gh x monitor --print-query   # discover owners and print account-wide queries
 ```
 
 The first launch creates `config.yml` in the operating system's user config
@@ -375,17 +379,27 @@ issueSections:
 | Field | Meaning |
 | --- | --- |
 | `version` | Configuration schema version. The current value is `1`. |
-| `repos` | One or more `OWNER/REPO` entries. Use `HOST/OWNER/REPO` for GitHub Enterprise Server. |
+| `repos` | Optional sidebar shortcuts as `OWNER/REPO` entries. Use `HOST/OWNER/REPO` for GitHub Enterprise Server. An empty list still supports All repos. |
 | `defaults.limit` | Default rows fetched per section, from 1 to 100. The generated default is 30. |
 | `defaults.interval` | Auto-refresh cadence as a Go duration, from `10s` to `6h`. The generated default is `10m`. |
 | `prSections` | Pull request sub-tabs. Each entry needs `title` and `filters`; optional `limit` from 1 to 100 overrides the default. |
 | `issueSections` | Issue sub-tabs with the same `title`, `filters`, and optional `limit` fields. |
 
-Section filters use GitHub search syntax. The monitor adds each configured
-repository automatically, so section filters must not include `repo:`
-qualifiers. GitHub.com repositories use the compact `OWNER/REPO` form.
+Section filters use GitHub search syntax and apply to both the account-wide
+view and sidebar shortcuts. All repos adds the active account and every
+organization returned by that host’s authenticated GitHub account, with
+pagination. Shortcut queries add their configured repository scope. Section
+filters cannot contain `repo:`, `user:`, or `org:` qualifiers: GitHub's classic
+search unions those qualifiers rather than narrowing the monitor's scope. GitHub.com
+repositories use the compact `OWNER/REPO` form.
 Enterprise repositories keep their host prefix and are queried through that
-host's authenticated `gh` account. If either section list is empty or omitted,
+host's authenticated `gh` account. If no shortcuts are configured, the monitor
+uses `GH_HOST` or `github.com`. Owner discovery failures report an error and
+retain the last account-wide snapshot while successful shortcuts remain
+available. Failed shortcut queries also retain their own last snapshot and
+show an unavailable state. All repos never falls back to a configured selection.
+Each section still obeys its row limit; the footer shows loaded and matching
+counts. If either section list is empty or omitted,
 the monitor restores its generated default sections.
 
 Press `s` to edit repositories, the default row limit, and the refresh interval
@@ -393,6 +407,11 @@ inside the dashboard. Press `e` to edit the complete YAML file with `$VISUAL`,
 then `$EDITOR`, or the platform default editor. The monitor reloads the file
 when the editor exits. A separate `state.json` in the same directory remembers
 the selected tab, section, and repository; it is not a configuration source.
+
+`--print-query` performs authenticated owner discovery before printing the
+account-wide search documents. It does not fetch PRs or issues. Owner batches
+contain at most 16 user and organization qualifiers, and multi-document output
+labels each host and operation.
 
 ### GitHub request timeouts
 

@@ -379,11 +379,12 @@ func TestParseMonitorResponseRejectsMalformedHierarchyFields(t *testing.T) {
 	}
 }
 
-func TestBuildMonitorGraphQLQueryRequiresRepos(t *testing.T) {
+func TestBuildMonitorHostQueriesWithoutShortcuts(t *testing.T) {
 	cfg := defaultMonitorConfig("")
 	cfg.Repos = nil
-	if _, err := buildMonitorHostQueries(cfg); err == nil {
-		t.Fatal("expected error without repos")
+	queries, err := buildMonitorHostQueries(cfg)
+	if err != nil || len(queries) != 1 || queries[0].Host != legacyMonitorHost() {
+		t.Fatalf("empty shortcuts must retain the active host: %v, %v", queries, err)
 	}
 }
 

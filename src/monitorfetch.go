@@ -22,6 +22,13 @@ type monitorSectionData struct {
 
 // monitorFetchResult is the complete payload for one refresh cycle.
 type monitorFetchResult struct {
+	monitorQueryConfig
+	HostIdentities map[string]monitorHostIdentity
+	ViewerLogin    string
+	// Pinned retains per-repository results independently of the global cap.
+	Error         string
+	Incomplete    bool
+	Pinned        map[string]*monitorFetchResult
 	FetchedAt     time.Time
 	RateRemaining int
 	RateResetAt   time.Time
@@ -85,6 +92,7 @@ type monitorRepositoryGroup struct {
 
 type monitorHostQuery struct {
 	Host          string
+	OwnerScope    []string
 	Repositories  []monitorRepository
 	Query         string
 	FallbackQuery string
@@ -141,7 +149,7 @@ func buildMonitorHostQueries(cfg *monitorConfig) ([]monitorHostQuery, error) {
 		return nil, err
 	}
 	if len(repositories) == 0 {
-		return nil, fmt.Errorf("no repos configured")
+		return []monitorHostQuery{{Host: monitorDefaultHost(cfg)}}, nil
 	}
 
 	groups := groupMonitorRepositories(repositories)
@@ -179,10 +187,13 @@ func buildMonitorGraphQLQueryForRepos(cfg *monitorConfig, repositories []monitor
 }
 
 func buildMonitorGraphQLQuery(cfg *monitorConfig, repositories []monitorRepository, includeHierarchy bool) string {
-	repoQualifiers := buildMonitorRepoQualifiers(repositories)
+	return buildMonitorGraphQLQueryWithScope(cfg, repositories, includeHierarchy, buildMonitorRepoQualifiers(repositories))
+}
 
+func buildMonitorGraphQLQueryWithScope(cfg *monitorConfig, repositories []monitorRepository, includeHierarchy bool, repoQualifiers string) string {
 	var sb strings.Builder
 	sb.WriteString("{\n")
+	sb.WriteString("  viewer { login }\n")
 	sb.WriteString("  rateLimit { remaining resetAt }\n")
 	writeMonitorAccessProbes(&sb, repositories)
 	for i, section := range cfg.PRSections {
@@ -242,14 +253,19 @@ func executeMonitorFetch(ctx context.Context, cfg *monitorConfig, now time.Time)
 	if err != nil {
 		return nil, err
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	return executeMonitorQueries(ctx, cfg, queries, now, fetchMonitorHost)
+}
+
+type monitorHostFetcher func(context.Context, monitorHostQuery, *monitorConfig, time.Time) (*monitorFetchResult, error)
+
+func executeMonitorQueries(ctx context.Context, cfg *monitorConfig, queries []monitorHostQuery, now time.Time, fetch monitorHostFetcher) (*monitorFetchResult, error) {
+	ctx = monitorQueryContext(ctx)
 
 	outcomeChannel := make(chan monitorHostFetchOutcome, len(queries))
+	slots := make(chan struct{}, monitorQueryConcurrency)
 	for index, request := range queries {
 		go func() {
-			partial, fetchErr := fetchMonitorHost(ctx, request, cfg, now)
+			partial, fetchErr := executeMonitorQueryWithSlot(ctx, slots, request, cfg, now, fetch)
 			outcomeChannel <- monitorHostFetchOutcome{Index: index, Result: partial, Err: fetchErr}
 		}()
 	}
@@ -264,6 +280,7 @@ func executeMonitorFetch(ctx context.Context, cfg *monitorConfig, now time.Time)
 	successfulHosts := 0
 	for index, request := range queries {
 		outcome := outcomes[index]
+		mergeMonitorIdentities(combined, outcome.Result)
 		if outcome.Err != nil {
 			failedHosts = append(failedHosts, fmt.Sprintf("%s: %v", request.Host, outcome.Err))
 			continue
@@ -273,14 +290,25 @@ func executeMonitorFetch(ctx context.Context, cfg *monitorConfig, now time.Time)
 	}
 	if successfulHosts == 0 {
 		if contextErr := githubContextError(ctx.Err()); contextErr != nil {
-			return nil, contextErr
+			return combined, contextErr
 		}
-		return nil, fmt.Errorf("monitor refresh failed for all configured hosts: %s", strings.Join(failedHosts, "; "))
+		return combined, fmt.Errorf("monitor refresh failed for all configured hosts: %s", strings.Join(failedHosts, "; "))
 	}
-	combined.Warnings = append(combined.Warnings, failedHosts...)
+	combined.Incomplete = combined.Incomplete || len(failedHosts) > 0
+	combined.Warnings = uniqueMonitorWarnings(append(combined.Warnings, failedHosts...))
 	sortAllMonitorSections(combined)
 	limitMonitorSectionRows(combined, cfg)
 	return combined, nil
+}
+
+func executeMonitorQueryWithSlot(ctx context.Context, slots chan struct{}, request monitorHostQuery, cfg *monitorConfig, now time.Time, fetch monitorHostFetcher) (*monitorFetchResult, error) {
+	select {
+	case slots <- struct{}{}:
+		defer func() { <-slots }()
+	case <-ctx.Done():
+		return nil, githubContextError(ctx.Err())
+	}
+	return fetch(ctx, request, cfg, now)
 }
 
 func fetchMonitorHost(ctx context.Context, request monitorHostQuery, cfg *monitorConfig, now time.Time) (*monitorFetchResult, error) {
@@ -295,10 +323,23 @@ func fetchMonitorHost(ctx context.Context, request monitorHostQuery, cfg *monito
 	if err != nil {
 		return nil, fmt.Errorf("parse GraphQL response: %w", err)
 	}
-	return result, nil
+	return bindMonitorHostIdentity(result, request)
 }
 
 func executeMonitorHostQuery(ctx context.Context, host, query string) (bytes.Buffer, bytes.Buffer, error) {
+	if ctx != nil {
+		if slots, ok := ctx.Value(monitorQuerySlotsKey{}).(chan struct{}); ok {
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				return bytes.Buffer{}, bytes.Buffer{}, githubContextError(ctx.Err())
+			}
+		}
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return bytes.Buffer{}, bytes.Buffer{}, githubContextError(ctx.Err())
+	}
 	args := []string{"api", "--hostname", host, "graphql", "-f", fmt.Sprintf("query=%s", query)}
 	return monitorGHExecFunc(ctx, args...)
 }
@@ -313,7 +354,7 @@ func fetchMonitorHostWithoutHierarchy(ctx context.Context, request monitorHostQu
 		return nil, fmt.Errorf("parse fallback GraphQL response: %w", err)
 	}
 	result.Warnings = append(result.Warnings, "Issue hierarchy is unavailable on "+request.Host)
-	return result, nil
+	return bindMonitorHostIdentity(result, request)
 }
 
 func issueHierarchyUnsupported(stdout []byte, stderr string) bool {
@@ -340,10 +381,11 @@ func unsupportedHierarchyMessage(message string) bool {
 
 func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResult {
 	result := &monitorFetchResult{
-		FetchedAt:     now,
-		Accessible:    map[string]bool{},
-		PRSections:    make([]monitorSectionData, len(cfg.PRSections)),
-		IssueSections: make([]monitorSectionData, len(cfg.IssueSections)),
+		FetchedAt:          now,
+		Accessible:         map[string]bool{},
+		monitorQueryConfig: newMonitorQueryConfig(cfg),
+		PRSections:         make([]monitorSectionData, len(cfg.PRSections)),
+		IssueSections:      make([]monitorSectionData, len(cfg.IssueSections)),
 	}
 	for i := range result.PRSections {
 		result.PRSections[i].Kind = monitorKindPR
@@ -355,6 +397,8 @@ func newMonitorFetchResult(cfg *monitorConfig, now time.Time) *monitorFetchResul
 }
 
 func mergeMonitorFetchResult(dst, src *monitorFetchResult, qualifyWarnings bool, host string) {
+	mergeMonitorIdentities(dst, src)
+	dst.Incomplete = dst.Incomplete || src.Incomplete
 	if !src.RateResetAt.IsZero() && (dst.RateResetAt.IsZero() || src.RateRemaining < dst.RateRemaining) {
 		dst.RateRemaining = src.RateRemaining
 		dst.RateResetAt = src.RateResetAt
@@ -371,11 +415,15 @@ func mergeMonitorFetchResult(dst, src *monitorFetchResult, qualifyWarnings bool,
 		dst.IssueSections[i].Rows = append(dst.IssueSections[i].Rows, src.IssueSections[i].Rows...)
 	}
 	for _, warning := range src.Warnings {
-		if qualifyWarnings {
-			warning = host + ": " + warning
-		}
-		dst.Warnings = append(dst.Warnings, warning)
+		dst.Warnings = append(dst.Warnings, qualifiedMonitorWarning(warning, host, qualifyWarnings))
 	}
+}
+
+func qualifiedMonitorWarning(warning, host string, qualify bool) string {
+	if qualify && !strings.HasPrefix(warning, host+": ") {
+		return host + ": " + warning
+	}
+	return warning
 }
 
 // hasUsableGraphQLData reports whether a response body carries a non-null
@@ -420,7 +468,13 @@ func parseMonitorHostResponse(data []byte, cfg *monitorConfig, repositories []mo
 	}
 
 	result := newMonitorFetchResult(cfg, now)
+	var viewer struct {
+		Login string `json:"login"`
+	}
+	_ = json.Unmarshal(dataMap["viewer"], &viewer)
+	result.ViewerLogin = viewer.Login
 	result.Warnings = monitorWarnings(envelope.Errors)
+	result.Incomplete = monitorConfiguredSearchIncomplete(dataMap, cfg) || monitorSearchAliasesIncomplete(dataMap, envelope.Errors)
 	result.Accessible = decodeAccessProbes(dataMap, repositories)
 	if payload := decodeRateLimit(dataMap["rateLimit"]); payload != nil {
 		result.RateRemaining = payload.Remaining
@@ -562,7 +616,7 @@ func decodeMonitorPRSection(raw json.RawMessage, now time.Time) monitorSectionDa
 	rows := make([]monitorRow, 0, len(nodes))
 	for _, node := range nodes {
 		var prNode monitorPRNode
-		if json.Unmarshal(node, &prNode) != nil {
+		if json.Unmarshal(node, &prNode) != nil || prNode.Number <= 0 {
 			continue
 		}
 		rows = append(rows, mapMonitorPRNode(prNode, now))
