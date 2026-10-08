@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.19.3] - 2026-10-08
+
+- docs: record v0.19.2 release (#212)
+- fix: allow thirty minutes for Codex reviews (#211)
+
 ## [0.19.2] - 2026-10-08
 
 - chore(deps): bump github/gh-aw-actions/setup-cli (#209)
@@ -336,7 +341,8 @@ the published releases above.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.19.2...HEAD
+[Unreleased]: https://github.com/HemSoft/gh-x/compare/v0.19.3...HEAD
+[0.19.3]: https://github.com/HemSoft/gh-x/releases/tag/v0.19.3
 [0.19.2]: https://github.com/HemSoft/gh-x/releases/tag/v0.19.2
 [0.19.1]: https://github.com/HemSoft/gh-x/releases/tag/v0.19.1
 [0.19.0]: https://github.com/HemSoft/gh-x/releases/tag/v0.19.0
