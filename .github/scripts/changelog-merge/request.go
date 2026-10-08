@@ -11,7 +11,10 @@ import (
 // The Auto Release job is the sole automated request owner, serialized by its
 // concurrency group. Read-only CI jobs never post or replace requests.
 const connectedRequester = "HemSoft"
-const reviewWindow = 10 * time.Minute
+const (
+	reviewWindow      = 30 * time.Minute
+	reviewSetupWindow = 10 * time.Minute
+)
 
 func trustedRequester(login string) bool {
 	return login == connectedRequester || login == "github-actions" || login == "github-actions[bot]"
@@ -141,7 +144,7 @@ func pendingReview(state reviewState, cfg config, number string, now time.Time) 
 	}
 	// PR-triggered CI can start before Auto Release posts the request. Anchor
 	// this short setup window to the immutable head, not this job invocation.
-	if request.CreatedAt.IsZero() && !state.CommittedAt.IsZero() && now.Before(state.CommittedAt.Add(reviewWindow)) {
+	if request.CreatedAt.IsZero() && !state.CommittedAt.IsZero() && now.Before(state.CommittedAt.Add(reviewSetupWindow)) {
 		return nil
 	}
 	if request.Author.Login != connectedRequester {
@@ -195,7 +198,7 @@ func ordinarySetupDeadline(state reviewState, cfg config) (time.Time, error) {
 	if started.IsZero() {
 		return time.Time{}, errors.New("pull request review setup lacks a timestamp; inspect review history before retrying")
 	}
-	return started.Add(reviewWindow), nil
+	return started.Add(reviewSetupWindow), nil
 }
 
 func ordinaryReviewAnchor(state reviewState, head string, after time.Time) (reviewComment, error) {

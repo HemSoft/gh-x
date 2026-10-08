@@ -404,7 +404,7 @@ func executionTimeout(args []string) time.Duration {
 	}
 	// Allow a full setup window plus the persisted request window. This is
 	// only a process watchdog; pendingReview enforces the original deadline.
-	return 2*reviewWindow + 2*time.Minute
+	return reviewSetupWindow + reviewWindow + 2*time.Minute
 }
 
 func validateInvocation(cfg config, args []string) error {

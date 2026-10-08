@@ -392,7 +392,7 @@ jobs:
     name: Current-head Codex Review
     if: github.event_name == 'pull_request' || startsWith(github.head_ref || github.ref_name, 'chore/changelog-') || inputs.changelog_branch != '' || inputs.changelog_head != ''
     runs-on: ubuntu-latest
-    timeout-minutes: 24
+    timeout-minutes: 44
     concurrency:
       # A release dispatch is authoritative and gets a run-specific lane. PR
       # events for one immutable head still replace their own stale verifier.
