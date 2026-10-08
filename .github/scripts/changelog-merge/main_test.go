@@ -454,6 +454,19 @@ func TestMergeBudgetOutlivesRequiredGates(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobBudget := time.Duration(workflow.Jobs["codex-review"].TimeoutMinutes) * time.Minute
+	verifier, err := os.ReadFile("../verify-authoritative-run.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, watch, found := strings.Cut(string(verifier), "timeout ")
+	if !found {
+		t.Fatal("authoritative verifier must have a bounded wait")
+	}
+	watchLimit, _, _ := strings.Cut(watch, " ")
+	watchBudget, err := time.ParseDuration(watchLimit)
+	if err != nil || watchBudget <= jobBudget {
+		t.Fatal("authoritative verifier must outlive the review CI job")
+	}
 	if executionTimeout([]string{"enable"}) <= 2*jobBudget {
 		t.Fatal("merge must outlive two queued review jobs")
 	}
