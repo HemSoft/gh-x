@@ -953,6 +953,11 @@ when verifying those historical assets. Keep release download commands
 canonical. See the exact options and output fields on the
 [`gh attestation verify` manual page](https://cli.github.com/manual/gh_attestation_verify).
 
+Release retries verify the canonical identity first. A pre-transfer certificate
+may use the original `HemSoft/gh-x` signer, but is accepted only when its verified
+certificate identifies the same immutable repository ID, `1262580000`. An
+unrelated repository that later occupies the old name cannot satisfy that check.
+
 Generated changelog reviews retain stricter bot-author, same-repository,
 branch-name, and CHANGELOG-only checks on both pull-request and manually
 dispatched CI runs. The trusted release workflow requests connected Codex only.

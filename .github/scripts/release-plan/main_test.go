@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -296,6 +297,52 @@ func TestAttestationVerificationArgsBindTrustedSource(t *testing.T) {
 	}
 	if got := attestationVerificationArgs("hemsoft-dev/gh-x", sha, "dist/linux-amd64"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("attestationVerificationArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestReleaseAssetVerificationPreservesHistoricalIdentity(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef012345e5"
+	verified := []byte(`[{"verificationResult":{"signature":{"certificate":{"sourceRepositoryIdentifier":"1262580000"}}}}]`)
+	tests := []struct {
+		name       string
+		repository string
+		canonical  error
+		legacy     error
+		output     []byte
+		wantError  bool
+		wantCalls  int
+	}{
+		{name: "current identity", repository: "hemsoft-dev/gh-x", wantCalls: 1},
+		{name: "historical identity", repository: "hemsoft-dev/gh-x", canonical: errors.New("old certificate"), output: verified, wantCalls: 2},
+		{name: "both identities rejected", repository: "hemsoft-dev/gh-x", canonical: errors.New("invalid"), legacy: errors.New("invalid"), wantError: true, wantCalls: 2},
+		{name: "reclaimed legacy namespace", repository: "hemsoft-dev/gh-x", canonical: errors.New("old certificate"), output: []byte(`[{"verificationResult":{"signature":{"certificate":{"sourceRepositoryIdentifier":"999"}}}}]`), wantError: true, wantCalls: 2},
+		{name: "missing immutable ID", repository: "hemsoft-dev/gh-x", canonical: errors.New("old certificate"), output: []byte(`[{}]`), wantError: true, wantCalls: 2},
+		{name: "invalid verification output", repository: "hemsoft-dev/gh-x", canonical: errors.New("old certificate"), output: []byte(`not json`), wantError: true, wantCalls: 2},
+		{name: "other repository has no fallback", repository: "other/gh-x", canonical: errors.New("invalid"), wantError: true, wantCalls: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var calls [][]string
+			err := verifyReleaseAsset(test.repository, sha, "dist/linux-amd64", func(args []string) ([]byte, error) {
+				calls = append(calls, args)
+				if len(calls) == 1 {
+					return nil, test.canonical
+				}
+				return test.output, test.legacy
+			})
+			if (err != nil) != test.wantError || len(calls) != test.wantCalls {
+				t.Fatalf("error = %v; calls = %d", err, len(calls))
+			}
+			if !reflect.DeepEqual(calls[0], attestationVerificationArgs(test.repository, sha, "dist/linux-amd64")) {
+				t.Fatalf("canonical verification did not bind the source: %#v", calls[0])
+			}
+			if len(calls) == 2 {
+				want := append(attestationVerificationArgs("HemSoft/gh-x", sha, "dist/linux-amd64"), "--format", "json")
+				if !reflect.DeepEqual(calls[1], want) {
+					t.Fatalf("historical verification did not preserve the exact signer and source: %#v", calls[1])
+				}
+			}
+		})
 	}
 }
 
