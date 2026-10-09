@@ -17,7 +17,7 @@ var buildDate = ""
 
 // Change these two constants to move the extension to a different org.
 const (
-	repoOwner       = "HemSoft"
+	repoOwner       = "hemsoft-dev"
 	repoName        = "gh-x"
 	copyrightHolder = "© 2026 HemSoft Developments"
 )
@@ -590,7 +590,7 @@ Examples:
   gh x issue list --state all --assignee "@me"
   gh x workflow list
   gh x codespace list
-  gh x codespace list --org HemSoft
+  gh x codespace list --org hemsoft-dev
   gh x version
 `
 
@@ -613,7 +613,7 @@ Examples:
   gh x pr me
   gh x pr me --org AcmeCorp
   gh x pr atm
-  gh x pr atm --org HemSoft
+  gh x pr atm --org hemsoft-dev
   gh x pr atm --review-required
   gh x pr review 42 --agent codex
   gh x pr changelog

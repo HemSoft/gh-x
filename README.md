@@ -2,11 +2,11 @@
 
 [![CI status][ci]][ci-runs] [![Latest release][release]][releases] [![MIT license][license]][license-file]
 
-[ci]: https://github.com/HemSoft/gh-x/actions/workflows/ci.yml/badge.svg?branch=main
-[ci-runs]: https://github.com/HemSoft/gh-x/actions/workflows/ci.yml
-[release]: https://img.shields.io/github/v/release/HemSoft/gh-x
-[releases]: https://github.com/HemSoft/gh-x/releases
-[license]: https://img.shields.io/github/license/HemSoft/gh-x
+[ci]: https://github.com/hemsoft-dev/gh-x/actions/workflows/ci.yml/badge.svg?branch=main
+[ci-runs]: https://github.com/hemsoft-dev/gh-x/actions/workflows/ci.yml
+[release]: https://img.shields.io/github/v/release/hemsoft-dev/gh-x
+[releases]: https://github.com/hemsoft-dev/gh-x/releases
+[license]: https://img.shields.io/github/license/hemsoft-dev/gh-x
 [license-file]: LICENSE
 
 A GitHub CLI extension that supercharges `gh pr list` with a richer,
@@ -26,7 +26,7 @@ Also includes `gh x pr atm` for org-wide PR visibility.
 Requires [GitHub CLI](https://cli.github.com/) (`gh`) authenticated with your account.
 
 ```bash
-gh extension install HemSoft/gh-x
+gh extension install hemsoft-dev/gh-x
 ```
 
 That's it. Prebuilt binaries are available for all platforms — no Go toolchain needed.
@@ -353,7 +353,7 @@ The [monitor design record](docs/monitor-design.md) explains the stack and layou
 version: 1
 
 repos:
-  - HemSoft/gh-x
+  - hemsoft-dev/gh-x
   - ghe.example.com/acme/platform
 
 defaults:
@@ -421,7 +421,7 @@ positive [Go duration](https://pkg.go.dev/time#ParseDuration) to override it:
 
 ```powershell
 $env:GH_X_GITHUB_TIMEOUT = "45s"
-gh x issue list --repo HemSoft/gh-x
+gh x issue list --repo hemsoft-dev/gh-x
 ```
 
 Each monitor refresh has a separate 45-second total deadline controlled by
@@ -615,14 +615,14 @@ gh x version
 ```
 
 ```text
-gh-x v0.1.2 © 2026 HemSoft Developments · gh extension install HemSoft/gh-x
+gh-x v0.1.2 © 2026 HemSoft Developments · gh extension install hemsoft-dev/gh-x
 ✓ Up to date
 ```
 
 If a newer release exists:
 
 ```text
-gh-x v0.1.0 © 2026 HemSoft Developments · gh extension install HemSoft/gh-x
+gh-x v0.1.0 © 2026 HemSoft Developments · gh extension install hemsoft-dev/gh-x
 ↑ v0.1.2 available · gh extension upgrade gh-x
 ```
 
@@ -929,23 +929,34 @@ Existing release assets are never replaced: a retry reuses bytes with a matching
 digest, uploads only missing attested assets, and fails closed on a digest
 mismatch or unexpected asset.
 
-After downloading an asset, verify it with this exact command:
+After downloading an asset produced after the organization transfer, verify it
+with this command:
 
 ```powershell
-$sourceCommit = gh release view v0.12.9 --repo HemSoft/gh-x `
+$releaseTag = '<post-transfer-release-tag>'
+$sourceCommit = gh release view $releaseTag --repo hemsoft-dev/gh-x `
   --json targetCommitish --jq .targetCommitish
 gh attestation verify .\windows-amd64.exe `
-  --repo HemSoft/gh-x `
-  --signer-workflow HemSoft/gh-x/.github/workflows/auto-release.yml `
+  --repo hemsoft-dev/gh-x `
+  --signer-workflow hemsoft-dev/gh-x/.github/workflows/auto-release.yml `
   --source-digest $sourceCommit `
   --predicate-type https://slsa.dev/provenance/v1
 ```
 
-Replace `v0.12.9` and the asset path with the downloaded release. The command
-must exit successfully and name `HemSoft/gh-x`, the trusted release workflow,
+Replace the release tag and asset path with the downloaded release. The command
+must exit successfully and name `hemsoft-dev/gh-x`, the trusted release workflow,
 and the expected source commit. To verify all downloaded assets, run
-the same command once per file. See the exact options and output fields on the
+the same command once per file. Pre-transfer assets keep their original signing
+identity: use `HemSoft/gh-x` for `--repo` and
+`HemSoft/gh-x/.github/workflows/auto-release.yml` for `--signer-workflow`
+when verifying those historical assets. Keep release download commands
+canonical. See the exact options and output fields on the
 [`gh attestation verify` manual page](https://cli.github.com/manual/gh_attestation_verify).
+
+Release retries verify the canonical identity first. A pre-transfer certificate
+may use the original `HemSoft/gh-x` signer, but is accepted only when its verified
+certificate identifies the same immutable repository ID, `1262580000`. An
+unrelated repository that later occupies the old name cannot satisfy that check.
 
 Generated changelog reviews retain stricter bot-author, same-repository,
 branch-name, and CHANGELOG-only checks on both pull-request and manually
@@ -992,7 +1003,7 @@ helper from a reviewed checkout. Do not run a manual request concurrently with
 `Auto Release`; it owns automated requests. In PowerShell:
 
 ```powershell
-$env:GITHUB_REPOSITORY = 'HemSoft/gh-x'
+$env:GITHUB_REPOSITORY = 'hemsoft-dev/gh-x'
 $env:CHANGELOG_BRANCH = 'chore/changelog-0.11.8'
 $env:EXPECTED_HEAD = '<exact 40-character PR head>'
 gh api user --jq .login

@@ -236,12 +236,48 @@ func reconcileExistingRelease(repository, releaseTag, releaseSHA string, assets 
 
 func verifyReleaseAssets(repository, releaseSHA string, assets []string) error {
 	for _, asset := range assets {
-		args := attestationVerificationArgs(repository, releaseSHA, asset)
-		if err := runCommand("gh", args...); err != nil {
+		if err := verifyReleaseAsset(repository, releaseSHA, asset, func(args []string) ([]byte, error) {
+			return exec.Command("gh", args...).Output()
+		}); err != nil {
 			return fmt.Errorf("verify release attestation for %s: %w", filepath.Base(asset), err)
 		}
 	}
 	return nil
+}
+
+// Historical certificates retain their original owner. Bind the sole legacy
+// identity to the transferred repository's immutable ID before accepting it.
+func verifyReleaseAsset(repository, releaseSHA, asset string, verify func([]string) ([]byte, error)) error {
+	_, canonicalErr := verify(attestationVerificationArgs(repository, releaseSHA, asset))
+	if canonicalErr == nil {
+		return nil
+	}
+	if repository != "hemsoft-dev/gh-x" {
+		return canonicalErr
+	}
+	args := append(attestationVerificationArgs("HemSoft/gh-x", releaseSHA, asset), "--format", "json")
+	output, err := verify(args)
+	if err != nil {
+		return fmt.Errorf("canonical verification failed (%v); historical verification failed: %w", canonicalErr, err)
+	}
+	var results []struct {
+		VerificationResult struct {
+			Signature struct {
+				Certificate struct {
+					SourceRepositoryIdentifier string `json:"sourceRepositoryIdentifier"`
+				} `json:"certificate"`
+			} `json:"signature"`
+		} `json:"verificationResult"`
+	}
+	if err := json.Unmarshal(output, &results); err != nil {
+		return fmt.Errorf("decode historical verification: %w", err)
+	}
+	for _, result := range results {
+		if result.VerificationResult.Signature.Certificate.SourceRepositoryIdentifier == "1262580000" {
+			return nil
+		}
+	}
+	return errors.New("historical attestation is not bound to the transferred gh-x repository ID 1262580000")
 }
 
 func attestationVerificationArgs(repository, releaseSHA, asset string) []string {
@@ -375,8 +411,8 @@ func runChangelog() error {
 func updateChangelog(contents, releaseTag, notes string) (string, bool, error) {
 	version := strings.TrimPrefix(releaseTag, "v")
 	headingPrefix := "## [" + version + "] - "
-	versionLink := "[" + version + "]: https://github.com/HemSoft/gh-x/releases/tag/" + releaseTag
-	expectedUnreleased := "[Unreleased]: https://github.com/HemSoft/gh-x/compare/" + releaseTag + "...HEAD"
+	versionLink := "[" + version + "]: https://github.com/hemsoft-dev/gh-x/releases/tag/" + releaseTag
+	expectedUnreleased := "[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/" + releaseTag + "...HEAD"
 	if strings.Contains(contents, headingPrefix) {
 		if strings.Contains(contents, versionLink) {
 			return contents, false, nil

@@ -24,7 +24,7 @@ func TestRunVersionUpToDate(t *testing.T) {
 	if !strings.Contains(out, "gh-x v1.2.3 © 2026 HemSoft Developments") {
 		t.Fatalf("expected version line, got %q", out)
 	}
-	if !strings.Contains(out, "gh extension install HemSoft/gh-x") {
+	if !strings.Contains(out, "gh extension install hemsoft-dev/gh-x") {
 		t.Fatalf("expected install command, got %q", out)
 	}
 	if !strings.Contains(out, "✓ Up to date") {
