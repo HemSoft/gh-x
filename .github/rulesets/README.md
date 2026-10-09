@@ -1,7 +1,7 @@
 # Repository rulesets
 
 [`main.json`](main.json) is the source configuration for the active
-`main-quality-gate` repository ruleset in `HemSoft/gh-x`.
+`main-quality-gate` repository ruleset in `hemsoft-dev/gh-x`.
 
 The ruleset targets only `refs/heads/main`. Changes must arrive through a pull
 request, the `Quality Gate` check from GitHub Actions must pass, and every
@@ -24,24 +24,24 @@ go run .github/scripts/validate-main-ruleset.go
 Create the ruleset when it does not exist:
 
 ```powershell
-gh api --method POST repos/HemSoft/gh-x/rulesets `
+gh api --method POST repos/hemsoft-dev/gh-x/rulesets `
   --input .github/rulesets/main.json
 ```
 
 Update the existing ruleset by resolving its ID from its stable name:
 
 ```powershell
-$rulesetId = gh api repos/HemSoft/gh-x/rulesets `
+$rulesetId = gh api repos/hemsoft-dev/gh-x/rulesets `
   --jq '.[] | select(.name == "main-quality-gate") | .id'
-gh api --method PUT "repos/HemSoft/gh-x/rulesets/$rulesetId" `
+gh api --method PUT "repos/hemsoft-dev/gh-x/rulesets/$rulesetId" `
   --input .github/rulesets/main.json
 ```
 
 Verify the stored configuration and the rules effective on `main`:
 
 ```powershell
-gh api repos/HemSoft/gh-x/rulesets
-gh api repos/HemSoft/gh-x/rules/branches/main
+gh api repos/hemsoft-dev/gh-x/rulesets
+gh api repos/hemsoft-dev/gh-x/rules/branches/main
 ```
 
 Keep the final job name in `.github/workflows/ci.yml` equal to `Quality Gate`.
