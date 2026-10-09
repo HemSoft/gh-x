@@ -947,9 +947,10 @@ Replace the release tag and asset path with the downloaded release. The command
 must exit successfully and name `hemsoft-dev/gh-x`, the trusted release workflow,
 and the expected source commit. To verify all downloaded assets, run
 the same command once per file. Pre-transfer assets keep their original signing
-identity: use `HemSoft/gh-x/.github/workflows/auto-release.yml` for
-`--signer-workflow` when verifying those historical assets; keep the download
-and repository arguments canonical. See the exact options and output fields on the
+identity: use `HemSoft/gh-x` for `--repo` and
+`HemSoft/gh-x/.github/workflows/auto-release.yml` for `--signer-workflow`
+when verifying those historical assets. Keep release download commands
+canonical. See the exact options and output fields on the
 [`gh attestation verify` manual page](https://cli.github.com/manual/gh_attestation_verify).
 
 Generated changelog reviews retain stricter bot-author, same-repository,
