@@ -120,8 +120,8 @@ See changes since the latest release.
 
 - Previous release.
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.3...HEAD
-[1.2.3]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.3
+[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/hemsoft-dev/gh-x/releases/tag/v1.2.3
 `
 	notes := "2026-09-05\n\n- Added the next release.\n"
 
@@ -134,8 +134,8 @@ See changes since the latest release.
 	}
 	for _, want := range []string{
 		"## [1.2.4] - 2026-09-05\n\n- Added the next release.",
-		"[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.4...HEAD",
-		"[1.2.4]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.4",
+		"[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/v1.2.4...HEAD",
+		"[1.2.4]: https://github.com/hemsoft-dev/gh-x/releases/tag/v1.2.4",
 	} {
 		if !strings.Contains(updated, want) {
 			t.Fatalf("updated changelog does not contain %q:\n%s", want, updated)
@@ -153,8 +153,8 @@ func TestUpdateChangelogPreservesCRLF(t *testing.T) {
 
 ## [1.2.3] - 2026-09-04
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.3...HEAD
-[1.2.3]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.3
+[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/hemsoft-dev/gh-x/releases/tag/v1.2.3
 `, "\n", "\r\n")
 
 	updated, changed, err := updateChangelog(contents, "v1.2.4", "2026-09-05\n\n- Added the next release.\n")
@@ -169,7 +169,7 @@ func TestUpdateChangelogPreservesCRLF(t *testing.T) {
 	}
 	for _, want := range []string{
 		"## [1.2.4] - 2026-09-05\r\n\r\n- Added the next release.",
-		"[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.4...HEAD\r\n[1.2.4]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.4",
+		"[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/v1.2.4...HEAD\r\n[1.2.4]: https://github.com/hemsoft-dev/gh-x/releases/tag/v1.2.4",
 	} {
 		if !strings.Contains(updated, want) {
 			t.Fatalf("updated changelog does not contain %q:\n%s", want, updated)
@@ -178,7 +178,7 @@ func TestUpdateChangelogPreservesCRLF(t *testing.T) {
 }
 
 func TestUpdateChangelogUsesLocalLineEndings(t *testing.T) {
-	contents := "# Changelog\n\n## [Unreleased]\n\n## [1.2.3] - 2026-09-04\n\n[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.3...HEAD\r\n[1.2.3]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.3\r\n"
+	contents := "# Changelog\n\n## [Unreleased]\n\n## [1.2.3] - 2026-09-04\n\n[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/v1.2.3...HEAD\r\n[1.2.3]: https://github.com/hemsoft-dev/gh-x/releases/tag/v1.2.3\r\n"
 
 	updated, changed, err := updateChangelog(contents, "v1.2.4", "2026-09-05\n\n- Added the next release.\n")
 	if err != nil {
@@ -189,7 +189,7 @@ func TestUpdateChangelogUsesLocalLineEndings(t *testing.T) {
 	}
 	for _, want := range []string{
 		"## [Unreleased]\n\n## [1.2.4] - 2026-09-05\n\n- Added the next release.\n\n## [1.2.3]",
-		"[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.4...HEAD\r\n[1.2.4]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.4",
+		"[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/v1.2.4...HEAD\r\n[1.2.4]: https://github.com/hemsoft-dev/gh-x/releases/tag/v1.2.4",
 	} {
 		if !strings.Contains(updated, want) {
 			t.Fatalf("updated changelog does not contain %q:\n%s", want, updated)
@@ -204,9 +204,9 @@ func TestUpdateChangelogAcceptsCompletedHistoricalRelease(t *testing.T) {
 
 ## [1.2.3] - 2026-09-04
 
-[Unreleased]: https://github.com/HemSoft/gh-x/compare/v1.2.4...HEAD
-[1.2.4]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.4
-[1.2.3]: https://github.com/HemSoft/gh-x/releases/tag/v1.2.3
+[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/hemsoft-dev/gh-x/releases/tag/v1.2.4
+[1.2.3]: https://github.com/hemsoft-dev/gh-x/releases/tag/v1.2.3
 `
 
 	updated, changed, err := updateChangelog(contents, "v1.2.3", "2026-09-04\n\n- Historical release.\n")
@@ -289,12 +289,12 @@ func TestAttestationVerificationArgsBindTrustedSource(t *testing.T) {
 	sha := "0123456789abcdef0123456789abcdef012345e5"
 	want := []string{
 		"attestation", "verify", "dist/linux-amd64",
-		"--repo", "HemSoft/gh-x",
-		"--signer-workflow", "HemSoft/gh-x/.github/workflows/auto-release.yml",
+		"--repo", "hemsoft-dev/gh-x",
+		"--signer-workflow", "hemsoft-dev/gh-x/.github/workflows/auto-release.yml",
 		"--source-digest", sha,
 		"--predicate-type", "https://slsa.dev/provenance/v1",
 	}
-	if got := attestationVerificationArgs("HemSoft/gh-x", sha, "dist/linux-amd64"); !reflect.DeepEqual(got, want) {
+	if got := attestationVerificationArgs("hemsoft-dev/gh-x", sha, "dist/linux-amd64"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("attestationVerificationArgs() = %#v, want %#v", got, want)
 	}
 }

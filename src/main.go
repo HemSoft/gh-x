@@ -17,7 +17,7 @@ var buildDate = ""
 
 // Change these two constants to move the extension to a different org.
 const (
-	repoOwner       = "HemSoft"
+	repoOwner       = "hemsoft-dev"
 	repoName        = "gh-x"
 	copyrightHolder = "© 2026 HemSoft Developments"
 )

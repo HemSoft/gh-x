@@ -2,10 +2,10 @@
 
 [![CI status][ci]][ci-runs] [![Latest release][release]][releases] [![MIT license][license]][license-file]
 
-[ci]: https://github.com/HemSoft/gh-x/actions/workflows/ci.yml/badge.svg?branch=main
-[ci-runs]: https://github.com/HemSoft/gh-x/actions/workflows/ci.yml
+[ci]: https://github.com/hemsoft-dev/gh-x/actions/workflows/ci.yml/badge.svg?branch=main
+[ci-runs]: https://github.com/hemsoft-dev/gh-x/actions/workflows/ci.yml
 [release]: https://img.shields.io/github/v/release/HemSoft/gh-x
-[releases]: https://github.com/HemSoft/gh-x/releases
+[releases]: https://github.com/hemsoft-dev/gh-x/releases
 [license]: https://img.shields.io/github/license/HemSoft/gh-x
 [license-file]: LICENSE
 

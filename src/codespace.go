@@ -237,6 +237,6 @@ Flags:
 Examples:
   gh x codespace list
   gh x codespace list --org HemSoft
-  gh x codespace list --repo HemSoft/gh-x
+  gh x codespace list --repo hemsoft-dev/gh-x
 
 `

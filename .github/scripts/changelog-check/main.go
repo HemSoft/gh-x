@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const repositoryURL = "https://github.com/HemSoft/gh-x"
+const repositoryURL = "https://github.com/hemsoft-dev/gh-x"
 
 var (
 	semverTag        = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
@@ -132,7 +132,7 @@ func readPublishedReleases() (string, []string, error) {
 		"release",
 		"view",
 		"--repo",
-		"HemSoft/gh-x",
+		"hemsoft-dev/gh-x",
 		"--json",
 		"tagName",
 		"--jq",
@@ -147,7 +147,7 @@ func readPublishedReleases() (string, []string, error) {
 		"gh",
 		"api",
 		"--paginate",
-		"repos/HemSoft/gh-x/releases",
+		"repos/hemsoft-dev/gh-x/releases",
 		"--jq",
 		".[] | select(.draft == false and .prerelease == false) | .tag_name",
 	).Output()

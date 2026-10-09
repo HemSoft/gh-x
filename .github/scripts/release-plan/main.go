@@ -375,8 +375,8 @@ func runChangelog() error {
 func updateChangelog(contents, releaseTag, notes string) (string, bool, error) {
 	version := strings.TrimPrefix(releaseTag, "v")
 	headingPrefix := "## [" + version + "] - "
-	versionLink := "[" + version + "]: https://github.com/HemSoft/gh-x/releases/tag/" + releaseTag
-	expectedUnreleased := "[Unreleased]: https://github.com/HemSoft/gh-x/compare/" + releaseTag + "...HEAD"
+	versionLink := "[" + version + "]: https://github.com/hemsoft-dev/gh-x/releases/tag/" + releaseTag
+	expectedUnreleased := "[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/" + releaseTag + "...HEAD"
 	if strings.Contains(contents, headingPrefix) {
 		if strings.Contains(contents, versionLink) {
 			return contents, false, nil
