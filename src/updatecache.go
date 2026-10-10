@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	ghauth "github.com/cli/go-gh/v2/pkg/auth"
 )
 
 const automaticUpdateTTL = time.Hour
@@ -31,7 +33,10 @@ func updateCachePath() string {
 	if err != nil {
 		return ""
 	}
-	identity := statusTargetFingerprint(repoOwner+"/"+repoName, targetHost(nil), auth)
+	apiHost, _ := ghauth.DefaultHost()
+	// gh api uses the CLI default host; access-error retries select accounts
+	// through the repository-derived target. Keep both contexts in the identity.
+	identity := statusTargetFingerprint(repoOwner+"/"+repoName, apiHost+"\x00"+targetHost(nil), auth)
 	return filepath.Join(directory, "gh-x", "updates-v1", identity+".json")
 }
 

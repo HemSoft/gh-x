@@ -25,8 +25,8 @@ fingerprinted because `gh auth token --user` prefers secure storage. Unknown
 identities disable caching. No credential is written to either cache.
 
 Automatic update checks cache successful release tags for one hour, separately
-from repository data and under an authentication/host key. The host follows the
-request's remote and environment resolution. Run `gh x version`
+from repository data and under an authentication/host key. It includes the CLI
+default API host and repository-derived fallback-account context. Run `gh x version`
 to force a fresh release check. Cache failures never prevent the command from
 running. `GH_X_CACHE_DIR` overrides the automatic-update cache root for isolated
 fixtures; otherwise it uses the operating system's user cache directory.
@@ -56,13 +56,13 @@ with a linked worktree. The production dispatcher includes the automatic updater
 
 | Mode | Before ms | After ms | gh calls before/after | Git calls before/after | Keyring before/after | New cache outcome |
 | --- | ---: | ---: | --- | --- | --- | --- |
-| Cold | 728.568 | 426.375 | 11 / 9 | 16 / 15 | 4 / 0 | miss |
-| Warm | 119.313 | 16.713 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
-| Expired | 728.951 | 424.755 | 11 / 8 | 16 / 15 | 4 / 0 | miss |
-| Forced refresh | 728.210 | 424.142 | 11 / 8 | 16 / 15 | 4 / 0 | refresh |
-| Partial failure, within cooldown | 121.101 | 15.128 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
+| Cold | 728.568 | 425.689 | 11 / 9 | 16 / 15 | 4 / 0 | miss |
+| Warm | 119.313 | 16.009 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
+| Expired | 728.951 | 425.939 | 11 / 8 | 16 / 15 | 4 / 0 | miss |
+| Forced refresh | 728.210 | 425.054 | 11 / 8 | 16 / 15 | 4 / 0 | refresh |
+| Partial failure, within cooldown | 121.101 | 15.091 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
 
-Forced refresh improves by 41.8% on this fixture. Git counts cover the status
+Forced refresh improves by 41.6% on this fixture. Git counts cover the status
 command seam; gh counts cover every transport invocation, including the updater,
 and do not claim to count underlying HTTP pagination requests. Cold samples
 empty both fixture-owned caches. Baseline partial-failure samples could reuse

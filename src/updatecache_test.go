@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestAutomaticUpdateCacheFollowsResolvedHost(t *testing.T) {
+func TestAutomaticUpdateCacheIsolatesAPIAndFallbackHosts(t *testing.T) {
 	isolateStatusCacheAuthentication(t)
 	t.Setenv("GH_X_CACHE_DIR", t.TempDir())
 	t.Setenv("GH_REPO", "")
@@ -20,30 +20,34 @@ func TestAutomaticUpdateCacheFollowsResolvedHost(t *testing.T) {
 	t.Cleanup(func() { gitRemoteURLFunc, fetchLatestReleaseFunc = savedRemote, savedFetch; resetRemoteCache() })
 	remote := ""
 	gitRemoteURLFunc = func(context.Context) string { return remote }
-	calls := make(map[string]int)
+	calls := 0
 	fetchLatestReleaseFunc = func(string, string) (string, error) {
-		host := targetHost(nil)
-		calls[host]++
-		if host == defaultGitHubHost {
+		calls++
+		if os.Getenv("GH_HOST") == "" {
 			return "v1.2.3", nil
 		}
 		return "v9.8.7", nil
 	}
 	for _, test := range []struct {
-		name, remote, tag, host string
+		name, remote, apiHost, tag string
+		calls                      int
 	}{
-		{"public checkout", "https://github.com/owner/one.git", "v1.2.3", "github.com"},
-		{"another public checkout", "https://github.com/owner/two.git", "v1.2.3", "github.com"},
-		{"Enterprise checkout", "https://ghe.example.com/owner/one.git", "v9.8.7", "ghe.example.com"},
-		{"another Enterprise checkout", "https://ghe.example.com/owner/two.git", "v9.8.7", "ghe.example.com"},
-		{"second Enterprise host", "https://other.ghe.example.com/owner/one.git", "v9.8.7", "other.ghe.example.com"},
-		{"return to public checkout", "https://github.com/owner/one.git", "v1.2.3", "github.com"},
+		{"public checkout", "https://github.com/owner/one.git", "", "v1.2.3", 1},
+		{"another public checkout", "https://github.com/owner/two.git", "", "v1.2.3", 1},
+		{"Enterprise fallback context", "https://ghe.example.com/owner/one.git", "", "v1.2.3", 2},
+		{"same Enterprise fallback context", "https://ghe.example.com/owner/two.git", "", "v1.2.3", 2},
+		{"second Enterprise fallback host", "https://other.ghe.example.com/owner/one.git", "", "v1.2.3", 3},
+		{"Enterprise API host", "https://ghe.example.com/owner/one.git", "ghe.example.com", "v9.8.7", 4},
+		{"same Enterprise API host", "https://ghe.example.com/owner/one.git", "ghe.example.com", "v9.8.7", 4},
+		{"Enterprise API and public fallback", "https://github.com/owner/one.git", "ghe.example.com", "v9.8.7", 5},
+		{"return to public checkout", "https://github.com/owner/one.git", "", "v1.2.3", 5},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			remote = test.remote
+			t.Setenv("GH_HOST", test.apiHost)
 			resetRemoteCache() // Each row models a new CLI invocation.
 			tag, err := fetchAutomaticUpdate()
-			if err != nil || tag != test.tag || calls[test.host] != 1 {
+			if err != nil || tag != test.tag || calls != test.calls {
 				t.Fatalf("tag=%q, calls=%v, err=%v", tag, calls, err)
 			}
 		})
