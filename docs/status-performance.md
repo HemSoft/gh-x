@@ -1,5 +1,23 @@
 # Status freshness and performance
 
+Interactive status presents local Git results before cache identity checks or
+GitHub fetches complete. Each completed remote section appears in the preview
+while later requests are still running. The rotating cursor names the active
+stage. Cleanup eligibility remains pending until PR evidence and local worktree
+inspection finish. The final snapshot keeps the existing section order and
+health checks. Redirected output remains a single unanimated snapshot.
+
+The live preview fits within the terminal height, retains the header and newest
+results, and notes omitted lines. Completion removes the preview and prints all
+rows once. Ctrl-C cancels Git and GitHub subprocesses, removes the indicator,
+restores the cursor, and exits with status 130. Available partial results remain
+visible. GitHub fetches remain serial and keep their existing timeouts.
+Terminal dimensions refresh before repainting; resize handling accounts for
+previously displayed rows wrapping at the new width. Account fallback notices
+are serialized with the preview and remain above it. Windows virtual-terminal
+processing is enabled only for the animation lifetime and restored afterward.
+If console mode setup fails, status falls back to the unanimated snapshot.
+
 `gh x status` always reads local Git state. Working changes, branches, worktrees,
 stashes and cleanup eligibility are never taken from the remote-data cache.
 When the current worktree holds the default branch, its initial status result
@@ -57,7 +75,34 @@ Enterprise schema handling and actual merge-time ordering. Longer TTLs and
 unbounded parallel requests were rejected because they trade freshness and
 rate-limit reliability for lower measured latency.
 
+## Progressive output measurements
+
+On Mini, Linux amd64, the populated acquisition fixture at
+`d33df597fb4bbc1e58658a1b5c6d929638084991` produced these seven-sample
+medians. Each GitHub transport call has a fixed 50 ms delay. First content
+excludes the version banner and spinner. Total duration still includes the
+automatic update check.
+
+| Mode | First content ms | Total ms |
+| --- | ---: | ---: |
+| Cold | 8.081 | 427.785 |
+| Warm | 7.654 | 16.767 |
+| Expired | 7.538 | 425.975 |
+| Forced refresh | 7.411 | 425.977 |
+| Partial failure within cooldown | 7.412 | 16.555 |
+
+Separate native PTY captures, including process startup, show first content in
+12 to 23 ms with a controlled five-second remote delay. The v0.20.0 baseline
+waited 5.20 seconds before any status content. These are fixture measurements,
+not live GitHub timings. All existing performance budgets pass.
+
 ## Acquisition comparison
+
+The acquisition fixture also records `first_content_ms` separately from total
+`ms`. It exercises terminal presentation with a deterministic 120-column,
+40-row output sink. First content means the local repository header, excluding
+the version banner and spinner. Real terminal captures measure process startup
+separately. Existing total-duration and subprocess-count budgets still apply.
 
 On Mini (Linux amd64, AMD Ryzen 5 7640HS, Go 1.26.7), the same populated fixture
 at `a088800d9f560f15b883cf52719acb07689c4863` and this change produced these

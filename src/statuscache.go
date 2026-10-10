@@ -136,6 +136,9 @@ func statusCacheSectionsComplete(entry statusCacheEntry) bool {
 }
 
 func saveStatusCacheIfSameIdentity(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, pullRequestHeads map[string]bool, pullRequestsKnown bool, directory, fingerprint string) {
+	if commandContext.Err() != nil {
+		return
+	}
 	currentDirectory, currentFingerprint, err := statusCacheDirectoryFunc()
 	if err == nil && directory == currentDirectory && fingerprint == currentFingerprint {
 		saveStatusCacheAt(options, colorEnabled, now, dashboard, pullRequestHeads, pullRequestsKnown, directory, fingerprint)
@@ -387,6 +390,8 @@ var statusKeyringGetFunc = func(service, user string) (string, error) {
 	select {
 	case outcome := <-response:
 		return outcome.token, outcome.err
+	case <-commandContext.Done():
+		return "", commandContext.Err()
 	case <-time.After(2 * time.Second):
 		return "", errors.New("GitHub credential store timed out")
 	}

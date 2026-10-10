@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +16,9 @@ import (
 // version and buildDate are injected at build time via ldflags.
 var version = "dev"
 var buildDate = ""
+
+// Initialized once by main, before any command or updater goroutine starts.
+var commandContext = context.Background()
 
 // Change these two constants to move the extension to a different org.
 const (
@@ -32,21 +37,45 @@ var (
 )
 
 func main() {
+	ctx, stop := commandInterruptContext(os.Args[1:])
+	commandContext = ctx
 	updateCh, err := run(os.Args[1:], os.Stdout, os.Stderr)
+	code := completeCommand(os.Stderr, updateCh, err)
+	stop()
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+// Only status needs to intercept interrupts to restore its live terminal frame.
+// Other commands retain the default signal behavior of their agent subprocesses.
+func commandInterruptContext(args []string) (context.Context, context.CancelFunc) {
+	command, _, err := extractTerminalOptions(args)
+	if err != nil || len(command) == 0 || (command[0] != "status" && command[0] != "s") {
+		return context.Background(), func() {}
+	}
+	return signal.NotifyContext(context.Background(), os.Interrupt)
+}
+
+func completeCommand(stderr io.Writer, updateCh <-chan string, err error) int {
+	if errors.Is(err, context.Canceled) {
+		return 130
+	}
 	// Print the error before waiting for the update notice so the user gets
 	// immediate feedback even when the update check is still in flight.
 	timeout := updateSuccessTimeout
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(stderr, "Error: %v\n", err)
 		if hint := errorHint(err); hint != "" {
-			fmt.Fprintf(os.Stderr, "Hint: %s\n", hint)
+			fmt.Fprintf(stderr, "Hint: %s\n", hint)
 		}
 		timeout = updateErrorTimeout
 	}
-	showUpdateNotice(os.Stderr, updateCh, timeout)
+	showUpdateNotice(stderr, updateCh, timeout)
 	if err != nil {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 type subcommand struct {

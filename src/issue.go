@@ -287,7 +287,7 @@ func issueListOperationContext(parent context.Context) (context.Context, context
 	if err != nil {
 		return nil, nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(commandContext, timeout)
 	return ctx, cancel, nil
 }
 
