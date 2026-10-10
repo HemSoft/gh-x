@@ -55,6 +55,58 @@ func TestStatusInventoryChecksExactCleanState(t *testing.T) {
 	}
 }
 
+func TestStatusDefaultBranchCheck(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		branch     string
+		summary    statusSummary
+		checkedOut bool
+		err        error
+		track      string
+		want       bool
+	}{
+		{name: "clean synced main", branch: "main", summary: statusSummary{Upstream: "origin/main"}, checkedOut: true, want: true},
+		{name: "other default branch", branch: "trunk", summary: statusSummary{Upstream: "origin/trunk"}, checkedOut: true, want: true},
+		{name: "unknown default branch", summary: statusSummary{Upstream: "origin/main"}, checkedOut: true},
+		{name: "not checked out", branch: "main", summary: statusSummary{Upstream: "origin/main"}},
+		{name: "unavailable", branch: "main", summary: statusSummary{Upstream: "origin/main"}, checkedOut: true, err: errors.New("status unavailable")},
+		{name: "missing upstream", branch: "main", checkedOut: true},
+		{name: "gone upstream", branch: "main", summary: statusSummary{Upstream: "origin/main"}, checkedOut: true, track: "[gone]"},
+		{name: "ahead", branch: "main", summary: statusSummary{Upstream: "origin/main", Ahead: 1}, checkedOut: true},
+		{name: "behind", branch: "main", summary: statusSummary{Upstream: "origin/main", Behind: 1}, checkedOut: true},
+		{name: "diverged", branch: "main", summary: statusSummary{Upstream: "origin/main", Ahead: 1, Behind: 1}, checkedOut: true},
+		{name: "staged", branch: "main", summary: statusSummary{Upstream: "origin/main", Staged: 1}, checkedOut: true},
+		{name: "modified", branch: "main", summary: statusSummary{Upstream: "origin/main", Modified: 1}, checkedOut: true},
+		{name: "deleted", branch: "main", summary: statusSummary{Upstream: "origin/main", Deleted: 1}, checkedOut: true},
+		{name: "renamed", branch: "main", summary: statusSummary{Upstream: "origin/main", Renamed: 1}, checkedOut: true},
+		{name: "untracked", branch: "main", summary: statusSummary{Upstream: "origin/main", Untracked: 1}, checkedOut: true},
+		{name: "conflicted", branch: "main", summary: statusSummary{Upstream: "origin/main", Conflicted: 1}, checkedOut: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, color := range []bool{false, true} {
+				var output bytes.Buffer
+				styler := newTableStyler(&output, color)
+				dashboard := statusDashboard{
+					DefaultBranch: test.branch, DefaultStatus: test.summary, DefaultCheckedOut: test.checkedOut, DefaultStatusErr: test.err,
+					CurrentStatus: statusSummary{Branch: "feature/dirty", Modified: 1, Untracked: 1},
+					Branches:      statusBranchInventory{Local: map[string]statusBranchRef{test.branch: {Track: test.track}}},
+				}
+				row := statusDefaultBranchRow(styler, dashboard)
+				if got := row[0].text == "✓"; got != test.want {
+					t.Fatalf("default branch check = %v, want %v", got, test.want)
+				}
+				if test.want && row[0].styled != styler.colored("✓", termenv.ANSIGreen).styled {
+					t.Fatalf("check style = %q, want green check", row[0].styled)
+				}
+				original := statusDefaultBranchCell(styler, dashboard)
+				if row[2].text != original.text || row[2].styled != original.styled {
+					t.Fatalf("default branch status changed: %#v", row[2])
+				}
+			}
+		})
+	}
+}
+
 func TestStatusHeaderInventoryAlignment(t *testing.T) {
 	for _, color := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no color", true: "color"}[color], func(t *testing.T) {
@@ -95,7 +147,7 @@ func TestStatusHeaderInventoryAlignment(t *testing.T) {
 					t.Fatalf("inventory wraps at 80 columns: %q", line)
 				}
 			}
-			for _, want := range []string{"✓ Branches   1 local (0 dangling) · 1 remote", "✓ Worktrees  1 total · 0 cleanup candidates", "✓ Stashes    0 stashes"} {
+			for _, want := range []string{"✓ Main       synced with origin/main · Clean working tree", "✓ Branches   1 local (0 dangling) · 1 remote", "✓ Worktrees  1 total · 0 cleanup candidates", "✓ Stashes    0 stashes"} {
 				if !strings.Contains(stripANSIForTest(output), want) {
 					t.Fatalf("missing aligned row %q in %s", want, output)
 				}
