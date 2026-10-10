@@ -197,7 +197,11 @@ func TestStatusProgressPlainOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
 	if newStatusProgress(file, true) != nil {
 		t.Fatal("redirected file treated as terminal")
 	}
@@ -311,4 +315,30 @@ func TestCanceledStatusPreservesCache(t *testing.T) {
 		return "", "", nil
 	}
 	saveStatusCacheIfSameIdentity(statusOptions{}, false, time.Now(), statusDashboard{}, nil, false, t.TempDir(), "identity")
+}
+
+func TestCompleteCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"success", nil, 0}, {"failure", io.EOF, 1},
+		{"failure with hint", errors.New("gh: authentication required"), 1},
+		{"interrupt", context.Canceled, 130},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			if got := completeCommand(&stderr, nil, tc.err); got != tc.want {
+				t.Fatalf("exit=%d, want %d", got, tc.want)
+			}
+			if tc.want == 130 && stderr.Len() != 0 {
+				t.Fatalf("interrupt printed an error or update: %q", stderr.String())
+			}
+			if tc.want == 1 && !strings.Contains(stderr.String(), "Error: ") {
+				t.Fatalf("failure was hidden: %q", stderr.String())
+			}
+		})
+	}
 }

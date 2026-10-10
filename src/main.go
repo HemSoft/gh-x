@@ -38,26 +38,34 @@ var (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	commandContext = ctx
 	updateCh, err := run(os.Args[1:], os.Stdout, os.Stderr)
+	code := completeCommand(os.Stderr, updateCh, err)
+	stop()
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+func completeCommand(stderr io.Writer, updateCh <-chan string, err error) int {
 	if errors.Is(err, context.Canceled) {
-		os.Exit(130)
+		return 130
 	}
 	// Print the error before waiting for the update notice so the user gets
 	// immediate feedback even when the update check is still in flight.
 	timeout := updateSuccessTimeout
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(stderr, "Error: %v\n", err)
 		if hint := errorHint(err); hint != "" {
-			fmt.Fprintf(os.Stderr, "Hint: %s\n", hint)
+			fmt.Fprintf(stderr, "Hint: %s\n", hint)
 		}
 		timeout = updateErrorTimeout
 	}
-	showUpdateNotice(os.Stderr, updateCh, timeout)
+	showUpdateNotice(stderr, updateCh, timeout)
 	if err != nil {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 type subcommand struct {

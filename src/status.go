@@ -126,7 +126,7 @@ func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 	colorEnabled := term.FromEnv().IsColorEnabled()
 	progress := statusProgressFunc(stdout, colorEnabled)
 	if progress != nil {
-		defer progress.close()
+		defer func() { _ = progress.close() }()
 		options.progress = progress
 		if err := progress.start(); err != nil {
 			return err
