@@ -13,6 +13,7 @@ import (
 )
 
 func TestStatusRemoteSessionPreservesSelectedHost(t *testing.T) {
+	t.Setenv("GH_REPO", "")
 	saved := repositoryCurrentFunc
 	t.Cleanup(func() { repositoryCurrentFunc = saved })
 	for _, test := range []struct {
@@ -35,6 +36,29 @@ func TestStatusRemoteSessionPreservesSelectedHost(t *testing.T) {
 			session := newStatusRemoteSession(test.label)
 			if session.repo != test.target || session.rules == nil {
 				t.Fatalf("target=%q, want %q", session.repo, test.target)
+			}
+		})
+	}
+}
+
+func TestStatusRemoteSessionPreservesEnvironmentRepository(t *testing.T) {
+	saved := repositoryCurrentFunc
+	t.Cleanup(func() { repositoryCurrentFunc = saved })
+	repositoryCurrentFunc = func() (repository.Repository, error) {
+		t.Fatal("explicit GH_REPO must precede local context")
+		return repository.Repository{}, nil
+	}
+	for _, test := range []struct{ name, override, target string }{
+		{"Enterprise host", "ghe.example.com/org/project", "ghe.example.com/org/project"},
+		{"unqualified uses CLI host", "org/project", "org/project"},
+		{"surrounding whitespace", " ghe.example.com/org/project ", "ghe.example.com/org/project"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GH_REPO", test.override)
+			t.Setenv("GH_HOST", "different.example.com")
+			session := newStatusRemoteSession("local/repo")
+			if session.repo != test.target {
+				t.Fatalf("target=%q want=%q", session.repo, test.target)
 			}
 		})
 	}

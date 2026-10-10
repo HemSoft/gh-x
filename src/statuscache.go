@@ -269,10 +269,15 @@ func pruneStatusCacheFiles(directory, currentPath string, now time.Time) {
 			continue
 		}
 		info, infoErr := entry.Info()
-		if infoErr == nil && now.Sub(info.ModTime()) >= 2*statusCacheTTL {
+		if infoErr == nil && now.Sub(info.ModTime()) >= 2*statusCacheTTL && !statusCacheFileReusable(path, now) {
 			_ = os.Remove(path)
 		}
 	}
+}
+
+func statusCacheFileReusable(path string, now time.Time) bool {
+	entry, err := readStatusCacheEntry(path)
+	return err == nil && validStatusCacheEntry(entry, entry.Key, now)
 }
 
 func statusCacheDirectory() (string, string, error) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -16,16 +17,22 @@ type statusRemoteSession struct {
 }
 
 func newStatusRemoteSession(repository string) statusRemoteSession {
-	repo := ""
+	return statusRemoteSession{repo: statusSessionRepository(repository), rules: make(map[string]requiredCheckResult)}
+}
+
+func statusSessionRepository(repository string) string {
+	if override := strings.TrimSpace(os.Getenv("GH_REPO")); override != "" {
+		return override
+	}
 	if repository != "" {
 		resolved, err := repositoryCurrentFunc()
 		if err == nil && resolved.Host != "" {
-			repo = resolved.Host + "/" + repository
+			return resolved.Host + "/" + repository
 		}
 	}
 	// If local resolution fails, leave gh's contextual repository selection
 	// intact rather than forcing a host inferred from a different remote.
-	return statusRemoteSession{repo: repo, rules: make(map[string]requiredCheckResult)}
+	return ""
 }
 
 func fetchCombinedIssueEnrichment(ctx context.Context, owner, name, host string, numbers []int) issueEnrichmentData {

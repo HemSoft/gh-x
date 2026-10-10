@@ -210,6 +210,7 @@ func TestStatusDefaultBranchStates(t *testing.T) {
 }
 
 func TestFetchStatusDashboard(t *testing.T) {
+	t.Setenv("GH_REPO", "")
 	defer saveStatusFuncs()()
 	savedCurrent := repositoryCurrentFunc
 	t.Cleanup(func() { repositoryCurrentFunc = savedCurrent })
