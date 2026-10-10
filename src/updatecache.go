@@ -31,7 +31,7 @@ func updateCachePath() string {
 	if err != nil {
 		return ""
 	}
-	identity := statusTargetFingerprint(repoOwner+"/"+repoName, os.Getenv("GH_HOST"), auth)
+	identity := statusTargetFingerprint(repoOwner+"/"+repoName, targetHost(nil), auth)
 	return filepath.Join(directory, "gh-x", "updates-v1", identity+".json")
 }
 

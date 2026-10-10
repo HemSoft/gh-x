@@ -1,12 +1,54 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestAutomaticUpdateCacheFollowsResolvedHost(t *testing.T) {
+	isolateStatusCacheAuthentication(t)
+	t.Setenv("GH_X_CACHE_DIR", t.TempDir())
+	t.Setenv("GH_REPO", "")
+	t.Setenv("GH_HOST", "")
+	t.Setenv("GH_TOKEN", "synthetic-public-token")
+	t.Setenv("GH_ENTERPRISE_TOKEN", "synthetic-enterprise-token")
+	savedRemote, savedFetch := gitRemoteURLFunc, fetchLatestReleaseFunc
+	t.Cleanup(func() { gitRemoteURLFunc, fetchLatestReleaseFunc = savedRemote, savedFetch; resetRemoteCache() })
+	remote := ""
+	gitRemoteURLFunc = func(context.Context) string { return remote }
+	calls := make(map[string]int)
+	fetchLatestReleaseFunc = func(string, string) (string, error) {
+		host := targetHost(nil)
+		calls[host]++
+		if host == defaultGitHubHost {
+			return "v1.2.3", nil
+		}
+		return "v9.8.7", nil
+	}
+	for _, test := range []struct {
+		name, remote, tag, host string
+	}{
+		{"public checkout", "https://github.com/owner/one.git", "v1.2.3", "github.com"},
+		{"another public checkout", "https://github.com/owner/two.git", "v1.2.3", "github.com"},
+		{"Enterprise checkout", "https://ghe.example.com/owner/one.git", "v9.8.7", "ghe.example.com"},
+		{"another Enterprise checkout", "https://ghe.example.com/owner/two.git", "v9.8.7", "ghe.example.com"},
+		{"second Enterprise host", "https://other.ghe.example.com/owner/one.git", "v9.8.7", "other.ghe.example.com"},
+		{"return to public checkout", "https://github.com/owner/one.git", "v1.2.3", "github.com"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			remote = test.remote
+			resetRemoteCache() // Each row models a new CLI invocation.
+			tag, err := fetchAutomaticUpdate()
+			if err != nil || tag != test.tag || calls[test.host] != 1 {
+				t.Fatalf("tag=%q, calls=%v, err=%v", tag, calls, err)
+			}
+		})
+	}
+}
 
 func TestAutomaticUpdateCache(t *testing.T) {
 	tests := []struct {
