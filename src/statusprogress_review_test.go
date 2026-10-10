@@ -15,6 +15,31 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestCommandInterruptScope(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		args      []string
+		intercept bool
+	}{
+		{"status", []string{"status", "--refresh"}, true},
+		{"alias and global option", []string{"--clear", "s"}, true},
+		{"global option after command", []string{"status", "--clear"}, true},
+		{"review", []string{"pr", "review", "223"}, false},
+		{"review with global option", []string{"--clear", "pr", "review", "223"}, false},
+		{"monitor", []string{"monitor"}, false},
+		{"root", nil, false},
+		{"invalid global option", []string{"--clear=invalid", "status"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, stop := commandInterruptContext(tc.args)
+			defer stop()
+			if got := ctx.Done() != nil; got != tc.intercept {
+				t.Fatalf("interrupt interception=%v, want %v", got, tc.intercept)
+			}
+		})
+	}
+}
+
 func TestStatusGitCancellationHelper(t *testing.T) {
 	address := os.Getenv("GH_X_STATUS_CANCEL_HELPER")
 	if address == "" {

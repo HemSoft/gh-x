@@ -37,7 +37,7 @@ var (
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := commandInterruptContext(os.Args[1:])
 	commandContext = ctx
 	updateCh, err := run(os.Args[1:], os.Stdout, os.Stderr)
 	code := completeCommand(os.Stderr, updateCh, err)
@@ -45,6 +45,16 @@ func main() {
 	if code != 0 {
 		os.Exit(code)
 	}
+}
+
+// Only status needs to intercept interrupts to restore its live terminal frame.
+// Other commands retain the default signal behavior of their agent subprocesses.
+func commandInterruptContext(args []string) (context.Context, context.CancelFunc) {
+	command, _, err := extractTerminalOptions(args)
+	if err != nil || len(command) == 0 || (command[0] != "status" && command[0] != "s") {
+		return context.Background(), func() {}
+	}
+	return signal.NotifyContext(context.Background(), os.Interrupt)
 }
 
 func completeCommand(stderr io.Writer, updateCh <-chan string, err error) int {
