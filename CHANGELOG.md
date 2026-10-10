@@ -10,6 +10,11 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-10
+
+- feat: mark synced clean default branches in status (#219) (#220)
+- docs: record v0.19.5 release (#218)
+
 ## [0.19.5] - 2026-10-10
 
 - perf: reduce status latency with reliable section caching (#217)
@@ -350,7 +355,8 @@ the published releases above.
 - Dynamic or unreadable workflow definitions now display `unknown` in the
   trigger column instead of failing the list command.
 
-[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/v0.19.5...HEAD
+[Unreleased]: https://github.com/hemsoft-dev/gh-x/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/hemsoft-dev/gh-x/releases/tag/v0.20.0
 [0.19.5]: https://github.com/hemsoft-dev/gh-x/releases/tag/v0.19.5
 [0.19.4]: https://github.com/hemsoft-dev/gh-x/releases/tag/v0.19.4
 [0.19.3]: https://github.com/hemsoft-dev/gh-x/releases/tag/v0.19.3
