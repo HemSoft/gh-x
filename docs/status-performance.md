@@ -36,6 +36,8 @@ or `identity-unavailable` on stderr. It reports no credential values.
 Status shares one repository target and one branch-rules lookup across its PR
 sections. It fetches issue relationships and hierarchy together while retaining
 field-specific incomplete-data handling. It still makes requests serially.
+If an older Enterprise schema rejects the hierarchy fields, status retries
+relationships separately and keeps hierarchy data visibly unavailable.
 
 The merged candidate query remains complete. Removing candidate check/review
 fields needs a separate selection/enrichment design that preserves pagination,
@@ -53,11 +55,11 @@ with a linked worktree. The production dispatcher includes the automatic updater
 
 | Mode | Before ms | After ms | gh calls before/after | Git calls before/after | Keyring before/after | New cache outcome |
 | --- | ---: | ---: | --- | --- | --- | --- |
-| Cold | 728.568 | 423.580 | 11 / 9 | 16 / 15 | 4 / 0 | miss |
-| Warm | 119.313 | 14.516 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
-| Expired | 728.951 | 424.859 | 11 / 8 | 16 / 15 | 4 / 0 | miss |
-| Forced refresh | 728.210 | 424.338 | 11 / 8 | 16 / 15 | 4 / 0 | refresh |
-| Partial failure, within cooldown | 121.101 | 15.135 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
+| Cold | 728.568 | 425.113 | 11 / 9 | 16 / 15 | 4 / 0 | miss |
+| Warm | 119.313 | 15.364 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
+| Expired | 728.951 | 422.693 | 11 / 8 | 16 / 15 | 4 / 0 | miss |
+| Forced refresh | 728.210 | 424.789 | 11 / 8 | 16 / 15 | 4 / 0 | refresh |
+| Partial failure, within cooldown | 121.101 | 15.524 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
 
 Forced refresh improves by 41.7% on this fixture. Git counts cover the status
 command seam; gh counts cover every transport invocation, including the updater,

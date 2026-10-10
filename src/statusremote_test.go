@@ -6,8 +6,68 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 )
+
+func TestCombinedIssueEnrichmentLegacySchemaFallback(t *testing.T) {
+	fixture, err := os.ReadFile("../tests/behavior/testdata/issue-relationships.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := ghExecContextFunc
+	t.Cleanup(func() { ghExecContextFunc = saved })
+	for _, test := range []struct {
+		name, message            string
+		fallback, fallbackFailed bool
+	}{
+		{name: "parent unsupported", message: `Cannot query field "parent" on type "Issue".`, fallback: true},
+		{name: "summary unsupported", message: `Field 'subIssuesSummary' doesn't exist on type 'Issue'.`, fallback: true},
+		{name: "unknown hierarchy field", message: `Unknown field parent on Issue.`, fallback: true},
+		{name: "failed relationship retry", message: `Unknown field parent on Issue.`, fallback: true, fallbackFailed: true},
+		{name: "ordinary permission failure", message: `Parent issue is inaccessible.`},
+		{name: "unrelated schema failure", message: `Unknown field project on Issue.`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			ghExecContextFunc = func(_ context.Context, args ...string) (bytes.Buffer, bytes.Buffer, error) {
+				calls++
+				query := strings.Join(args, " ")
+				if !strings.Contains(query, "--hostname ghe.example.com") {
+					t.Fatalf("host changed: %s", query)
+				}
+				if calls == 1 {
+					return *bytes.NewBufferString(`{"data":null}`), *bytes.NewBufferString(test.message), errors.New("exit 1")
+				}
+				if strings.Contains(query, "subIssuesSummary") || strings.Contains(query, "parent {") {
+					t.Fatalf("retry retains unsupported fields: %s", query)
+				}
+				if test.fallbackFailed {
+					return bytes.Buffer{}, bytes.Buffer{}, errors.New("offline")
+				}
+				return *bytes.NewBuffer(fixture), bytes.Buffer{}, nil
+			}
+			result := fetchCombinedIssueEnrichment(context.Background(), "HemSoft", "gh-x", "ghe.example.com", []int{50})
+			wantedCalls := 1
+			if test.fallback {
+				wantedCalls = 2
+			}
+			if calls != wantedCalls {
+				t.Fatalf("calls=%d, want %d", calls, wantedCalls)
+			}
+			if result.HierarchyErr == nil || !result.HierarchyMissing[50].Parent || !result.HierarchyMissing[50].SubIssues {
+				t.Fatal("unsupported hierarchy looks healthy")
+			}
+			failed := !test.fallback || test.fallbackFailed
+			if result.RelationshipsMissing[50] != failed || (result.RelErr != nil) != failed {
+				t.Fatalf("relationship retry outcome wrong: %+v", result)
+			}
+			if !failed && len(result.Relationships[50]) != 1 {
+				t.Fatal("legacy relationship missing")
+			}
+		})
+	}
+}
 
 func TestCombinedIssueEnrichmentFieldIsolation(t *testing.T) {
 	fixture, err := os.ReadFile("../tests/behavior/testdata/issue-status-enrichment.json")

@@ -33,6 +33,15 @@ func fetchCombinedIssueEnrichment(ctx context.Context, owner, name, host string,
 	}
 	query := fmt.Sprintf(`query { repository(owner: %q, name: %q) { %s } }`, owner, name, strings.Join(parts, " "))
 	data, err := fetchGraphQLContext(ctx, host, query)
+	if data == nil && err != nil && unsupportedHierarchyMessage(err.Error()) {
+		// Schema validation rejects the entire combined operation. Recover the
+		// supported relationship field without hiding unavailable hierarchy data.
+		rels, missing, relErr := fetchIssueRelationshipsBatchContext(ctx, owner, name, host, numbers)
+		return issueEnrichmentData{
+			Repository: owner + "/" + name, Relationships: rels, RelationshipsMissing: missing,
+			HierarchyMissing: allHierarchyUnavailable(numbers), RelErr: relErr, HierarchyErr: err,
+		}
+	}
 	// Reuse both existing partial-response parsers, including connection truncation
 	// and field-specific GraphQL errors, against the same response.
 	relData, relFetchErr := combinedIssuePayload(data, err, false)
