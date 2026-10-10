@@ -1,5 +1,18 @@
 # Status freshness and performance
 
+Interactive status presents local Git results before cache identity checks or
+GitHub fetches complete. Each completed remote section appears in the preview
+while later requests are still running. The rotating cursor names the active
+stage. Cleanup eligibility remains pending until PR evidence and local worktree
+inspection finish. The final snapshot keeps the existing section order and
+health checks. Redirected output remains a single unanimated snapshot.
+
+The live preview fits within the terminal height, retains the header and newest
+results, and notes omitted lines. Completion removes the preview and prints all
+rows once. Ctrl-C cancels Git and GitHub subprocesses, removes the indicator,
+restores the cursor, and exits with status 130. Available partial results remain
+visible. GitHub fetches remain serial and keep their existing timeouts.
+
 `gh x status` always reads local Git state. Working changes, branches, worktrees,
 stashes and cleanup eligibility are never taken from the remote-data cache.
 When the current worktree holds the default branch, its initial status result
@@ -58,6 +71,12 @@ unbounded parallel requests were rejected because they trade freshness and
 rate-limit reliability for lower measured latency.
 
 ## Acquisition comparison
+
+The acquisition fixture also records `first_content_ms` separately from total
+`ms`. It exercises terminal presentation with a deterministic 120-column,
+40-row output sink. First content means the local repository header, excluding
+the version banner and spinner. Real terminal captures measure process startup
+separately. Existing total-duration and subprocess-count budgets still apply.
 
 On Mini (Linux amd64, AMD Ryzen 5 7640HS, Go 1.26.7), the same populated fixture
 at `a088800d9f560f15b883cf52719acb07689c4863` and this change produced these

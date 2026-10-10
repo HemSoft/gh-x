@@ -18,6 +18,7 @@ import (
 )
 
 type statusAcquisitionSample struct {
+	FirstContent float64 `json:"first_content_ms"`
 	Mode         string  `json:"mode"`
 	Milliseconds float64 `json:"ms"`
 	Git          int     `json:"git"`
@@ -33,6 +34,11 @@ func TestStatusAcquisitionPerformance(t *testing.T) {
 		t.Skip("performance runner owns the acquisition fixture")
 	}
 	defer saveStatusFuncs()()
+	savedProgress := statusProgressFunc
+	t.Cleanup(func() { statusProgressFunc = savedProgress })
+	statusProgressFunc = func(output io.Writer, color bool) *statusProgress {
+		return &statusProgress{output: output, color: color, width: 120, height: 40}
+	}
 	savedGH, savedVersion := ghTransportFunc, version
 	t.Cleanup(func() { ghTransportFunc, version = savedGH, savedVersion })
 	version = "v0.19.4"
@@ -124,11 +130,18 @@ func TestStatusAcquisitionPerformance(t *testing.T) {
 			args = append(args, "--refresh")
 		}
 		var stderr bytes.Buffer
-		ch, err := run(args, io.Discard, &stderr)
+		output := &statusAcquisitionWriter{started: time.Now()}
+		ch, err := run(args, output, &stderr)
 		showUpdateNotice(io.Discard, ch, time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
+		if output.first <= 0 {
+			t.Fatal("status did not emit meaningful content")
+		}
+		mu.Lock()
+		calls.FirstContent = float64(output.first.Nanoseconds()) / 1e6
+		mu.Unlock()
 		for _, line := range strings.Split(stderr.String(), "\n") {
 			if value, ok := strings.CutPrefix(line, "[gh-x] status cache: "); ok {
 				return value
@@ -173,6 +186,19 @@ func TestStatusAcquisitionPerformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	fmt.Fprintf(os.Stdout, "STATUS_ACQUISITION=%s\n", data)
+}
+
+type statusAcquisitionWriter struct {
+	started time.Time
+	first   time.Duration
+}
+
+func (w *statusAcquisitionWriter) Write(data []byte) (int, error) {
+	// Progress serializes writes and joins its animator before run returns.
+	if w.first == 0 && bytes.Contains(data, []byte("Repository")) {
+		w.first = time.Since(w.started)
+	}
+	return len(data), nil
 }
 
 func acquisitionFixture(args []string) string {

@@ -130,7 +130,7 @@ func execGH(args ...string) (bytes.Buffer, bytes.Buffer, error) {
 	if err != nil {
 		return bytes.Buffer{}, bytes.Buffer{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(commandContext, timeout)
 	defer cancel()
 	return execGHContext(ctx, args...)
 }
@@ -251,7 +251,7 @@ func execGHActiveInvocation(invocation ghInvocation) (bytes.Buffer, bytes.Buffer
 	if err != nil {
 		return bytes.Buffer{}, bytes.Buffer{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(commandContext, timeout)
 	defer cancel()
 	invocation.Context = ctx
 	return ghTransportFunc(invocation)

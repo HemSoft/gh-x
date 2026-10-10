@@ -68,6 +68,8 @@ type statusWorktree struct {
 }
 
 type statusDashboard struct {
+	progress                  *statusProgress
+	WorktreesPending          bool
 	cacheState                string
 	remoteSections            []statusCacheSection
 	Repository                string
@@ -109,6 +111,7 @@ const (
 type statusOptions struct {
 	mergedLimit int
 	refresh     bool
+	progress    *statusProgress
 }
 
 func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
@@ -121,9 +124,25 @@ func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 	}
 
 	colorEnabled := term.FromEnv().IsColorEnabled()
+	progress := statusProgressFunc(stdout, colorEnabled)
+	if progress != nil {
+		defer progress.close()
+		options.progress = progress
+		if err := progress.start(); err != nil {
+			return err
+		}
+	}
 	dashboard, err := fetchStatusDashboardFunc(colorEnabled, options)
+	if progress != nil {
+		if outputErr := progress.close(); outputErr != nil {
+			return outputErr
+		}
+	}
 	if err != nil {
 		return err
+	}
+	if commandContext.Err() != nil {
+		return commandContext.Err()
 	}
 
 	if os.Getenv("GH_X_STATUS_DEBUG") == "1" {
@@ -202,22 +221,38 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 	}
 	currentRoot := strings.TrimRight(root, "\r\n")
 	dashboard := statusDashboard{
-		DefaultBranch: resolveStatusDefaultBranch(branches),
-		CurrentStatus: parseGitStatus(output),
-		Branches:      branches,
+		progress:               options.progress,
+		Repository:             filepath.Base(currentRoot),
+		DefaultBranch:          resolveStatusDefaultBranch(branches),
+		CurrentStatus:          parseGitStatus(output),
+		Branches:               branches,
+		Worktrees:              worktrees,
+		WorktreesPending:       true,
+		ShowMergedPullRequests: options.mergedLimit > 0,
 	}
 	dashboard.Stashes, dashboard.StashesErr = fetchStatusStashes()
+	populateStatusDefaultBranch(&dashboard, branches, currentRoot)
+	localDefault := dashboard.DefaultBranch
+	dashboard.progress.local(&dashboard)
 
 	openHeads, pullRequestsKnown := fetchStatusCachedRemote(&dashboard, colorEnabled, options)
 
-	if ref, ok := branches.Local[dashboard.DefaultBranch]; ok && filepath.Clean(ref.WorktreePath) == filepath.Clean(currentRoot) && dashboard.CurrentStatus.Branch == dashboard.DefaultBranch {
-		dashboard.DefaultStatus, dashboard.DefaultCheckedOut = dashboard.CurrentStatus, true
-	} else {
-		dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(dashboard.DefaultBranch, branches)
+	if localDefault != dashboard.DefaultBranch {
+		populateStatusDefaultBranch(&dashboard, branches, currentRoot)
 	}
+	dashboard.progress.begin("Checking worktree cleanup")
 	merged, mergedKnown := fetchMergedStatusBranches(dashboard.DefaultBranch)
 	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, dashboard.DefaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
+	dashboard.WorktreesPending = false
 	return dashboard, nil
+}
+
+func populateStatusDefaultBranch(dashboard *statusDashboard, branches statusBranchInventory, currentRoot string) {
+	if ref, ok := branches.Local[dashboard.DefaultBranch]; ok && filepath.Clean(ref.WorktreePath) == filepath.Clean(currentRoot) && dashboard.CurrentStatus.Branch == dashboard.DefaultBranch {
+		dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = dashboard.CurrentStatus, true, nil
+		return
+	}
+	dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(dashboard.DefaultBranch, branches)
 }
 
 func fetchStatusCachedRemote(dashboard *statusDashboard, colorEnabled bool, options statusOptions) (map[string]bool, bool) {
@@ -239,6 +274,7 @@ func fetchStatusCachedRemote(dashboard *statusDashboard, colorEnabled bool, opti
 			dashboard.DefaultBranch = cached.DefaultBranch
 		}
 		openHeads, pullRequestsKnown = applyStatusCache(dashboard, cached, now)
+		dashboard.progress.cached(dashboard, now)
 		if statusSectionsNeedFetch(cached.Sections, now) {
 			dashboard.cacheState = "section-refresh"
 			openHeads, pullRequestsKnown = retryStatusSections(dashboard, options, now, openHeads, pullRequestsKnown)
@@ -297,7 +333,8 @@ func fetchStatusRemoteData(dashboard *statusDashboard, mergedLimit int, colorEna
 }
 
 func fetchStatusIssueSection(dashboard *statusDashboard, session statusRemoteSession, now time.Time) {
-	defer func() { markStatusSectionFetch(dashboard, 0, statusNowFunc()) }()
+	dashboard.progress.begin("Loading open issues")
+	defer completeStatusSection(dashboard, 0)
 	issueOptions := issueListOptions{repo: session.repo, limit: statusListLimit, state: "open", combinedEnrichment: true}
 	dashboard.Issues, dashboard.IssuesRelErr, dashboard.IssuesHierarchyErr = nil, nil, nil
 	issueResult, issueErr := statusIssueListFunc(issueOptions, now)
@@ -311,7 +348,8 @@ func fetchStatusIssueSection(dashboard *statusDashboard, session statusRemoteSes
 }
 
 func fetchStatusOpenPRSection(dashboard *statusDashboard, session statusRemoteSession, now time.Time) (map[string]bool, bool) {
-	defer func() { markStatusSectionFetch(dashboard, 1, statusNowFunc()) }()
+	dashboard.progress.begin("Loading open pull requests")
+	defer completeStatusSection(dashboard, 1)
 	prOptions := defaultListOptions()
 	prOptions.repo, prOptions.requiredCache = session.repo, session.rules
 	prOptions.limit = statusListLimit
@@ -328,7 +366,8 @@ func fetchStatusOpenPRSection(dashboard *statusDashboard, session statusRemoteSe
 }
 
 func fetchStatusRunSection(dashboard *statusDashboard, session statusRemoteSession, now time.Time) {
-	defer func() { markStatusSectionFetch(dashboard, 3, statusNowFunc()) }()
+	dashboard.progress.begin("Loading workflow runs")
+	defer completeStatusSection(dashboard, 3)
 	runOptions := runListOptions{repo: session.repo, limit: statusWorkflowRunLimit}
 	runResult, runErr := statusWorkflowRunListFunc(runOptions, now)
 	dashboard.WorkflowRunsErr = runErr
@@ -354,10 +393,11 @@ func applyStatusCache(dashboard *statusDashboard, cached statusCacheEntry, now t
 }
 
 func fetchStatusMergedSection(dashboard *statusDashboard, session statusRemoteSession, limit int, now time.Time) {
-	defer func() { markStatusSectionFetch(dashboard, 2, statusNowFunc()) }()
+	defer completeStatusSection(dashboard, 2)
 	if limit == 0 {
 		return
 	}
+	dashboard.progress.begin("Loading recently merged pull requests")
 	dashboard.ShowMergedPullRequests = true
 	options := defaultListOptions()
 	options.repo, options.requiredCache = session.repo, session.rules
@@ -390,7 +430,8 @@ func resolveStatusRepository(colorEnabled bool) (string, string) {
 var statusCommandFunc = runStatusCommand
 
 func runStatusCommand(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+	cmd := exec.CommandContext(commandContext, name, args...)
+	cmd.WaitDelay = githubCommandWaitDelay
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		text := strings.TrimSpace(string(output))
@@ -853,12 +894,16 @@ const (
 )
 
 func renderStatusHeader(stdout io.Writer, styler tableStyler, dashboard statusDashboard) {
+	worktreeRow := statusWorktreeInventoryRow(styler, dashboard.Worktrees)
+	if dashboard.WorktreesPending {
+		worktreeRow = []tableCell{styler.plain(""), styler.dim("Worktrees"), styler.dim(fmt.Sprintf("%s · cleanup pending", plural(len(dashboard.Worktrees), "total", "total")))}
+	}
 	rows := [][]tableCell{
 		{styler.plain(""), styler.dim("Repository"), statusRepositoryCell(styler, dashboard.Repository, dashboard.RepositoryURL)},
 		{styler.plain(""), styler.dim("Local time"), styler.plain(statusNowFunc().Local().Format("2006-01-02 03:04 PM MST"))},
 		statusDefaultBranchRow(styler, dashboard),
 		statusBranchInventoryRow(styler, dashboard.Branches),
-		statusWorktreeInventoryRow(styler, dashboard.Worktrees),
+		worktreeRow,
 		statusStashInventoryRow(styler, dashboard.Stashes, dashboard.StashesErr),
 	}
 	if dashboard.CurrentStatus.Branch != dashboard.DefaultBranch || dashboard.DefaultStatusErr != nil {

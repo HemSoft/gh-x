@@ -137,6 +137,14 @@ and label filters keep the factual `No issues found.` message.
 
 ## What `gh x status` adds
 
+In an interactive terminal, status shows local Git results while GitHub data is
+loading, then adds completed sections. A rotating cursor names the pending work.
+Worktree cleanup stays pending until its evidence is available. Long previews
+keep the header and newest results visible; the full compact output prints when
+the command finishes. Ctrl-C removes the indicator and restores the cursor.
+`NO_COLOR` removes color while keeping loading feedback. Pipes, redirected
+output, and `TERM=dumb` receive a single snapshot without animation.
+
 `gh x status` starts with a repository health header for the resolved default
 branch and current worktree. Each invocation shows the current local date and
 time as `YYYY-MM-DD hh:mm AM/PM ZONE`, for example `2026-09-05 12:32 PM EDT`.

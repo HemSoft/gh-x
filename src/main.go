@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +16,9 @@ import (
 // version and buildDate are injected at build time via ldflags.
 var version = "dev"
 var buildDate = ""
+
+// Initialized once by main, before any command or updater goroutine starts.
+var commandContext = context.Background()
 
 // Change these two constants to move the extension to a different org.
 const (
@@ -32,7 +37,13 @@ var (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	commandContext = ctx
 	updateCh, err := run(os.Args[1:], os.Stdout, os.Stderr)
+	if errors.Is(err, context.Canceled) {
+		os.Exit(130)
+	}
 	// Print the error before waiting for the update notice so the user gets
 	// immediate feedback even when the update check is still in flight.
 	timeout := updateSuccessTimeout

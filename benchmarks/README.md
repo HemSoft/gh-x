@@ -151,6 +151,10 @@ Each GitHub transport call and credential-store lookup has fixed 50 ms latency.
 Seven samples cover refreshes, warm hits, expiry, forced refresh and a failing
 workflow section. Durations include acquisition, rendering and update completion;
 process startup is covered separately by `TestCLIBehaviorReleaseStatusCache`.
+`first_content_ms` measures time to the local repository header through terminal
+presentation at 120 columns and 40 rows. It excludes the banner and spinner;
+`ms` still measures total command duration. Plain redirected output remains a
+single snapshot. Live PTY captures cover process startup and visible animation.
 The Git count records status's Git command seam. The gh count records transport
 invocations, not HTTP requests. The black-box release test verifies that an
 eligible warm command starts no gh child, including the updater.
