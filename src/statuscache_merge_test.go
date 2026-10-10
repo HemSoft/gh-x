@@ -37,7 +37,7 @@ func TestStatusCachePublicationKeepsNewestSection(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			defer saveStatusFuncs()()
-			oldTime := time.Unix(1000, 0)
+			oldTime := time.Unix(1000, 0).UTC()
 			newTime := oldTime.Add(time.Second)
 			writeTime := newTime.Add(2 * time.Second)
 			if test.expired {
@@ -81,7 +81,7 @@ func TestStatusCachePublicationKeepsNewestSection(t *testing.T) {
 }
 
 func TestStatusCacheMergeRejectsInvalidPrevious(t *testing.T) {
-	now := time.Unix(1000, 0)
+	now := time.Unix(1000, 0).UTC()
 	tests := []struct {
 		name   string
 		change func(*statusCacheEntry)
@@ -120,7 +120,7 @@ func TestStatusCachePublicationSkipsContendedLock(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-	entry := statusMergeFixture(time.Unix(1000, 0), "incoming")
+	entry := statusMergeFixture(time.Unix(1000, 0).UTC(), "incoming")
 	if err := writeStatusCacheEntry(directory, entry, entry.FetchedAt); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestStatusCachePublicationSkipsContendedLock(t *testing.T) {
 }
 
 func TestStatusCacheMergeSnapshotTime(t *testing.T) {
-	now := time.Unix(1000, 0)
+	now := time.Unix(1000, 0).UTC()
 	incoming := statusMergeFixture(now.Add(-time.Second), "incoming")
 	previous := statusMergeFixture(now, "newest")
 	got := mergeStatusCacheSections(incoming, previous, now)
