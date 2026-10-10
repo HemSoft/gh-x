@@ -132,10 +132,10 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 1 || !strings.HasSuffix(files[0].Name(), ".json") {
+	if len(files) != 2 || files[0].Name() != ".status-cache.lock" || !strings.HasSuffix(files[1].Name(), ".json") {
 		t.Fatalf("cache write was not a single finalized snapshot: %#v", files)
 	}
-	data, err := os.ReadFile(filepath.Join(directory, files[0].Name()))
+	data, err := os.ReadFile(filepath.Join(directory, files[1].Name()))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -49,7 +49,7 @@ func TestStatusCacheConcurrentReplacementIsComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	files, err := os.ReadDir(directory)
-	if err != nil || len(files) != 1 {
+	if err != nil || len(files) != 2 || files[0].Name() != ".status-cache.lock" {
 		t.Fatalf("replacement leaked snapshots: %v, %v", files, err)
 	}
 }

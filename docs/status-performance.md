@@ -16,6 +16,11 @@ A failed section does not invalidate successful sections or extend their origina
 freshness deadlines. Rate-limit errors wait at least 60 seconds; numeric
 `Retry-After` and `X-RateLimit-Reset` hints in the reported error extend that wait.
 Healthy sections still refresh when they expire during a longer cooldown.
+Writers take a nonblocking operating system file lock before merging and replacing
+the snapshot. Each section keeps its newest fetch timestamp, data, errors and
+retry deadline, including expired results. A contended writer skips publication;
+readers continue using atomic snapshots without taking the lock.
+
 `gh x status --refresh` explicitly bypasses these cached results and cooldowns.
 
 The authentication fingerprint includes configuration, token overrides and
@@ -35,7 +40,9 @@ Set `GH_X_STATUS_DEBUG=1` to report `hit`, `miss`, `refresh`, `section-refresh`
 or `identity-unavailable` on stderr. It reports no credential values.
 
 Status shares one repository target and one branch-rules lookup across its PR
-sections. It fetches issue relationships and hierarchy together while retaining
+sections. The target retains the selected repository's host, including
+`gh repo set-default`; unresolved local targets keep GitHub CLI's contextual
+selection. It fetches issue relationships and hierarchy together while retaining
 field-specific incomplete-data handling. It still makes requests serially.
 If an older Enterprise schema rejects the hierarchy fields, status retries
 relationships separately and keeps hierarchy data visibly unavailable.
@@ -56,13 +63,13 @@ with a linked worktree. The production dispatcher includes the automatic updater
 
 | Mode | Before ms | After ms | gh calls before/after | Git calls before/after | Keyring before/after | New cache outcome |
 | --- | ---: | ---: | --- | --- | --- | --- |
-| Cold | 728.568 | 425.689 | 11 / 9 | 16 / 15 | 4 / 0 | miss |
-| Warm | 119.313 | 16.009 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
-| Expired | 728.951 | 425.939 | 11 / 8 | 16 / 15 | 4 / 0 | miss |
-| Forced refresh | 728.210 | 425.054 | 11 / 8 | 16 / 15 | 4 / 0 | refresh |
-| Partial failure, within cooldown | 121.101 | 15.091 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
+| Cold | 728.568 | 425.327 | 11 / 9 | 16 / 15 | 4 / 0 | miss |
+| Warm | 119.313 | 15.548 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
+| Expired | 728.951 | 425.808 | 11 / 8 | 16 / 15 | 4 / 0 | miss |
+| Forced refresh | 728.210 | 423.744 | 11 / 8 | 16 / 15 | 4 / 0 | refresh |
+| Partial failure, within cooldown | 121.101 | 15.567 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
 
-Forced refresh improves by 41.6% on this fixture. Git counts cover the status
+Forced refresh improves by 41.8% on this fixture. Git counts cover the status
 command seam; gh counts cover every transport invocation, including the updater,
 and do not claim to count underlying HTTP pagination requests. Cold samples
 empty both fixture-owned caches. Baseline partial-failure samples could reuse

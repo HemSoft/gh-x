@@ -8,7 +8,37 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/cli/go-gh/v2/pkg/repository"
 )
+
+func TestStatusRemoteSessionPreservesSelectedHost(t *testing.T) {
+	saved := repositoryCurrentFunc
+	t.Cleanup(func() { repositoryCurrentFunc = saved })
+	for _, test := range []struct {
+		name, host, label, target string
+		failed                    bool
+	}{
+		{name: "public remote", host: "github.com", label: "owner/repo", target: "github.com/owner/repo"},
+		{name: "Enterprise selected over public origin", host: "ghe.example.com", label: "org/project", target: "ghe.example.com/org/project"},
+		{name: "unresolved SSH alias preserves gh selection", label: "owner/repo", failed: true},
+		{name: "unknown host preserves gh selection", label: "owner/repo"},
+		{name: "unknown repository"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repositoryCurrentFunc = func() (repository.Repository, error) {
+				if test.failed {
+					return repository.Repository{}, errors.New("unknown remote")
+				}
+				return repository.Repository{Host: test.host}, nil
+			}
+			session := newStatusRemoteSession(test.label)
+			if session.repo != test.target || session.rules == nil {
+				t.Fatalf("target=%q, want %q", session.repo, test.target)
+			}
+		})
+	}
+}
 
 func TestCombinedIssueEnrichmentLegacySchemaFallback(t *testing.T) {
 	fixture, err := os.ReadFile("../tests/behavior/testdata/issue-relationships.json")

@@ -111,17 +111,27 @@ func statusHeaderDelay(message string, now time.Time) time.Duration {
 }
 
 func validStatusCacheSections(sections []statusCacheSection, now time.Time) bool {
+	if !statusCacheSectionShapeValid(sections, now) {
+		return false
+	}
+	for _, section := range sections {
+		if now.Before(section.RetryAfter) {
+			return true
+		}
+	}
+	return false
+}
+
+func statusCacheSectionShapeValid(sections []statusCacheSection, now time.Time) bool {
 	if len(sections) != 4 {
 		return false
 	}
-	usable := false
 	for _, section := range sections {
 		if section.FetchedAt.IsZero() || section.FetchedAt.After(now) || section.RetryAfter.Before(section.FetchedAt) {
 			return false
 		}
-		usable = usable || now.Before(section.RetryAfter)
 	}
-	return usable
+	return true
 }
 
 func statusSectionsNeedFetch(sections []statusCacheSection, now time.Time) bool {

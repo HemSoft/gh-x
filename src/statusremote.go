@@ -16,10 +16,15 @@ type statusRemoteSession struct {
 }
 
 func newStatusRemoteSession(repository string) statusRemoteSession {
-	repo := repository
-	if repo != "" {
-		repo = repositoryTargetHost("") + "/" + repo
+	repo := ""
+	if repository != "" {
+		resolved, err := repositoryCurrentFunc()
+		if err == nil && resolved.Host != "" {
+			repo = resolved.Host + "/" + repository
+		}
 	}
+	// If local resolution fails, leave gh's contextual repository selection
+	// intact rather than forcing a host inferred from a different remote.
 	return statusRemoteSession{repo: repo, rules: make(map[string]requiredCheckResult)}
 }
 

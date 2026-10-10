@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/zalando/go-keyring"
 	"gopkg.in/yaml.v3"
 )
@@ -197,6 +198,21 @@ func writeStatusCacheEntry(directory string, entry statusCacheEntry, now time.Ti
 	if err := os.Chmod(directory, 0o700); err != nil && !errors.Is(err, os.ErrPermission) {
 		return err
 	}
+	lock := flock.New(filepath.Join(directory, ".status-cache.lock"), flock.SetPermissions(0o600))
+	defer func() { _ = lock.Close() }()
+	locked, err := lock.TryLock()
+	if err != nil || !locked {
+		return err
+	}
+	return publishStatusCacheEntry(directory, entry, now)
+}
+
+func publishStatusCacheEntry(directory string, entry statusCacheEntry, now time.Time) error {
+	finalPath := filepath.Join(directory, statusCacheFileName(entry.Key))
+	previous, readErr := readStatusCacheEntry(finalPath)
+	if readErr == nil {
+		entry = mergeStatusCacheSections(entry, previous, maxStatusCacheTime(now, statusNowFunc()))
+	}
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return err
@@ -206,8 +222,6 @@ func writeStatusCacheEntry(directory string, entry statusCacheEntry, now time.Ti
 		return err
 	}
 	defer func() { _ = os.Remove(temporaryPath) }()
-	finalName := statusCacheFileName(entry.Key)
-	finalPath := filepath.Join(directory, finalName)
 	if err := os.Rename(temporaryPath, finalPath); err != nil {
 		return err
 	}
