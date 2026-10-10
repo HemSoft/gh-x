@@ -132,10 +132,10 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 1 || !strings.HasSuffix(files[0].Name(), ".json") {
+	if len(files) != 2 || files[0].Name() != ".status-cache.lock" || !strings.HasSuffix(files[1].Name(), ".json") {
 		t.Fatalf("cache write was not a single finalized snapshot: %#v", files)
 	}
-	data, err := os.ReadFile(filepath.Join(directory, files[0].Name()))
+	data, err := os.ReadFile(filepath.Join(directory, files[1].Name()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 	}
 }
 
-func TestStatusCacheReusesHostedDefaultBranchWithoutRemoteHEAD(t *testing.T) {
+func TestStatusCachePreservesSectionFreshnessDuringSlowFetch(t *testing.T) {
 	defer saveStatusFuncs()()
 	installStatusDashboardGitFixture()
 	directory := t.TempDir()
@@ -189,8 +189,8 @@ func TestStatusCacheReusesHostedDefaultBranchWithoutRemoteHEAD(t *testing.T) {
 	if _, err := fetchStatusDashboard(false, statusOptions{mergedLimit: 0}); err != nil {
 		t.Fatal(err)
 	}
-	if branchCalls != 1 || remoteCalls != 3 {
-		t.Fatalf("snapshot within 60 seconds of fetch completion made %d hosted branch and %d remote calls, want 1 and 3", branchCalls, remoteCalls)
+	if branchCalls != 1 || remoteCalls != 5 {
+		t.Fatalf("slow fetch must retain hosted branch and fresh workflow data but refresh expired issue/PR sections: %d hosted branch and %d remote calls, want 1 and 5", branchCalls, remoteCalls)
 	}
 }
 

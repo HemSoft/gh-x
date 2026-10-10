@@ -16,16 +16,17 @@ import (
 )
 
 type issueListOptions struct {
-	ctx       context.Context
-	repo      string
-	limit     int
-	state     string
-	author    string
-	assignee  string
-	milestone string
-	search    string
-	web       bool
-	labels    stringSliceFlag
+	ctx                context.Context
+	repo               string
+	limit              int
+	state              string
+	author             string
+	assignee           string
+	milestone          string
+	search             string
+	web                bool
+	labels             stringSliceFlag
+	combinedEnrichment bool
 }
 
 type issueAssignee struct {
@@ -253,7 +254,12 @@ func fetchDisplayIssues(options issueListOptions, now time.Time) (issueListResul
 		return issueListResult{}, err
 	}
 
-	enrichment := fetchIssueEnrichmentData(ctx, options.repo, issues)
+	var enrichment issueEnrichmentData
+	if options.combinedEnrichment {
+		enrichment = fetchIssueEnrichmentDataMode(ctx, options.repo, issues, true)
+	} else {
+		enrichment = fetchIssueEnrichmentData(ctx, options.repo, issues)
+	}
 	displayIssues := make([]displayIssue, len(issues))
 	for i, entry := range issues {
 		displayIssues[i] = buildDisplayIssue(entry, now)
@@ -286,6 +292,10 @@ func issueListOperationContext(parent context.Context) (context.Context, context
 }
 
 func fetchIssueEnrichmentData(ctx context.Context, repo string, issues []issueEntry) issueEnrichmentData {
+	return fetchIssueEnrichmentDataMode(ctx, repo, issues, false)
+}
+
+func fetchIssueEnrichmentDataMode(ctx context.Context, repo string, issues []issueEntry, combined bool) issueEnrichmentData {
 	if len(issues) == 0 {
 		return issueEnrichmentData{}
 	}
@@ -300,6 +310,9 @@ func fetchIssueEnrichmentData(ctx context.Context, repo string, issues []issueEn
 		}
 	}
 	host := repositoryTargetHost(repo)
+	if combined && len(numbers) <= relationshipBatchSize {
+		return fetchCombinedIssueEnrichment(ctx, owner, name, host, numbers)
+	}
 	relationships, relationshipsMissing, relErr := fetchIssueRelationshipsFunc(ctx, owner, name, host, numbers)
 	hierarchies, hierarchyMissing, hierarchyErr := fetchIssueHierarchiesFunc(ctx, owner, name, host, numbers)
 	return issueEnrichmentData{

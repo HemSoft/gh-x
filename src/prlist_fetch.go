@@ -129,6 +129,16 @@ func joinPRNumbers(numbers []int) string {
 
 // fetchRequiredChecks retrieves required check contexts per base branch (best-effort).
 func fetchRequiredChecks(owner, name string, prs []pullRequest) (map[string]map[string]bool, map[string]error) {
+	return fetchRequiredChecksCached(owner, name, prs, nil)
+}
+
+type requiredCheckResult struct {
+	contexts map[string]bool
+	ok       bool
+	err      error
+}
+
+func fetchRequiredChecksCached(owner, name string, prs []pullRequest, cache map[string]requiredCheckResult) (map[string]map[string]bool, map[string]error) {
 	result := make(map[string]map[string]bool)
 	failed := make(map[string]error)
 	if owner == "" {
@@ -138,7 +148,15 @@ func fetchRequiredChecks(owner, name string, prs []pullRequest) (map[string]map[
 		return result, failed
 	}
 	for _, base := range uniqueBaseBranches(prs) {
-		ctx, ok, err := fetchRequiredCheckContexts(owner, name, base)
+		key := owner + "/" + name + "/" + base
+		cached, found := cache[key]
+		if !found {
+			cached.contexts, cached.ok, cached.err = fetchRequiredCheckContexts(owner, name, base)
+			if cache != nil {
+				cache[key] = cached
+			}
+		}
+		ctx, ok, err := cached.contexts, cached.ok, cached.err
 		switch {
 		case err == nil && ok && len(ctx) > 0:
 			result[base] = ctx

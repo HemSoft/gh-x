@@ -33,6 +33,7 @@ type listOptions struct {
 	json           bool
 	recentlyMerged bool
 	labels         stringSliceFlag
+	requiredCache  map[string]requiredCheckResult
 }
 
 type stringSliceFlag []string
@@ -161,7 +162,7 @@ func fetchPullRequestList(options listOptions, now time.Time) (pullRequestListRe
 		return pullRequestListResult{}, nil
 	}
 	supplemental, repoOwner, repoName := fetchSupplementalData(options.repo, pullRequests)
-	requiredByBranch, failedRequiredBranches := fetchRequiredChecks(repoOwner, repoName, pullRequests)
+	requiredByBranch, failedRequiredBranches := fetchRequiredChecksCached(repoOwner, repoName, pullRequests, options.requiredCache)
 	failedRequiredPRs := make(map[int]bool)
 	for _, pr := range pullRequests {
 		if failedRequiredBranches[pr.BaseRefName] != nil {

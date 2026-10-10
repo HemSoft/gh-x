@@ -13,14 +13,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/zalando/go-keyring"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	statusCacheSchemaVersion = 4
+	statusCacheSchemaVersion = 5
 	statusCacheTTL           = time.Minute
-	statusCacheDirectoryName = "status-cache-v4"
+	statusCacheDirectoryName = "status-cache-v5"
 )
 
 type statusCacheKey struct {
@@ -61,6 +62,8 @@ type statusCachedWorkflowRun struct {
 type statusCacheEntry struct {
 	Version                int                       `json:"version"`
 	FetchedAt              time.Time                 `json:"fetchedAt"`
+	Sections               []statusCacheSection      `json:"sections,omitempty"`
+	Failures               []string                  `json:"failures,omitempty"`
 	Key                    statusCacheKey            `json:"key"`
 	Repository             string                    `json:"repository"`
 	RepositoryURL          string                    `json:"repositoryUrl,omitempty"`
@@ -85,28 +88,13 @@ func lookupStatusCache(options statusOptions, colorEnabled bool, now time.Time, 
 }
 
 func loadStatusCacheAt(options statusOptions, colorEnabled bool, now time.Time, directory, fingerprint string) (statusCacheEntry, bool) {
-	matches := statusCacheKey{RemoteFingerprint: fingerprint, MergedLimit: options.mergedLimit, ColorEnabled: colorEnabled}
-	files, err := os.ReadDir(directory)
-	if err != nil {
-		return statusCacheEntry{}, false
-	}
-	var newest statusCacheEntry
-	found := false
-	for _, file := range files {
-		if !isStatusCacheFile(file) {
-			continue
-		}
-		entry, readErr := readStatusCacheEntry(filepath.Join(directory, file.Name()))
-		if readErr == nil && validStatusCacheEntry(entry, matches, now) && (!found || entry.FetchedAt.After(newest.FetchedAt)) {
-			newest = entry
-			found = true
-		}
-	}
-	return newest, found
+	key := statusCacheKey{RemoteFingerprint: fingerprint, MergedLimit: options.mergedLimit, ColorEnabled: colorEnabled}
+	entry, err := readStatusCacheEntry(filepath.Join(directory, statusCacheFileName(key)))
+	return entry, err == nil && validStatusCacheEntry(entry, key, now)
 }
 
-func isStatusCacheFile(file os.DirEntry) bool {
-	return file.Type().IsRegular() && strings.HasPrefix(file.Name(), "status-") && strings.HasSuffix(file.Name(), ".json")
+func statusCacheFileName(key statusCacheKey) string {
+	return "status-" + statusRemoteFingerprint(fmt.Sprintf("%s:%d:%t", key.RemoteFingerprint, key.MergedLimit, key.ColorEnabled)) + ".json"
 }
 
 func readStatusCacheEntry(path string) (statusCacheEntry, error) {
@@ -122,13 +110,24 @@ func readStatusCacheEntry(path string) (statusCacheEntry, error) {
 }
 
 func validStatusCacheEntry(entry statusCacheEntry, expected statusCacheKey, now time.Time) bool {
-	if entry.Version != statusCacheSchemaVersion || entry.Key != expected || entry.FetchedAt.IsZero() ||
-		!statusCacheSectionsComplete(entry) || entry.ShowMergedPullRequests != (expected.MergedLimit > 0) ||
-		(entry.ShowMergedPullRequests && entry.MergedPullRequests == nil) {
+	if !statusCacheShapeMatches(entry, expected) || entry.FetchedAt.After(now) || !statusCacheFailuresValid(entry) {
 		return false
+	}
+	if len(entry.Sections) != 0 {
+		return validStatusCacheSections(entry.Sections, now)
 	}
 	age := now.Sub(entry.FetchedAt)
 	return age >= 0 && age < statusCacheTTL
+}
+
+func statusCacheShapeMatches(entry statusCacheEntry, expected statusCacheKey) bool {
+	return entry.Version == statusCacheSchemaVersion && entry.Key == expected && !entry.FetchedAt.IsZero() &&
+		statusCacheSectionsComplete(entry) && entry.ShowMergedPullRequests == (expected.MergedLimit > 0) &&
+		(!entry.ShowMergedPullRequests || entry.MergedPullRequests != nil)
+}
+
+func statusCacheFailuresValid(entry statusCacheEntry) bool {
+	return len(entry.Failures) == 0 || (len(entry.Failures) == statusFailureCount && len(entry.Sections) == 4)
 }
 
 func statusCacheSectionsComplete(entry statusCacheEntry) bool {
@@ -144,7 +143,7 @@ func saveStatusCacheIfSameIdentity(options statusOptions, colorEnabled bool, now
 }
 
 func saveStatusCacheAt(options statusOptions, colorEnabled bool, now time.Time, dashboard statusDashboard, pullRequestHeads map[string]bool, pullRequestsKnown bool, directory, fingerprint string) {
-	if !statusDashboardCacheable(dashboard) {
+	if dashboard.Repository == "" || dashboard.DefaultBranch == "" {
 		return
 	}
 	entry := statusCacheEntry{
@@ -163,6 +162,8 @@ func saveStatusCacheAt(options statusOptions, colorEnabled bool, now time.Time, 
 		WorkflowRuns:           cacheStatusWorkflowRuns(dashboard.WorkflowRuns),
 		WorkflowRunsPerfect:    dashboard.WorkflowRunsPerfect,
 	}
+	entry.Failures = cacheStatusFailures(dashboard)
+	entry.Sections = cacheStatusSections(dashboard, now)
 	_ = writeStatusCacheEntry(directory, entry, now)
 }
 
@@ -197,6 +198,21 @@ func writeStatusCacheEntry(directory string, entry statusCacheEntry, now time.Ti
 	if err := os.Chmod(directory, 0o700); err != nil && !errors.Is(err, os.ErrPermission) {
 		return err
 	}
+	lock := flock.New(filepath.Join(directory, ".status-cache.lock"), flock.SetPermissions(0o600))
+	defer func() { _ = lock.Close() }()
+	locked, err := lock.TryLock()
+	if err != nil || !locked {
+		return err
+	}
+	return publishStatusCacheEntry(directory, entry, now)
+}
+
+func publishStatusCacheEntry(directory string, entry statusCacheEntry, now time.Time) error {
+	finalPath := filepath.Join(directory, statusCacheFileName(entry.Key))
+	previous, readErr := readStatusCacheEntry(finalPath)
+	if readErr == nil {
+		entry = mergeStatusCacheSections(entry, previous, maxStatusCacheTime(now, statusNowFunc()))
+	}
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return err
@@ -206,8 +222,6 @@ func writeStatusCacheEntry(directory string, entry statusCacheEntry, now time.Ti
 		return err
 	}
 	defer func() { _ = os.Remove(temporaryPath) }()
-	finalName := strings.TrimPrefix(strings.TrimSuffix(filepath.Base(temporaryPath), ".tmp"), ".") + ".json"
-	finalPath := filepath.Join(directory, finalName)
 	if err := os.Rename(temporaryPath, finalPath); err != nil {
 		return err
 	}
@@ -255,10 +269,15 @@ func pruneStatusCacheFiles(directory, currentPath string, now time.Time) {
 			continue
 		}
 		info, infoErr := entry.Info()
-		if infoErr == nil && now.Sub(info.ModTime()) >= 2*statusCacheTTL {
+		if infoErr == nil && now.Sub(info.ModTime()) >= 2*statusCacheTTL && !statusCacheFileReusable(path, now) {
 			_ = os.Remove(path)
 		}
 	}
+}
+
+func statusCacheFileReusable(path string, now time.Time) bool {
+	entry, err := readStatusCacheEntry(path)
+	return err == nil && validStatusCacheEntry(entry, entry.Key, now)
 }
 
 func statusCacheDirectory() (string, string, error) {
@@ -346,8 +365,13 @@ func statusTargetFingerprint(remoteConfig, branchRemote, authContext string) str
 }
 
 type statusAuthHost struct {
-	User  string         `yaml:"user"`
-	Users map[string]any `yaml:"users"`
+	User       string                       `yaml:"user"`
+	OAuthToken string                       `yaml:"oauth_token"`
+	Users      map[string]statusAuthAccount `yaml:"users"`
+}
+
+type statusAuthAccount struct {
+	OAuthToken string `yaml:"oauth_token"`
 }
 
 var statusKeyringGetFunc = func(service, user string) (string, error) {
@@ -403,6 +427,9 @@ func statusKeyringContext(hosts map[string]statusAuthHost) (string, error) {
 			continue // An explicit token also prevents fallback-account retries.
 		}
 		for _, user := range statusAuthUsernames(hosts[hostname]) {
+			if statusConfiguredToken(hosts[hostname], user) != "" {
+				continue // The complete config is already hashed; gh prefers these tokens.
+			}
 			identity, err := statusKeyringTokenFingerprint("gh:"+hostname, user)
 			if err != nil {
 				return "", err
@@ -411,6 +438,14 @@ func statusKeyringContext(hosts map[string]statusAuthHost) (string, error) {
 		}
 	}
 	return strings.Join(identities, "\x00"), nil
+}
+
+func statusConfiguredToken(host statusAuthHost, user string) string {
+	if user == "" || user == host.User {
+		return host.OAuthToken
+	}
+	// gh auth token --user checks the keyring before config for fallback users.
+	return ""
 }
 
 func statusAuthUsernames(host statusAuthHost) []string {

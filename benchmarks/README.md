@@ -137,3 +137,35 @@ full sensitivity check in a disposable worktree, temporarily retain an extra
 and confirm its B/op ceiling fails. Restore that exact edit and rerun. Keep
 the failing and restored artifact directories separate. Never commit the
 injected allocation or regenerate budgets from the deliberately slowed run.
+
+## Status acquisition
+
+The runner also executes `TestStatusAcquisitionPerformance` with
+`GH_X_STATUS_PERF=1`. This opt-in fixture calls the command dispatcher, renders
+status, and drains automatic update completion at release version `v0.19.4`.
+It uses real temporary Git repositories with a linked worktree, synthetic
+plaintext authentication, and the existing populated issue, open/merged PR and
+workflow fixtures. No real credential or network service is consulted.
+
+Each GitHub transport call and credential-store lookup has fixed 50 ms latency.
+Seven samples cover refreshes, warm hits, expiry, forced refresh and a failing
+workflow section. Durations include acquisition, rendering and update completion;
+process startup is covered separately by `TestCLIBehaviorReleaseStatusCache`.
+The Git count records status's Git command seam. The gh count records transport
+invocations, not HTTP requests. The black-box release test verifies that an
+eligible warm command starts no gh child, including the updater.
+
+`status-budgets.json` enforces zero warm gh calls and zero active-keyring probes,
+a 250 ms warm median, and a 2 s acquisition median ceiling with at most nine gh
+calls. These are separate from renderer budgets. `status-acquisition.json`
+contains raw samples and every comparison. The fixture is excluded from ordinary
+unit and mutation runs because injected service latency would slow each mutation.
+
+For the before/after comparison, copy the acquisition test and combined issue
+fixture into an external checkout of `a088800`, then run the same command there.
+The fixed keyring delay reproduces unnecessary probes without relying on Mini's
+live credential-store timeout. On Mini, the original forced-refresh median was
+728 ms with 11 gh transport calls and four keyring probes; the implementation
+measured 425 ms with eight gh calls and zero keyring probes, a 42% reduction.
+Compare live API timings separately. They depend on repository contents and
+network latency.

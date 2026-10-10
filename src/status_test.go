@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cli/go-gh/v2/pkg/repository"
 )
 
 func TestParseGitStatus(t *testing.T) {
@@ -208,7 +210,13 @@ func TestStatusDefaultBranchStates(t *testing.T) {
 }
 
 func TestFetchStatusDashboard(t *testing.T) {
+	t.Setenv("GH_REPO", "")
 	defer saveStatusFuncs()()
+	savedCurrent := repositoryCurrentFunc
+	t.Cleanup(func() { repositoryCurrentFunc = savedCurrent })
+	repositoryCurrentFunc = func() (repository.Repository, error) {
+		return repository.Repository{Host: "github.com", Owner: "owner", Name: "repo"}, nil
+	}
 	statusRepoLabelFunc = func(string) string { return "owner/repo" }
 	statusRepoURLFunc = func(string) (string, error) { return "https://github.com/owner/repo", nil }
 	statusPathExistsFunc = func(string) bool { return true }
@@ -243,7 +251,7 @@ func TestFetchStatusDashboard(t *testing.T) {
 		}
 	}
 	statusWorkflowRunListFunc = func(options runListOptions, now time.Time) (workflowRunListResult, error) {
-		if options.limit != statusWorkflowRunLimit || options.repo != "" || options.status != "" || options.workflow != "" || options.branch != "" || options.event != "" || options.user != "" {
+		if options.limit != statusWorkflowRunLimit || options.repo != "github.com/owner/repo" || options.status != "" || options.workflow != "" || options.branch != "" || options.event != "" || options.user != "" {
 			t.Fatalf("unexpected run options: %#v", options)
 		}
 		if want := statusNowFunc(); !now.Equal(want) {
