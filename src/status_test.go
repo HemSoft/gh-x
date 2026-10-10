@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cli/go-gh/v2/pkg/repository"
 )
 
 func TestParseGitStatus(t *testing.T) {
@@ -209,6 +211,11 @@ func TestStatusDefaultBranchStates(t *testing.T) {
 
 func TestFetchStatusDashboard(t *testing.T) {
 	defer saveStatusFuncs()()
+	savedCurrent := repositoryCurrentFunc
+	t.Cleanup(func() { repositoryCurrentFunc = savedCurrent })
+	repositoryCurrentFunc = func() (repository.Repository, error) {
+		return repository.Repository{Host: "github.com", Owner: "owner", Name: "repo"}, nil
+	}
 	statusRepoLabelFunc = func(string) string { return "owner/repo" }
 	statusRepoURLFunc = func(string) (string, error) { return "https://github.com/owner/repo", nil }
 	statusPathExistsFunc = func(string) bool { return true }
