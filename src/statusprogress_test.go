@@ -112,6 +112,10 @@ func TestStatusProgressAnimationAndRestoration(t *testing.T) {
 		t.Run(fmt.Sprint(color), func(t *testing.T) {
 			p, output := testStatusProgress(t, 80, 24, color)
 			p.begin("Loading open pull requests")
+			p.mu.Lock()
+			p.frame = "completed results\n"
+			p.paint()
+			p.mu.Unlock()
 			p.tick()
 			p.tick()
 			if err := p.close(); err != nil {
@@ -125,6 +129,9 @@ func TestStatusProgressAnimationAndRestoration(t *testing.T) {
 			}
 			if strings.Contains(text, "\x1b[36m") != color || !strings.HasSuffix(text, "\r\x1b[J\x1b[?25h") {
 				t.Fatalf("unexpected color or cleanup: %q", text)
+			}
+			if strings.Count(text, "completed results") != 1 {
+				t.Fatalf("animation repainted completed results: %q", text)
 			}
 		})
 	}

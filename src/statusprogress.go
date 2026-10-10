@@ -74,7 +74,7 @@ func (p *statusProgress) tick() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.step++
-	p.paint()
+	p.write("\r\x1b[2K" + p.spinner())
 }
 
 func (p *statusProgress) close() error {
@@ -107,23 +107,32 @@ func (p *statusProgress) write(text string) {
 }
 
 func (p *statusProgress) clear() {
-	if p.lines > 1 {
-		p.write(fmt.Sprintf("\x1b[%dA", p.lines-1))
-	}
-	p.write("\r\x1b[J")
+	p.write(statusProgressClear(p.lines))
 	p.lines = 0
 }
 
 func (p *statusProgress) paint() {
-	p.clear()
 	lines := statusProgressLines(p.frame, p.width, p.height-2)
+	lines = append(lines, p.spinner())
+	// One write prevents a blank frame between clearing and repainting.
+	p.write(statusProgressClear(p.lines) + strings.Join(lines, "\n"))
+	p.lines = len(lines)
+}
+
+func statusProgressClear(lines int) string {
+	prefix := ""
+	if lines > 1 {
+		prefix = fmt.Sprintf("\x1b[%dA", lines-1)
+	}
+	return prefix + "\r\x1b[J"
+}
+
+func (p *statusProgress) spinner() string {
 	spinner := string("|/-\\"[p.step%4]) + " " + p.active
 	if p.color {
 		spinner = "\x1b[36m" + spinner + "\x1b[0m"
 	}
-	lines = append(lines, ansi.Truncate(spinner, p.width-1, "…"))
-	p.write(strings.Join(lines, "\n"))
-	p.lines = len(lines)
+	return ansi.Truncate(spinner, p.width-1, "…")
 }
 
 func statusProgressLines(frame string, width, limit int) []string {
