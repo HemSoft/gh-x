@@ -146,11 +146,16 @@ redirected output and when GitHub sections are unavailable.
 
 The compact header aligns branch, worktree, and stash inventories beneath the
 default branch. It always reports stashes, including `0 stashes`, and marks each
-inventory row with a green `✓` only when its clean-state rule passes:
+health row with a green `✓` only when its clean-state rule passes:
 
+- Default branch: checked out, synced with an existing upstream, and clean.
 - Branches: 1 local branch, 0 dangling branches, and 1 remote-tracking branch.
 - Worktrees: 1 total worktree and 0 cleanup candidates.
 - Stashes: 0 stashes.
+
+The default-branch check uses that branch's own worktree, even when the current
+feature worktree has changes. Missing or unavailable default-branch status and
+a default branch that is not checked out receive no check.
 
 Other inventory values appear in yellow without a check. No-color output keeps
 the checks and alignment. Stash counts come from the shared repository inventory

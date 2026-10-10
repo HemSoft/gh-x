@@ -856,7 +856,7 @@ func renderStatusHeader(stdout io.Writer, styler tableStyler, dashboard statusDa
 	rows := [][]tableCell{
 		{styler.plain(""), styler.dim("Repository"), statusRepositoryCell(styler, dashboard.Repository, dashboard.RepositoryURL)},
 		{styler.plain(""), styler.dim("Local time"), styler.plain(statusNowFunc().Local().Format("2006-01-02 03:04 PM MST"))},
-		{styler.plain(""), styler.dim(statusDefaultBranchLabel(dashboard.DefaultBranch)), statusDefaultBranchCell(styler, dashboard)},
+		statusDefaultBranchRow(styler, dashboard),
 		statusBranchInventoryRow(styler, dashboard.Branches),
 		statusWorktreeInventoryRow(styler, dashboard.Worktrees),
 		statusStashInventoryRow(styler, dashboard.Stashes, dashboard.StashesErr),
@@ -892,6 +892,16 @@ func statusDefaultBranchCell(styler tableStyler, dashboard statusDashboard) tabl
 		return statusHeaderValue(styler, conciseStatusError(dashboard.DefaultStatusErr), statusUnavailable)
 	}
 	return statusBranchCell(styler, dashboard.DefaultStatus, dashboard.DefaultCheckedOut)
+}
+
+func statusDefaultBranchRow(styler tableStyler, dashboard statusDashboard) []tableCell {
+	marker := styler.plain("")
+	ref := dashboard.Branches.Local[dashboard.DefaultBranch]
+	if dashboard.DefaultBranch != "" && dashboard.DefaultCheckedOut && dashboard.DefaultStatusErr == nil &&
+		statusBranchSeverity(dashboard.DefaultStatus) == statusHealthy && !strings.Contains(ref.Track, "[gone]") {
+		marker = styler.colored("✓", termenv.ANSIGreen)
+	}
+	return []tableCell{marker, styler.dim(statusDefaultBranchLabel(dashboard.DefaultBranch)), statusDefaultBranchCell(styler, dashboard)}
 }
 
 func statusCurrentBranchCell(styler tableStyler, summary statusSummary) tableCell {
