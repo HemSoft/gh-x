@@ -69,6 +69,7 @@ type statusWorktree struct {
 
 type statusDashboard struct {
 	progress                  *statusProgress
+	localRoot                 string
 	WorktreesPending          bool
 	cacheState                string
 	remoteSections            []statusCacheSection
@@ -222,6 +223,7 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 	currentRoot := strings.TrimRight(root, "\r\n")
 	dashboard := statusDashboard{
 		progress:               options.progress,
+		localRoot:              currentRoot,
 		Repository:             filepath.Base(currentRoot),
 		DefaultBranch:          resolveStatusDefaultBranch(branches),
 		CurrentStatus:          parseGitStatus(output),
@@ -232,14 +234,10 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 	}
 	dashboard.Stashes, dashboard.StashesErr = fetchStatusStashes()
 	populateStatusDefaultBranch(&dashboard, branches, currentRoot)
-	localDefault := dashboard.DefaultBranch
 	dashboard.progress.local(&dashboard)
 
 	openHeads, pullRequestsKnown := fetchStatusCachedRemote(&dashboard, colorEnabled, options)
 
-	if localDefault != dashboard.DefaultBranch {
-		populateStatusDefaultBranch(&dashboard, branches, currentRoot)
-	}
 	dashboard.progress.begin("Checking worktree cleanup")
 	merged, mergedKnown := fetchMergedStatusBranches(dashboard.DefaultBranch)
 	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, dashboard.DefaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
@@ -253,6 +251,17 @@ func populateStatusDefaultBranch(dashboard *statusDashboard, branches statusBran
 		return
 	}
 	dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(dashboard.DefaultBranch, branches)
+}
+
+func updateStatusDefaultBranch(dashboard *statusDashboard, branch string) {
+	if dashboard.DefaultBranch == branch {
+		return
+	}
+	dashboard.DefaultBranch = branch
+	populateStatusDefaultBranch(dashboard, dashboard.Branches, dashboard.localRoot)
+	if dashboard.progress != nil {
+		dashboard.progress.update(dashboard)
+	}
 }
 
 func fetchStatusCachedRemote(dashboard *statusDashboard, colorEnabled bool, options statusOptions) (map[string]bool, bool) {
@@ -271,7 +280,7 @@ func fetchStatusCachedRemote(dashboard *statusDashboard, colorEnabled bool, opti
 	if cacheHit {
 		dashboard.cacheState = "hit"
 		if dashboard.DefaultBranch == "" {
-			dashboard.DefaultBranch = cached.DefaultBranch
+			updateStatusDefaultBranch(dashboard, cached.DefaultBranch)
 		}
 		openHeads, pullRequestsKnown = applyStatusCache(dashboard, cached, now)
 		dashboard.progress.cached(dashboard, now)
@@ -284,7 +293,7 @@ func fetchStatusCachedRemote(dashboard *statusDashboard, colorEnabled bool, opti
 		// Keep the lookup's target. A concurrent branch switch must not
 		// publish the old repository's rows under the new target's key.
 		if dashboard.DefaultBranch == "" {
-			dashboard.DefaultBranch = statusDefaultBranchFunc()
+			updateStatusDefaultBranch(dashboard, statusDefaultBranchFunc())
 		}
 		openHeads, pullRequestsKnown = fetchStatusRemoteData(dashboard, options.mergedLimit, colorEnabled, now)
 		if cacheErr == nil {
@@ -434,6 +443,9 @@ func runStatusCommand(name string, args ...string) (string, error) {
 	cmd.WaitDelay = githubCommandWaitDelay
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if commandContext.Err() != nil {
+			return "", commandContext.Err()
+		}
 		text := strings.TrimSpace(string(output))
 		if text != "" {
 			return "", fmt.Errorf("%s: %w", text, err)

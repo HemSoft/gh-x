@@ -144,6 +144,10 @@ keep the header and newest results visible; the full compact output prints when
 the command finishes. Ctrl-C removes the indicator and restores the cursor.
 `NO_COLOR` removes color while keeping loading feedback. Pipes, redirected
 output, and `TERM=dumb` receive a single snapshot without animation.
+The preview adapts to terminal resizing and keeps account fallback notices
+above its results. Windows consoles enable virtual-terminal processing for the
+animation and restore their previous mode afterward. Consoles without that
+support receive a single snapshot.
 
 `gh x status` starts with a repository health header for the resolved default
 branch and current worktree. Each invocation shows the current local date and

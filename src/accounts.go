@@ -106,8 +106,9 @@ func configuredTimeout(name string, fallback time.Duration) (time.Duration, erro
 }
 
 var (
-	notifiedMu     sync.Mutex
-	notifiedLogins = map[string]bool{}
+	notifiedMu      sync.Mutex
+	notifiedLogins  = map[string]bool{}
+	accountProgress *statusProgress
 )
 
 // noteFallback prints the alternate-account notice once per login per process
@@ -119,7 +120,12 @@ func noteFallback(login, host string) {
 		return
 	}
 	notifiedLogins[login] = true
-	fmt.Fprintf(accountWarningWriter, "[gh-x] note: retried as %s (%s) after an access failure\n", login, host)
+	text := fmt.Sprintf("[gh-x] note: retried as %s (%s) after an access failure\n", login, host)
+	if accountProgress != nil {
+		accountProgress.notice(accountWarningWriter, text)
+		return
+	}
+	fmt.Fprint(accountWarningWriter, text)
 }
 
 // execGH runs a gh command and retries with another logged-in account's token

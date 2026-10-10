@@ -12,6 +12,11 @@ results, and notes omitted lines. Completion removes the preview and prints all
 rows once. Ctrl-C cancels Git and GitHub subprocesses, removes the indicator,
 restores the cursor, and exits with status 130. Available partial results remain
 visible. GitHub fetches remain serial and keep their existing timeouts.
+Terminal dimensions refresh before repainting; resize handling accounts for
+previously displayed rows wrapping at the new width. Account fallback notices
+are serialized with the preview and remain above it. Windows virtual-terminal
+processing is enabled only for the animation lifetime and restored afterward.
+If console mode setup fails, status falls back to the unanimated snapshot.
 
 `gh x status` always reads local Git state. Working changes, branches, worktrees,
 stashes and cleanup eligibility are never taken from the remote-data cache.
