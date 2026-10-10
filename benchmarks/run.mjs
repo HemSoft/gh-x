@@ -1,3 +1,4 @@
+import { parseStatusAcquisition, compareStatusAcquisition, statusBudgets } from "./status.mjs";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -13,7 +14,7 @@ if (args.length && (args.length !== 2 || args[0] !== "--out" || !args[1])) {
 const output = path.resolve(args[1] ?? path.join(os.tmpdir(), "gh-x-performance", new Date().toISOString().replaceAll(":", "-")));
 mkdirSync(output, { recursive: true });
 const started = performance.now();
-const environment = { ...process.env, GOMAXPROCS: "1", NO_COLOR: "1", TERM: "dumb" };
+const environment = { ...process.env, GOMAXPROCS: "1", NO_COLOR: "1", TERM: "dumb", GH_X_STATUS_PERF: "1" };
 // All child stdio is piped, so Go renders with no TTY width/color dependency.
 function run(name, command, argv, timeout = 10_000) {
     const result = spawnSync(command, argv, { cwd: root, env: environment, encoding: "utf8", timeout, maxBuffer: 16 * 1024 * 1024 });
@@ -45,7 +46,12 @@ try {
         Object.assign(samples, result.samples);
     }
     const result = compare(samples, budgets, baseline.samples);
-    const report = { metadata, elapsedSeconds: (performance.now() - started) / 1000, samples, comparison: result, baseline };
+    const acquisitionRaw = run("status-acquisition", "go", ["test", "./src", "-run", "^TestStatusAcquisitionPerformance$", "-count=1", "-v"], 120_000);
+    const acquisitionSamples = parseStatusAcquisition(acquisitionRaw);
+    const acquisition = compareStatusAcquisition(acquisitionSamples, statusBudgets(root));
+    writeFileSync(path.join(output, "status-acquisition.json"), JSON.stringify({ samples: acquisitionSamples, comparison: acquisition }, null, 2));
+    if (!acquisition.passed) throw new Error("Status acquisition budget failed; see status-acquisition.json");
+    const report = { acquisition, metadata, elapsedSeconds: (performance.now() - started) / 1000, samples, comparison: result, baseline };
     writeFileSync(path.join(output, "report.json"), JSON.stringify(report, null, 2));
     process.stdout.write(`Performance ${result.passed ? "PASS" : "FAIL"}: ${result.rows.length} metrics in ${report.elapsedSeconds.toFixed(1)}s\nArtifacts: ${output}\n`);
     for (const error of result.errors) process.stderr.write(`${error}\n`);

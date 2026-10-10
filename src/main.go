@@ -288,7 +288,7 @@ func printBanner(w io.Writer) {
 func asyncUpdateCheck() <-chan string {
 	ch := make(chan string, 1)
 	go func() {
-		latest, err := fetchLatestReleaseFunc(repoOwner, repoName)
+		latest, err := fetchAutomaticUpdate()
 		if err == nil && latest != "" && isNewerVersion(latest, version) {
 			ch <- latest
 		}

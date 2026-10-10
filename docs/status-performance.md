@@ -1,0 +1,68 @@
+# Status freshness and performance
+
+`gh x status` always reads local Git state. Working changes, branches, worktrees,
+stashes and cleanup eligibility are never taken from the remote-data cache.
+When the current worktree holds the default branch, its initial status result
+also supplies the default-branch summary.
+
+GitHub sections share a private cache in the repository's Git common directory.
+Linked worktrees share it. Each repository/authentication/options/color key has
+one atomic snapshot file, so a hit reads one file instead of scanning every
+snapshot. Schema v5 replaces v4 without reading incompatible snapshots.
+
+Each successful section is fresh for 60 seconds after its fetch completes.
+Failures retain their existing unknown/error output and retry after five seconds.
+A failed section does not invalidate successful sections or extend their original
+freshness deadlines. Rate-limit errors wait at least 60 seconds; numeric
+`Retry-After` and `X-RateLimit-Reset` hints in the reported error extend that wait.
+Healthy sections still refresh when they expire during a longer cooldown.
+`gh x status --refresh` explicitly bypasses these cached results and cooldowns.
+
+The authentication fingerprint includes configuration, token overrides and
+credential-store identities. GitHub CLI prefers a configured active token over
+its keyring, so status does the same. Fallback-account keyring entries remain
+fingerprinted because `gh auth token --user` prefers secure storage. Unknown
+identities disable caching. No credential is written to either cache.
+
+Automatic update checks cache successful release tags for one hour, separately
+from repository data and under an authentication/host key. Run `gh x version`
+to force a fresh release check. Cache failures never prevent the command from
+running. `GH_X_CACHE_DIR` overrides the automatic-update cache root for isolated
+fixtures; otherwise it uses the operating system's user cache directory.
+
+Set `GH_X_STATUS_DEBUG=1` to report `hit`, `miss`, `refresh`, `section-refresh`
+or `identity-unavailable` on stderr. It reports no credential values.
+
+Status shares one repository target and one branch-rules lookup across its PR
+sections. It fetches issue relationships and hierarchy together while retaining
+field-specific incomplete-data handling. It still makes requests serially.
+
+The merged candidate query remains complete. Removing candidate check/review
+fields needs a separate selection/enrichment design that preserves pagination,
+Enterprise schema handling and actual merge-time ordering. Longer TTLs and
+unbounded parallel requests were rejected because they trade freshness and
+rate-limit reliability for lower measured latency.
+
+## Acquisition comparison
+
+On Mini (Linux amd64, AMD Ryzen 5 7640HS, Go 1.26.7), the same populated fixture
+at `a088800d9f560f15b883cf52719acb07689c4863` and this change produced these
+seven-sample medians. Each GitHub transport call and keyring probe has a fixed
+50 ms delay; local Git commands execute against a real temporary repository
+with a linked worktree. The production dispatcher includes the automatic updater.
+
+| Mode | Before ms | After ms | gh calls before/after | Git calls before/after | Keyring before/after | New cache outcome |
+| --- | ---: | ---: | --- | --- | --- | --- |
+| Cold | 728.568 | 423.580 | 11 / 9 | 16 / 15 | 4 / 0 | miss |
+| Warm | 119.313 | 14.516 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
+| Expired | 728.951 | 424.859 | 11 / 8 | 16 / 15 | 4 / 0 | miss |
+| Forced refresh | 728.210 | 424.338 | 11 / 8 | 16 / 15 | 4 / 0 | refresh |
+| Partial failure, within cooldown | 121.101 | 15.135 | 1 / 0 | 12 / 11 | 2 / 0 | hit |
+
+Forced refresh improves by 41.7% on this fixture. Git counts cover the status
+command seam; gh counts cover every transport invocation, including the updater,
+and do not claim to count underlying HTTP pagination requests. Cold samples
+empty both fixture-owned caches. Baseline partial-failure samples could reuse
+an older successful snapshot; current tests require the failed section's error
+to remain visible instead. These controlled timings are separate from real API
+latency. See [benchmark instructions](../benchmarks/README.md) to reproduce them.

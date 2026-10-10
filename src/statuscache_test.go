@@ -146,7 +146,7 @@ func TestStatusCacheRoundTripPreservesRenderedMetadata(t *testing.T) {
 	}
 }
 
-func TestStatusCacheReusesHostedDefaultBranchWithoutRemoteHEAD(t *testing.T) {
+func TestStatusCachePreservesSectionFreshnessDuringSlowFetch(t *testing.T) {
 	defer saveStatusFuncs()()
 	installStatusDashboardGitFixture()
 	directory := t.TempDir()
@@ -189,8 +189,8 @@ func TestStatusCacheReusesHostedDefaultBranchWithoutRemoteHEAD(t *testing.T) {
 	if _, err := fetchStatusDashboard(false, statusOptions{mergedLimit: 0}); err != nil {
 		t.Fatal(err)
 	}
-	if branchCalls != 1 || remoteCalls != 3 {
-		t.Fatalf("snapshot within 60 seconds of fetch completion made %d hosted branch and %d remote calls, want 1 and 3", branchCalls, remoteCalls)
+	if branchCalls != 1 || remoteCalls != 5 {
+		t.Fatalf("slow fetch must retain hosted branch and fresh workflow data but refresh expired issue/PR sections: %d hosted branch and %d remote calls, want 1 and 5", branchCalls, remoteCalls)
 	}
 }
 

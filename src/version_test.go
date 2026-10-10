@@ -9,6 +9,7 @@ import (
 )
 
 func TestRunVersionUpToDate(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	orig := fetchLatestReleaseFunc
 	defer func() { fetchLatestReleaseFunc = orig }()
 	fetchLatestReleaseFunc = func(owner, repo string) (string, error) {
@@ -33,6 +34,7 @@ func TestRunVersionUpToDate(t *testing.T) {
 }
 
 func TestRunVersionUpdateAvailable(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	orig := fetchLatestReleaseFunc
 	defer func() { fetchLatestReleaseFunc = orig }()
 	fetchLatestReleaseFunc = func(owner, repo string) (string, error) {
@@ -54,6 +56,7 @@ func TestRunVersionUpdateAvailable(t *testing.T) {
 }
 
 func TestRunVersionAheadOfLatestRelease(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	orig := fetchLatestReleaseFunc
 	defer func() { fetchLatestReleaseFunc = orig }()
 	fetchLatestReleaseFunc = func(owner, repo string) (string, error) {
@@ -75,6 +78,7 @@ func TestRunVersionAheadOfLatestRelease(t *testing.T) {
 }
 
 func TestIsNewerVersion(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	tests := []struct {
 		name               string
 		candidate, current string
@@ -100,6 +104,7 @@ func TestIsNewerVersion(t *testing.T) {
 }
 
 func TestRunVersionDevBuild(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	orig := fetchLatestReleaseFunc
 	defer func() { fetchLatestReleaseFunc = orig }()
 	fetchLatestReleaseFunc = func(owner, repo string) (string, error) {
@@ -121,6 +126,7 @@ func TestRunVersionDevBuild(t *testing.T) {
 }
 
 func TestRunVersionAPIError(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	orig := fetchLatestReleaseFunc
 	defer func() { fetchLatestReleaseFunc = orig }()
 	fetchLatestReleaseFunc = func(owner, repo string) (string, error) {
@@ -139,6 +145,7 @@ func TestRunVersionAPIError(t *testing.T) {
 }
 
 func TestPrintBanner(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	oldVersion := version
 	oldDate := buildDate
 	defer func() { version = oldVersion; buildDate = oldDate }()
@@ -153,6 +160,7 @@ func TestPrintBanner(t *testing.T) {
 }
 
 func TestPrintBannerNoDate(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	oldVersion := version
 	oldDate := buildDate
 	defer func() { version = oldVersion; buildDate = oldDate }()
@@ -167,6 +175,7 @@ func TestPrintBannerNoDate(t *testing.T) {
 }
 
 func TestFormatVersion(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	if got := formatVersion("v1.0.0", "2026-05-10"); got != "v1.0.0 (2026-05-10)" {
 		t.Fatalf("expected date in parens, got %q", got)
 	}
@@ -176,6 +185,7 @@ func TestFormatVersion(t *testing.T) {
 }
 
 func TestBannerOnRootUsage(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	var stdout, stderr bytes.Buffer
 	_, _ = run(nil, &stdout, &stderr)
 	if !strings.Contains(stderr.String(), "gh-x") {
@@ -187,6 +197,7 @@ func TestBannerOnRootUsage(t *testing.T) {
 }
 
 func TestBannerOnHelp(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	var stdout, stderr bytes.Buffer
 	_, _ = run([]string{"--help"}, &stdout, &stderr)
 	if !strings.Contains(stderr.String(), "gh-x") {
@@ -195,6 +206,7 @@ func TestBannerOnHelp(t *testing.T) {
 }
 
 func TestNoBannerOnVersion(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	orig := fetchLatestReleaseFunc
 	defer func() { fetchLatestReleaseFunc = orig }()
 	fetchLatestReleaseFunc = func(owner, repo string) (string, error) {
@@ -211,6 +223,7 @@ func TestNoBannerOnVersion(t *testing.T) {
 }
 
 func TestBannerOnUnknownCommand(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	var stdout, stderr bytes.Buffer
 	_, _ = run([]string{"bogus"}, &stdout, &stderr)
 	if !strings.Contains(stderr.String(), "gh-x") {
@@ -219,6 +232,7 @@ func TestBannerOnUnknownCommand(t *testing.T) {
 }
 
 func TestUpgradeNoticeShown(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	oldVersion := version
 	defer func() { version = oldVersion }()
 	version = "v1.0.0"
@@ -241,6 +255,7 @@ func TestUpgradeNoticeShown(t *testing.T) {
 }
 
 func TestNoUpgradeNoticeWhenCurrent(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	oldVersion := version
 	defer func() { version = oldVersion }()
 	version = "v1.0.0"
@@ -265,6 +280,7 @@ func TestNoUpgradeNoticeWhenCurrent(t *testing.T) {
 }
 
 func TestNoUpgradeNoticeWhenLocalBuildIsNewer(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	oldVersion := version
 	defer func() { version = oldVersion }()
 	version = "v0.2.3"
@@ -284,6 +300,7 @@ func TestNoUpgradeNoticeWhenLocalBuildIsNewer(t *testing.T) {
 }
 
 func TestNoUpgradeNoticeOnVersionCmd(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	oldVersion := version
 	defer func() { version = oldVersion }()
 	version = "v1.0.0"
@@ -304,6 +321,7 @@ func TestNoUpgradeNoticeOnVersionCmd(t *testing.T) {
 }
 
 func TestShowUpdateNotice(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	ch := make(chan string, 1)
 	ch <- "v2.0.0"
 	close(ch)
@@ -316,6 +334,7 @@ func TestShowUpdateNotice(t *testing.T) {
 }
 
 func TestShowUpdateNoticeNil(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	var buf bytes.Buffer
 	showUpdateNotice(&buf, nil, 500*time.Millisecond)
 	if buf.Len() != 0 {
@@ -324,6 +343,7 @@ func TestShowUpdateNoticeNil(t *testing.T) {
 }
 
 func TestShowUpdateNoticeTimeout(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	// Channel that never receives — simulates a slow API call.
 	ch := make(chan string, 1)
 	var buf bytes.Buffer
@@ -339,6 +359,7 @@ func TestShowUpdateNoticeTimeout(t *testing.T) {
 }
 
 func TestRunErrorGetsLongerUpdateTimeout(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	orig := fetchLatestReleaseFunc
 	defer func() { fetchLatestReleaseFunc = orig }()
 
@@ -379,6 +400,7 @@ func TestRunErrorGetsLongerUpdateTimeout(t *testing.T) {
 }
 
 func TestRunVersionRouting(t *testing.T) {
+	disableAutomaticUpdateCache(t)
 	orig := fetchLatestReleaseFunc
 	defer func() { fetchLatestReleaseFunc = orig }()
 	fetchLatestReleaseFunc = func(owner, repo string) (string, error) {
@@ -395,4 +417,11 @@ func TestRunVersionRouting(t *testing.T) {
 			t.Fatalf("run(%q) missing version output: %q", arg, buf.String())
 		}
 	}
+}
+
+func disableAutomaticUpdateCache(t *testing.T) {
+	t.Helper()
+	saved := updateCachePathFunc
+	updateCachePathFunc = func() string { return "" }
+	t.Cleanup(func() { updateCachePathFunc = saved })
 }

@@ -22,8 +22,9 @@ const (
 )
 
 var (
-	repositoryRoot string
-	ghXBinaryPath  string
+	repositoryRoot       string
+	ghXBinaryPath        string
+	ghXReleaseBinaryPath string
 )
 
 func TestMain(m *testing.M) {
@@ -51,6 +52,13 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	ghXReleaseBinaryPath = filepath.Join(buildDir, executableName("gh-x-release"))
+	release := exec.Command("go", "build", "-ldflags", "-X main.version=v0.19.4", "-o", ghXReleaseBinaryPath, "./src")
+	release.Dir = repositoryRoot
+	if output, err := release.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "build release fixture: %v\n%s", err, output)
+		os.Exit(1)
+	}
 	code := m.Run()
 	if err := os.RemoveAll(buildDir); err != nil && code == 0 {
 		fmt.Fprintf(os.Stderr, "remove build directory: %v\n", err)
@@ -230,6 +238,7 @@ func runCLIWithGitHubTimeout(t *testing.T, workingDirectory, scenario, timeout s
 		"GH_FORCE_TTY":        "0",
 		"GH_PATH":             fakeGH,
 		"GH_CONFIG_DIR":       filepath.Join(workingDirectory, ".gh-config"),
+		"GH_X_CACHE_DIR":      filepath.Join(filepath.Dir(ghXBinaryPath), "updates"),
 		"GH_TOKEN":            "behavior-fixture-token",
 		"GH_X_GITHUB_TIMEOUT": timeout,
 		"GH_REPO":             "HemSoft/gh-x",
@@ -406,6 +415,11 @@ func runFakeGH() int {
 
 	fixture := ""
 	switch {
+	case hasCommandPrefix(args, "api") && strings.Contains(strings.Join(args, " "), "releases/latest"):
+		fmt.Fprintln(os.Stdout, "v0.19.4")
+		return 0
+	case hasCommandPrefix(args, "api") && strings.Contains(strings.Join(args, " "), "closedByPullRequestsReferences") && strings.Contains(strings.Join(args, " "), "subIssuesSummary"):
+		fixture = "issue-status-enrichment.json"
 	case hasCommandPrefix(args, "pr", "list"):
 		if strings.Contains(strings.Join(args, " "), "--state merged") {
 			fmt.Fprintln(os.Stdout, "[]")

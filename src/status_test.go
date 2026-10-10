@@ -243,7 +243,7 @@ func TestFetchStatusDashboard(t *testing.T) {
 		}
 	}
 	statusWorkflowRunListFunc = func(options runListOptions, now time.Time) (workflowRunListResult, error) {
-		if options.limit != statusWorkflowRunLimit || options.repo != "" || options.status != "" || options.workflow != "" || options.branch != "" || options.event != "" || options.user != "" {
+		if options.limit != statusWorkflowRunLimit || options.repo != "github.com/owner/repo" || options.status != "" || options.workflow != "" || options.branch != "" || options.event != "" || options.user != "" {
 			t.Fatalf("unexpected run options: %#v", options)
 		}
 		if want := statusNowFunc(); !now.Equal(want) {

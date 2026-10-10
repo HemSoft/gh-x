@@ -68,6 +68,8 @@ type statusWorktree struct {
 }
 
 type statusDashboard struct {
+	cacheState                string
+	remoteSections            []statusCacheSection
 	Repository                string
 	RepositoryURL             string
 	DefaultBranch             string
@@ -124,6 +126,9 @@ func runStatus(args []string, stdout io.Writer, stderr io.Writer) error {
 		return err
 	}
 
+	if os.Getenv("GH_X_STATUS_DEBUG") == "1" {
+		fmt.Fprintf(stderr, "[gh-x] status cache: %s\n", dashboard.cacheState)
+	}
 	return renderStatus(stdout, dashboard, colorEnabled)
 }
 
@@ -203,32 +208,55 @@ func fetchStatusDashboard(colorEnabled bool, options statusOptions) (statusDashb
 	}
 	dashboard.Stashes, dashboard.StashesErr = fetchStatusStashes()
 
+	openHeads, pullRequestsKnown := fetchStatusCachedRemote(&dashboard, colorEnabled, options)
+
+	if ref, ok := branches.Local[dashboard.DefaultBranch]; ok && filepath.Clean(ref.WorktreePath) == filepath.Clean(currentRoot) && dashboard.CurrentStatus.Branch == dashboard.DefaultBranch {
+		dashboard.DefaultStatus, dashboard.DefaultCheckedOut = dashboard.CurrentStatus, true
+	} else {
+		dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(dashboard.DefaultBranch, branches)
+	}
+	merged, mergedKnown := fetchMergedStatusBranches(dashboard.DefaultBranch)
+	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, dashboard.DefaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
+	return dashboard, nil
+}
+
+func fetchStatusCachedRemote(dashboard *statusDashboard, colorEnabled bool, options statusOptions) (map[string]bool, bool) {
 	now := statusNowFunc()
 	cacheDirectory, cacheFingerprint, cacheErr := statusCacheDirectoryFunc()
 	var openHeads map[string]bool
 	var pullRequestsKnown bool
 	cached, cacheHit := lookupStatusCache(options, colorEnabled, now, cacheDirectory, cacheFingerprint, cacheErr)
+	dashboard.cacheState = "miss"
+	if options.refresh {
+		dashboard.cacheState = "refresh"
+	}
+	if cacheErr != nil {
+		dashboard.cacheState = "identity-unavailable"
+	}
 	if cacheHit {
+		dashboard.cacheState = "hit"
 		if dashboard.DefaultBranch == "" {
 			dashboard.DefaultBranch = cached.DefaultBranch
 		}
-		openHeads, pullRequestsKnown = applyStatusCache(&dashboard, cached, now)
+		openHeads, pullRequestsKnown = applyStatusCache(dashboard, cached, now)
+		if statusSectionsNeedFetch(cached.Sections, now) {
+			dashboard.cacheState = "section-refresh"
+			openHeads, pullRequestsKnown = retryStatusSections(dashboard, options, now, openHeads, pullRequestsKnown)
+			saveStatusCacheIfSameIdentity(options, colorEnabled, now, *dashboard, openHeads, pullRequestsKnown, cacheDirectory, cacheFingerprint)
+		}
 	} else {
 		// Keep the lookup's target. A concurrent branch switch must not
 		// publish the old repository's rows under the new target's key.
 		if dashboard.DefaultBranch == "" {
 			dashboard.DefaultBranch = statusDefaultBranchFunc()
 		}
-		openHeads, pullRequestsKnown = fetchStatusRemoteData(&dashboard, options.mergedLimit, colorEnabled, now)
+		openHeads, pullRequestsKnown = fetchStatusRemoteData(dashboard, options.mergedLimit, colorEnabled, now)
 		if cacheErr == nil {
-			saveStatusCacheIfSameIdentity(options, colorEnabled, statusNowFunc(), dashboard, openHeads, pullRequestsKnown, cacheDirectory, cacheFingerprint)
+			saveStatusCacheIfSameIdentity(options, colorEnabled, statusNowFunc(), *dashboard, openHeads, pullRequestsKnown, cacheDirectory, cacheFingerprint)
 		}
 	}
 
-	dashboard.DefaultStatus, dashboard.DefaultCheckedOut, dashboard.DefaultStatusErr = fetchDefaultBranchStatus(dashboard.DefaultBranch, branches)
-	merged, mergedKnown := fetchMergedStatusBranches(dashboard.DefaultBranch)
-	dashboard.Worktrees = assessStatusWorktrees(worktrees, currentRoot, dashboard.DefaultBranch, merged, openHeads, mergedKnown, pullRequestsKnown)
-	return dashboard, nil
+	return openHeads, pullRequestsKnown
 }
 
 func fetchStatusStashes() (int, error) {
@@ -260,7 +288,18 @@ func statusStashOIDValid(oid string) bool {
 
 func fetchStatusRemoteData(dashboard *statusDashboard, mergedLimit int, colorEnabled bool, now time.Time) (map[string]bool, bool) {
 	dashboard.Repository, dashboard.RepositoryURL = resolveStatusRepository(colorEnabled)
-	issueOptions := issueListOptions{limit: statusListLimit, state: "open"}
+	session := newStatusRemoteSession(dashboard.Repository)
+	fetchStatusIssueSection(dashboard, session, now)
+	openHeads, known := fetchStatusOpenPRSection(dashboard, session, now)
+	fetchStatusMergedSection(dashboard, session, mergedLimit, now)
+	fetchStatusRunSection(dashboard, session, now)
+	return openHeads, known
+}
+
+func fetchStatusIssueSection(dashboard *statusDashboard, session statusRemoteSession, now time.Time) {
+	defer func() { markStatusSectionFetch(dashboard, 0, statusNowFunc()) }()
+	issueOptions := issueListOptions{repo: session.repo, limit: statusListLimit, state: "open", combinedEnrichment: true}
+	dashboard.Issues, dashboard.IssuesRelErr, dashboard.IssuesHierarchyErr = nil, nil, nil
 	issueResult, issueErr := statusIssueListFunc(issueOptions, now)
 	dashboard.IssuesErr = issueErr
 	if issueErr == nil {
@@ -269,28 +308,35 @@ func fetchStatusRemoteData(dashboard *statusDashboard, mergedLimit int, colorEna
 		dashboard.IssuesHierarchyErr = issueResult.HierarchyErr
 	}
 
+}
+
+func fetchStatusOpenPRSection(dashboard *statusDashboard, session statusRemoteSession, now time.Time) (map[string]bool, bool) {
+	defer func() { markStatusSectionFetch(dashboard, 1, statusNowFunc()) }()
 	prOptions := defaultListOptions()
+	prOptions.repo, prOptions.requiredCache = session.repo, session.rules
 	prOptions.limit = statusListLimit
 	prOptions.state = "open"
 	prResult, prErr := statusPullRequestListFunc(prOptions, now)
+	dashboard.PullRequests, dashboard.PullRequestsSuppErr, dashboard.RequiredChecksErr = nil, nil, nil
 	dashboard.PullRequestsErr = prErr
 	if prErr == nil {
 		dashboard.PullRequests = prResult.Rendered
 		dashboard.PullRequestsSuppErr = prResult.SupplementalErr
 		dashboard.RequiredChecksErr = prResult.RequiredChecksErr
 	}
+	return openPullRequestHeads(prResult.Entries), prErr == nil && len(prResult.Entries) < prOptions.limit
+}
 
-	fetchStatusMergedPullRequests(dashboard, mergedLimit, now)
-
-	runOptions := runListOptions{limit: statusWorkflowRunLimit}
+func fetchStatusRunSection(dashboard *statusDashboard, session statusRemoteSession, now time.Time) {
+	defer func() { markStatusSectionFetch(dashboard, 3, statusNowFunc()) }()
+	runOptions := runListOptions{repo: session.repo, limit: statusWorkflowRunLimit}
 	runResult, runErr := statusWorkflowRunListFunc(runOptions, now)
 	dashboard.WorkflowRunsErr = runErr
+	dashboard.WorkflowRuns, dashboard.WorkflowRunsPerfect = nil, false
 	if runErr == nil {
 		dashboard.WorkflowRuns = runResult.Rendered
 		dashboard.WorkflowRunsPerfect = isPerfectWorkflowRunStreak(runResult.Entries)
 	}
-
-	return openPullRequestHeads(prResult.Entries), prErr == nil && len(prResult.Entries) < prOptions.limit
 }
 
 func applyStatusCache(dashboard *statusDashboard, cached statusCacheEntry, now time.Time) (map[string]bool, bool) {
@@ -302,19 +348,24 @@ func applyStatusCache(dashboard *statusDashboard, cached statusCacheEntry, now t
 	dashboard.MergedPullRequests = restoreStatusPullRequests(cached.MergedPullRequests, now)
 	dashboard.WorkflowRuns = restoreStatusWorkflowRuns(cached.WorkflowRuns, now)
 	dashboard.WorkflowRunsPerfect = cached.WorkflowRunsPerfect
+	restoreStatusFailures(dashboard, cached.Failures)
+	dashboard.remoteSections = append([]statusCacheSection(nil), cached.Sections...)
 	return statusStringSet(cached.PullRequestHeads), cached.PullRequestsKnown
 }
 
-func fetchStatusMergedPullRequests(dashboard *statusDashboard, limit int, now time.Time) {
+func fetchStatusMergedSection(dashboard *statusDashboard, session statusRemoteSession, limit int, now time.Time) {
+	defer func() { markStatusSectionFetch(dashboard, 2, statusNowFunc()) }()
 	if limit == 0 {
 		return
 	}
 	dashboard.ShowMergedPullRequests = true
 	options := defaultListOptions()
+	options.repo, options.requiredCache = session.repo, session.rules
 	options.limit = limit
 	options.state = "merged"
 	options.recentlyMerged = true
 	result, err := statusPullRequestListFunc(options, now)
+	dashboard.MergedPullRequests, dashboard.MergedPullRequestsSuppErr, dashboard.MergedRequiredChecksErr = nil, nil, nil
 	dashboard.MergedPullRequestsErr = err
 	if err != nil {
 		return

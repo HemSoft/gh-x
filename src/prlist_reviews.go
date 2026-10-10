@@ -456,7 +456,8 @@ func latestAIReview(reviews []aiReviewNode) (aiReviewNode, bool) {
 
 // graphQLError is one entry from a GraphQL response's errors array.
 type graphQLError struct {
-	Path []json.RawMessage `json:"path"`
+	Message string            `json:"message"`
+	Path    []json.RawMessage `json:"path"`
 }
 
 // parseSupplementalResponse parses the batch envelope into per-PR info plus

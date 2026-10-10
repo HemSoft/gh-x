@@ -1,0 +1,7 @@
+{
+  "cold": { "ms": 2000, "gh": 9, "keyring": 0 },
+  "warm": { "ms": 250, "gh": 0, "keyring": 0 },
+  "expired": { "ms": 2000, "gh": 8, "keyring": 0 },
+  "refresh": { "ms": 2000, "gh": 8, "keyring": 0 },
+  "partial": { "ms": 250, "gh": 0, "keyring": 0 }
+}
